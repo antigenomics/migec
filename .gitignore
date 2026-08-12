@@ -1,0 +1,29 @@
+# --- migec-specific ---
+# NB: .gitignore has no trailing comments -- the whole line is the pattern, so a comment after a
+# pattern silently makes it match nothing. Comments go on their own line.
+
+# cmake out-of-tree build, and scikit-build-core's build/{wheel_tag}
+build/
+# setup.sh creates this
+.venv/
+# intermediate record files; regenerate with `migec checkout`
+*.mig
+*.pumi
+# local experiments, never committed
+scratch/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- docs ---
+docs/_build/
+
+# --- os ---
+.DS_Store

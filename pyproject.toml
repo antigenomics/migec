@@ -1,0 +1,66 @@
+[build-system]
+# pybind11 is pinned below 4 deliberately: PYBIND11_MODULE changed to multi-phase init in 3.0.0,
+# and the pin is about reproducible builds, not speed.
+requires = ["scikit-build-core>=0.10", "pybind11>=3.0.2,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "migec"
+version = "2.0.0.dev0"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
+description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Mikhail Shugay", email = "mikhail.shugay@gmail.com" }]
+keywords = ["umi", "barcode", "consensus", "airr", "repseq", "single-cell", "sequencing"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+]
+dependencies = [
+    "typer>=0.12",
+    "polars>=1.0",
+]
+
+[project.optional-dependencies]
+# seqtree is NOT a core dependency. Every hot path here searches a fixed-length barcode at <=1
+# substitution, where enumerating the 3L neighbours in a hash table beats a trie by orders of
+# magnitude. seqtree earns its place only for whitelist lookup at >=2 substitutions, N-wildcard
+# barcodes, and k-mer adapter discovery in `migec suggest` -- all opt-in.
+seqtree = ["seqtree>=0.6"]
+plots = ["matplotlib>=3.8"]
+docs = ["sphinx", "pydata-sphinx-theme"]
+test = ["pytest", "pytest-cov"]
+dev = ["ruff", "pytest", "pybind11", "marimo"]
+
+[project.scripts]
+migec = "migec.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/antigenomics/migec"
+Documentation = "https://antigenomics.github.io/migec/"
+
+[tool.scikit-build]
+wheel.packages = ["python/migec"]
+cmake.version = ">=3.20"
+build-dir = "build/{wheel_tag}"
+editable.rebuild = true      # a .cpp edit takes effect on the next `import migec`
+editable.verbose = false
+
+[tool.scikit-build.cmake.define]
+MIGEC_PYTHON = "ON"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Selected explicitly: ruff's defaults widen between releases, which turns a green local run into
+# a red CI on an unrelated change.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

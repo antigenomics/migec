@@ -1,0 +1,75 @@
+name: Publish To PyPI
+
+# The PyPI trusted publisher for `migec` is configured against THIS filename and the `pypi`
+# environment below. Renaming either breaks publishing with an opaque OIDC error.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build-sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build --sdist
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist/*.tar.gz
+
+  build-wheels:
+    name: Wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # No Windows: this is a pipeline tool, and a Windows wheel would need a zlib we do not
+        # otherwise depend on. Source builds still configure there.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pypa/cibuildwheel@v2.23.3
+        env:
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux_* *-manylinux_i686"
+          CIBW_TEST_COMMAND: "python -c \"import migec; print(migec.__version__)\""
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: Publish To PyPI
+    needs: [build-sdist, build-wheels]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write  # required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Validate package version matches release tag
+        run: |
+          python - <<'PY'
+          import os, re, sys, tomllib
+          with open("pyproject.toml", "rb") as fh:
+              version = tomllib.load(fh)["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if version != tag:
+              sys.exit(f"pyproject version {version} != release tag {tag}")
+          print(f"version {version} matches tag")
+          PY
+      - run: ls -la dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,86 @@
+# Roadmap
+
+**Implemented:** the `.mig` intermediate format (reader, writer, range partitioning, CRC-checked
+blocks, provenance and quality-calibration in the header), FASTQ IO for plain and gzipped input
+with strict validation, barcode packing/unpacking and the IUPAC/Phred primitives, the pybind11
+module, the read simulator with ground truth, CI (C++ on ubuntu+macos, Python 3.10/3.12 matrix,
+pinned ruff), sphinx docs with a zero-warning gate, and the PyPI publish workflow.
+
+Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
+scientific claim and is validated before any throughput work.
+
+## M0 — skeleton, format, simulator ✅
+
+- [x] Archive the Groovy implementation on `legacy-v1` / `v1-final`, start master fresh
+- [x] `.mig` format frozen in `docs/formats.rst`, with a round-trip and truncation test
+- [x] FASTQ reader/writer; a record straddling a buffer refill is covered by a test
+- [x] Read simulator with truth files, and tests for the simulator itself
+- [x] CMake + scikit-build-core + CI + docs shell
+- [ ] Push to origin (waiting on a network window)
+
+## X — experiments that must precede the milestones they inform
+
+- [ ] **X1 — read-start dispersion within `(CB,UMI)` on one 10x run.** Falsifies the assumption
+      that reads sharing a UMI are co-terminal. If dispersion is high — and for 3' GEX it will be
+      — then a single ungapped consensus per UMI is meaningless for 10x and the overlap-component
+      path is mandatory, not optional. One pass, ~40 lines. **Blocks M1's design.**
+- [ ] **X2 — emitted-quality calibration on a clonal control, stratified by MIG size.** Fit
+      `e_out(c) = p_floor + a/c`; the intercept is the RT/PCR floor. Settles empirically what is
+      currently a guess spanning 10× in both directions. **Blocks M1's quality cap.**
+- [ ] **X3 — three permutation nulls on one deep real dataset.** Split-half UMI collision (a
+      model-free estimate of `Σ p_u²`), size-preserving UMI shuffle (calibrates the observed
+      1-mismatch excess), within-MIG read re-partition (sets the split threshold from a measured
+      false-positive curve rather than from a Poisson derivation). **Blocks M3's error model.**
+
+## M1 — `assemble`, the consensus and quality model
+
+- [ ] Group dedup, modal draft, offset placement (`--mode amplicon`), overlap components
+      (`--mode fragmented`) — the latter also gives contig assembly for free
+- [ ] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
+- [ ] Sub-clustering by *linkage*, not by count of polymorphic sites; ΔBIC over bases, not reads
+- [ ] Quality floor `p_floor = ε_RT + 2·ε_pol`, `--rt-error auto` fitted from data
+- [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
+- [ ] Doublet call from *lineages*, not raw variant counts
+- Gate: per-base error ≤1e-5 at coverage ≥5; `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
+
+## M2 — `checkout`
+
+- [ ] Pattern grammar with named captures, plus the MIGEC dialect behind `--pattern-dialect migec`
+- [ ] Bit-parallel matcher; quality-aware log-likelihood acceptance, threshold calibrated against
+      decoy patterns rather than trusted analytically
+- [ ] Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded
+- [ ] Dual-end barcodes, strand normalisation, undef and unassigned-barcode tables
+- [ ] i7×i5 contingency table — the only way index hopping is actually estimable
+- Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
+  threads
+
+## M3 — `refine`
+
+- [ ] Barcode table, three error-rate estimators, sequencing vs quality-independent separation
+- [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
+      polymerase mixture component for early-cycle PCR children
+- [ ] MIG-size model and threshold at a target FDR; keep-orphan retention
+- [ ] Cell calling (OrdMag + knee), QC tables and plots
+- Gate: estimated ε within 20% of injected; ≥95% of no-parent 3–5-read MIGs retained
+
+## M4 — end to end
+
+- [ ] `suggest`, `sort`, `subsample`, marimo notebooks, full docs
+- Gate: output consumed by `bwa-meme mem -C` and `arda rnaseq run` with tags intact
+
+## M5 — benchmarks and release
+
+- [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
+      UMI-tools, Calib, fgbio, Cell Ranger
+- Gate: grouping ARI ≥0.99; residual error ≤1e-5 on a clonal control; ≥3× MIGEC v1 wall-clock
+
+## Deliberately not doing
+
+- **Alignment and variant calling** — MAGERI's job; the pipeline hands off to arda/minimap2/bwa-meme.
+- **Indels** — Illumina rates ~1e-6/base and no dataset to verify against. Substitutions only.
+- **Duplex consensus (DCS)** — v2.0 extracts duplex tags and emits single-strand consensuses. No
+  error-suppression claim in this repo is based on duplex data until DCS exists.
+- **EmptyDrops-style cell rescue** — Cell Ranger's job. Ours is OrdMag plus a knee, and the
+  benchmark gate is written against that rather than against a Jaccard we cannot reach.
+- **An external merge sort** — range partitioning plus an in-RAM sort per bucket covers it, and
+  `nbuckets == 1` is the in-memory case, so there is one code path rather than two.

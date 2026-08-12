@@ -1,0 +1,110 @@
+File formats
+============
+
+This page is the contract between stages. It is frozen before the stages that use it are written,
+and ``tests/cpp/test_mig_record.cpp`` fails if any of it changes by accident.
+
+.. _mig-format:
+
+The ``.mig`` intermediate
+-------------------------
+
+One format between all stages. ``checkout`` writes it, ``refine`` rewrites it, ``assemble`` reads
+it.
+
+Layout::
+
+    [FileHeader] [Block]* [Terminator][u64 n_records]["MIGB"]
+
+FileHeader
+~~~~~~~~~~
+
+======================  =========  ======================================================
+field                   type       meaning
+======================  =========  ======================================================
+magic                   char[4]    ``MIGB``
+format_version          u16        ``1``; a reader refuses a version it does not know
+umi_len                 u8         UMI length in bases, 0 if there is no UMI
+cell_len                u8         cell barcode length, 0 if there is none
+bucket_index            u8         which range partition this file is
+bucket_bits             u8         number of key bits used to partition; 0 = one bucket
+paired                  u8         1 if mate 2 is present
+sample_id               str        length-prefixed (u32 + bytes)
+provenance              str        length-prefixed JSON: command line, version, pattern
+quality_calibration     f32[]      length-prefixed; measured error rate per reported Phred
+======================  =========  ======================================================
+
+``quality_calibration`` being empty means "not measured, fall back to :math:`10^{-q/10}`". It is
+carried in the file rather than recomputed because it is estimated once, by ``checkout``, from
+mismatches against the constant segments of the barcode pattern — and on a 2-colour instrument
+that emits only four distinct quality values, the nominal Phred is wrong by an order of magnitude
+and every downstream likelihood inherits the error.
+
+Block
+~~~~~
+
+A block header in plaintext, then a compressed payload::
+
+    n_records u32 | raw_bytes u32 | stored_bytes u32 | crc32 u32 | codec u8 | reserved u8[3]
+
+``codec`` is 0 for stored and 1 for zlib deflate level 1. The CRC is over the *uncompressed*
+payload. The payload is **column-major**:
+
+1. ``n_records`` fixed records: ``cell u64, umi u64, src_index u64, flags u16, umi_minq u8,
+   cell_minq u8, len1 u32, len2 u32``
+2. all of ``seq1``, concatenated
+3. all of ``seq2``
+4. all of ``qual1``
+5. all of ``qual2``
+
+Three decisions worth knowing, because they look wrong until you measure them:
+
+**Sequence is raw ASCII, not 2-bit packed.** Packing saves 0.75 bytes per base, but the quality
+string is the same length and is near-incompressible, so packing touches only about an eighth of
+the record — and it destroys the cross-read redundancy that a compressor finds in amplicon data.
+Measured on a 2×150 amplicon block: 197 B/pair raw+deflate versus 227 B/pair packed+deflate.
+Packing came out *worse*.
+
+**Column-major, not per-record.** Sequence and quality have very different symbol distributions;
+interleaving them costs the compressor 10–20% on the same data.
+
+**``src_index`` is a u64.** It is the sort tiebreak, so it is what makes output byte-identical at
+one thread and at eight. A u32 caps at 4.29·10⁹ read pairs, which a NovaSeq X run exceeds, and on
+overflow the guarantee fails silently and nondeterministically.
+
+Buckets and ordering
+~~~~~~~~~~~~~~~~~~~~
+
+Files are **range** partitions of the sort key, not hash partitions: bucket
+:math:`b = \mathrm{key} \gg (64 - \mathrm{bucket\_bits})`. Two consequences, both load-bearing:
+
+* a barcode and its 1-mismatch neighbours mostly land in the same bucket, so correction can be
+  applied locally. A hash sends them to uncorrelated files and permanently splits the molecule.
+* bucket order *is* key order, so the on-disk sort by sample/cell/UMI is a property of the layout
+  rather than a separate pass over the data.
+
+Barcodes are 2-bit packed with **base 0 in the high bits**, so that the packed integer order
+equals the lexicographic order of the barcode string. An ``N`` is stored as ``A`` with
+``kUmiHasN``/``kCellHasN`` set, keeping the key a plain integer and the ambiguity out of band.
+
+Flags describe what has **already been applied**, never what remains to be done — in particular
+``kRevComp1``/``kRevComp2`` mean the stored mate is already reverse-complemented, so ``assemble``
+must never re-orient anything.
+
+Consensus FASTQ
+---------------
+
+The pipeline output, and the contract with everything downstream::
+
+    @<sample>.<mig>[.<g>]:<CB>:<UMI> RX:Z:<umi>\tQX:Z:<umi qual>\tCB:Z:<cell>\t...
+
+Tags are separated by **TAB**, not space: ``bwa mem -C`` and ``minimap2 -y`` append the FASTQ
+comment verbatim into the SAM record, so it has to be SAM-conformant or the resulting BAM is
+malformed. The UMI comes last in the read name because that is the convention ``fgbio``'s
+``CopyUmiFromReadName`` and ``umi_tools`` both assume.
+
+.. warning::
+
+   ``dnaio`` — used by arda's rnaseq module — **drops the comment entirely**. Anything a
+   downstream Python tool must see has to be in the read *name*, which is why the name is
+   self-sufficient rather than a bare integer.

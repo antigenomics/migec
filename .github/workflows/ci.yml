@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpp:
+    name: C++ (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DMIGEC_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  python:
+    name: Python ${{ matrix.python-version }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: |
+          uv pip install --system scikit-build-core "pybind11>=3.0.2,<4" ninja cmake
+          uv pip install --system -e ".[test]" --no-build-isolation
+      - name: Show environment
+        # Prints all three versions, so the "kept in sync by hand" trio is visible on every run
+        # rather than at release time.
+        run: |
+          python -c "import migec, migec._core as c; print(migec.__version__, c.__version__, c.MIG_FORMAT_VERSION)"
+      - name: Test
+        run: python -m pytest tests/unit tests/synthetic -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Pinned: ruff's default rule set widens between releases, which turns a green local run
+      # into a red CI on an unrelated change.
+      - run: pip install ruff==0.15.9
+      - run: ruff check python/ tests/
