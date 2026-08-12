@@ -167,6 +167,14 @@ def main(argv=None):
         "not error, and is excluded. 0.01 suits a viral quasispecies; a truly clonal control can "
         "use a smaller value.",
     )
+    p.add_argument(
+        "--max-divergence",
+        type=float,
+        default=0.05,
+        help="a MIG disagreeing with the reference at more than this fraction of positions is a "
+        "different template, not an erroneous copy, and is excluded. At any plausible floor the "
+        "expected disagreement is well under 1%%, so this cut is unambiguous.",
+    )
     a = p.parse_args(argv)
 
     out = pathlib.Path(a.out)
@@ -249,6 +257,36 @@ def main(argv=None):
     if len(monomorphic) < 20:
         raise SystemExit("fewer than 20 monomorphic positions -- this sample is not clonal enough")
 
+    # A molecule that disagrees with the reference at a large *fraction* of positions is not an
+    # erroneous copy of it, it is a different template -- another region, an off-target product,
+    # or an indel-shifted read, and we model no indels anywhere. Over 180 bases at a floor of
+    # 1e-4 the expected count is 0.02, so 5% (9 mismatches) is not a rate this process produces.
+    #
+    # This has to be cut, not averaged in: on the HIV control below, 0.8% of MIGs sit past 20%
+    # divergence and contribute 90% of every mismatch in the dataset. Left in, they set the
+    # "floor" two orders of magnitude too high and it is not an error rate at all.
+    divergence = {
+        u: sum(1 for j in monomorphic if c[j] != "N" and c[j] != truth[j]) / len(monomorphic)
+        for u, c in cons.items()
+    }
+    print(f"\n{'divergence from the reference':<34}{'MIGs':>8}{'share':>8}{'of mismatches':>15}")
+    tot_mm = sum(divergence.values()) or 1
+    edges = [(0.0, "exact"), (0.01, "<= 1%"), (0.05, "1-5%"), (0.20, "5-20%"), (1.01, "> 20%")]
+    prev = -1e-9
+    for hi, label in edges:
+        sel = [d for d in divergence.values() if prev < d <= hi] if hi else []
+        if hi == 0.0:
+            sel = [d for d in divergence.values() if d == 0.0]
+        print(f"  {label:<32}{len(sel):>8}{100 * len(sel) / len(cons):>7.1f}%"
+              f"{100 * sum(sel) / tot_mm:>14.1f}%")
+        prev = hi
+    kept = {u for u, d in divergence.items() if d <= a.max_divergence}
+    print(f"\n  keeping {len(kept):,} of {len(cons):,} MIGs at <= {a.max_divergence:.0%} divergence "
+          f"({len(cons) - len(kept):,} excluded as different templates)")
+    cons = {u: c for u, c in cons.items() if u in kept}
+    if len(cons) < 100:
+        raise SystemExit("too few MIGs left after excluding divergent templates")
+
     # e_out(c): bases of a MIG's consensus that disagree with truth, binned by MIG size. Positions
     # where either side is an unresolved tie are not scored -- a coin flip is not an error rate.
     bins = collections.defaultdict(lambda: [0, 0])  # size -> [mismatches, bases]
@@ -289,6 +327,22 @@ def main(argv=None):
         print(f"  MIGs >= {min_size:>2} reads:  p_floor {rate:.3e}  "
               f"[{lo:.2e}, {hi:.2e}]  over {mm} mismatches in {bases:,} bases"
               f"   -> Q cap {q:.1f}")
+
+    # How much of the answer is the divergence cut? If the floor moves with the threshold, the cut
+    # is doing the measuring rather than removing contaminants, and the number is not a floor.
+    print(f"\n  sensitivity to --max-divergence (currently {a.max_divergence:.0%}):")
+    for thr in (0.02, 0.05, 0.10, 0.20):
+        sub = collections.defaultdict(lambda: [0, 0])
+        for u, c in cons.items():
+            if divergence[u] > thr:
+                continue
+            n = len(usable[u])
+            for j in monomorphic:
+                if c[j] != "N" and truth[j] != "N":
+                    sub[n][1] += 1
+                    sub[n][0] += c[j] != truth[j]
+        r, m, b, (lo_, hi_) = plateau_floor(sub, 5)
+        print(f"    <= {thr:>4.0%}  p_floor {r:.3e}  [{lo_:.2e}, {hi_:.2e}]  ({m} in {b:,})")
 
     rate, mm, bases, (lo, hi) = plateau_floor(bins, 5)
     (out / "fit.tsv").write_text(

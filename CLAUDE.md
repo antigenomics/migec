@@ -121,8 +121,13 @@ correction is written up in `project/review-algorithms.md`.
   `(CB,UMI)` are not co-terminal (7.8% overall, 0.3% at ≥6 reads), but 72.7% still form one
   overlap component, so `assemble` partitions by overlap and then runs the ordinary ungapped
   consensus per component. Never extend a component across a gap. `docs/fragmented.rst`.
-- Next: **X2** (emitted-quality calibration on the clonal control — the RT floor is currently a
-  guess spanning 10× in both directions and it sets every quality above ~Q40), then M1.
+- **X2 is done (2026-08-13): the RT/PCR floor is of order 1e-4, so cap emitted quality at ~Q38.**
+  Measured 1.54e-4 [1.36e-4, 1.74e-4] on `SRR1763769`; the 1e-6 guess is dead. `--rt-error auto`
+  still fits per dataset (the floor is a property of the enzyme and cycle count), but the
+  **default is 1e-4**. ⚠ Still an upper bound — that library is 49.6% occupied on a 9 nt barcode
+  and `checkout` calls it saturated, so collisions inflate it. `docs/quality_floor.rst`.
+- Next: **X3** (the three permutation nulls — blocks M3's error model), then **M1** (`assemble`:
+  overlap components per X1, consensus, quality capped per X2).
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.

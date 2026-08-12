@@ -46,9 +46,16 @@ scientific claim and is validated before any throughput work.
       covers. Also: only 1.5% of groups hold more than one read at this depth, so for shallow 3'
       GEX the UMI buys counting, not error correction. Written up in `docs/fragmented.rst`,
       script in `scripts/read_start_dispersion.py`.
-- [ ] **X2 — emitted-quality calibration on a clonal control, stratified by MIG size.** Fit
-      `e_out(c) = p_floor + a/c`; the intercept is the RT/PCR floor. Settles empirically what is
-      currently a guess spanning 10× in both directions. **Blocks M1's quality cap.**
+- [x] **X2 — emitted-quality calibration on a clonal control, stratified by MIG size.** Done,
+      2026-08-13, on `SRR1763769` (2.12 M reads, HIV-1 Primer ID). **The floor is of order 1e-4,
+      not 1e-6**: 1.54e-4 [1.36e-4, 1.74e-4] at MIGs of ≥80 reads, so no emitted quality above
+      **~Q38** is supportable, and the 1e-6 guess is excluded by two orders of magnitude. Matches
+      the ~1 in 10,000 the source paper reports (doi:10.1128/JVI.00522-15). ⚠ The curve is still
+      declining at 80 reads, so this is an upper bound: the 9 nt Primer ID puts the library at
+      49.6% occupancy and `checkout` flags it `saturated`, so collided MIGs contribute mismatches
+      counted here as error. Not the `p_floor + a/c` least-squares fit the plan specified — that
+      model is wrong for a majority vote and returned a negative probability on simulated data.
+      `docs/quality_floor.rst`, `scripts/quality_floor.py`.
 - [ ] **X3 — three permutation nulls on one deep real dataset.** Split-half UMI collision (a
       model-free estimate of `Σ p_u²`), size-preserving UMI shuffle (calibrates the observed
       1-mismatch excess), within-MIG read re-partition (sets the split threshold from a measured

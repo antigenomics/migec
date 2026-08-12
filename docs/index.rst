@@ -50,6 +50,7 @@ SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
    performance
    grouping
    fragmented
+   quality_floor
    validation
    formats
    roadmap
