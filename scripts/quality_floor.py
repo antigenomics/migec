@@ -105,6 +105,20 @@ def consensus(seqs):
     return "".join(out)
 
 
+def minor_allele_spectrum(consensuses, length):
+    """Per position, the fraction of molecules not carrying the modal base.
+
+    One vote per molecule, never per read: a single over-amplified molecule would otherwise carry
+    its own RT error into the reference and hide it. ``N`` (an unresolved tie) does not vote.
+    """
+    out = []
+    for j in range(length):
+        c = collections.Counter(s[j] for s in consensuses if s[j] != "N")
+        tot = sum(c.values())
+        out.append(0.0 if not tot else 1.0 - c.most_common(1)[0][1] / tot)
+    return out
+
+
 def poisson_ci(k, n):
     """Exact-ish Poisson 95% interval for a rate k/n, as a rate. Wilson would do; this is simpler
     and correct in the regime that matters, which is k small or zero."""
@@ -145,6 +159,14 @@ def main(argv=None):
     p.add_argument("--sample", type=int, default=200_000, help="reads used for the cycle profile")
     p.add_argument("--min-mig", type=int, default=2)
     p.add_argument("--max-mig", type=int, default=200, help="above this a MIG is a UMI collision")
+    p.add_argument(
+        "--max-minor",
+        type=float,
+        default=0.01,
+        help="a position whose minor allele reaches this fraction of molecules is real variation, "
+        "not error, and is excluded. 0.01 suits a viral quasispecies; a truly clonal control can "
+        "use a smaller value.",
+    )
     a = p.parse_args(argv)
 
     out = pathlib.Path(a.out)
@@ -195,6 +217,38 @@ def main(argv=None):
     # per read would let a single over-amplified molecule carry its RT error into the truth.
     truth = consensus(list(cons.values()))
 
+    # ...but "disagrees with the modal base" is only error if the sample is clonal. An HIV plasma
+    # population is a quasispecies: a position carrying a real 20% variant would contribute 0.2 to
+    # the "error" rate and swamp a floor of 1e-4. So measure only where the molecules agree.
+    #
+    # A real variant below the threshold is still counted as error, which biases the floor *up* --
+    # the safe direction for a quality cap, and it is stated rather than hidden.
+    # The threshold has to sit well above 1/(number of molecules), or a position where a single
+    # molecule carries an error looks "polymorphic" and is excluded -- which drops exactly the
+    # positions the floor lives at and biases it *down*, the unsafe direction.
+    if a.max_minor * len(cons) < 10:
+        raise SystemExit(
+            f"--max-minor {a.max_minor} over {len(cons)} molecules excludes any position with "
+            f"{a.max_minor * len(cons):.1f} erroneous molecules, which is the signal itself. "
+            f"Use at least {10 / len(cons):.3g}, or more molecules."
+        )
+    spectrum = minor_allele_spectrum(list(cons.values()), len(truth))
+    monomorphic = [j for j, minor in enumerate(spectrum) if minor < a.max_minor]
+    polymorphic = [j for j, minor in enumerate(spectrum) if minor >= a.max_minor]
+    print(f"          {len(monomorphic)} of {len(truth)} positions monomorphic at "
+          f"< {a.max_minor:.0%} minor allele; {len(polymorphic)} excluded as real variation")
+    if polymorphic:
+        worst = sorted(polymorphic, key=lambda j: -spectrum[j])[:8]
+        print("          excluded positions: "
+              + ", ".join(f"{j}({spectrum[j]:.1%})" for j in worst)
+              + (" ..." if len(polymorphic) > 8 else ""))
+    with open(out / "position_spectrum.tsv", "w") as fh:
+        fh.write("position\ttruth_base\tminor_fraction\tmonomorphic\n")
+        for j, minor in enumerate(spectrum):
+            fh.write(f"{j}\t{truth[j]}\t{minor:.6f}\t{int(minor < a.max_minor)}\n")
+    if len(monomorphic) < 20:
+        raise SystemExit("fewer than 20 monomorphic positions -- this sample is not clonal enough")
+
     # e_out(c): bases of a MIG's consensus that disagree with truth, binned by MIG size. Positions
     # where either side is an unresolved tie are not scored -- a coin flip is not an error rate.
     bins = collections.defaultdict(lambda: [0, 0])  # size -> [mismatches, bases]
@@ -202,11 +256,11 @@ def main(argv=None):
     for u, c in cons.items():
         n = len(usable[u])
         n_migs[n] += 1
-        for x, y in zip(c, truth):
-            if x == "N" or y == "N":
+        for j in monomorphic:
+            if c[j] == "N" or truth[j] == "N":
                 continue
             bins[n][1] += 1
-            bins[n][0] += x != y
+            bins[n][0] += c[j] != truth[j]
 
     with open(out / "quality_floor.tsv", "w") as fh:
         fh.write("mig_size\tmigs\tbases\tmismatches\te_out\te_lo\te_hi\n")

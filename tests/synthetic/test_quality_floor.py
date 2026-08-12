@@ -91,3 +91,50 @@ def test_the_interval_covers_zero_counts():
     assert hi_big < hi_small
     lo, hi = qf.poisson_ci(50, 1_000_000)
     assert lo < 50 / 1_000_000 < hi
+
+
+def test_real_variation_is_excluded_rather_than_counted_as_error():
+    """A quasispecies position must not be scored as error.
+
+    The clonal-control assumption is that any disagreement with the modal base is error we
+    introduced. On an HIV plasma population that is false: a position carrying a real 20% variant
+    would contribute 0.2 to the "error" rate and swamp a floor of 1e-4 by three orders of
+    magnitude. The floor is measured only where the molecules agree.
+    """
+    # 2000 molecules: position 1 carries a genuine 20% variant, position 3 one erroneous molecule.
+    cons = []
+    for i in range(2000):
+        cons.append("A" + ("C" if i < 400 else "A") + "A" + ("G" if i == 0 else "A"))
+    spectrum = qf.minor_allele_spectrum(cons, 4)
+    assert spectrum[1] == pytest.approx(0.20)
+    assert spectrum[3] == pytest.approx(1 / 2000)
+    assert spectrum[0] == spectrum[2] == 0.0
+
+    mono = [j for j, m in enumerate(spectrum) if m < 0.01]
+    assert mono == [0, 2, 3], "the 20% variant is excluded, the 1-molecule error is kept"
+
+
+def test_the_threshold_must_sit_above_one_molecule(tmp_path):
+    """The exclusion threshold cannot be so tight that a single erroneous molecule looks real.
+
+    With M molecules one error is a minor fraction of 1/M. If ``--max-minor`` is at or below that,
+    every position where an error occurred is excluded as "real variation" and the floor is
+    measured only where nothing went wrong -- biased down, which is the direction that lets migec
+    emit a quality it cannot support.
+    """
+    from tests.synthetic._sim import SimConfig, simulate
+
+    cfg = SimConfig(
+        n_molecules=600, n_clones=1, seq_len=140, umi_len=12, coverage=10.0,
+        seq_error=2e-3, rt_error=1e-4, pcr_error=0.0, umi_error=0.0, adapter=ADAPTER, seed=9,
+    )
+    sim = simulate(cfg, tmp_path / "sim")
+    with pytest.raises(SystemExit, match="which is the signal itself"):
+        qf.main(["--reads", str(sim["reads"]), "--out", str(tmp_path / "x2"),
+                 "--window", "120", "--max-minor", "0.001"])
+
+
+def test_a_tie_does_not_vote_in_the_spectrum():
+    # An unresolved consensus base is not evidence for or against a variant.
+    assert qf.minor_allele_spectrum(["A", "N", "A"], 1)[0] == 0.0
+    assert qf.minor_allele_spectrum(["N", "N"], 1)[0] == 0.0
