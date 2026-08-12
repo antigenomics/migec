@@ -62,18 +62,25 @@ S2	aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 ```bash
 migec sheet barcodes.txt                             # what will each row extract?
 migec checkout reads.fq.gz -b barcodes.txt -o out/
+migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ -t 8
 ```
 
 ```
-reads       4,642
-  assigned  4,342 (93.5%)
-  unmatched 300 (6.5%)
+reads       2,000,000
+  assigned  2,000,000 (100.0%)
+  unmatched 0 (0.0%)
   ambiguous 0 (0.0%)
 
+2.2 s (917,339 reads/s on 8 threads), peak RSS 204.0 MB of which UMI counters 44.4 MB
+
 sample             reads        UMIs  reads/UMI  UMI len  eff len
-S1                 1,071         150       7.14       12    11.83
-S2                 1,174         150       7.83       12    11.82
+S1               500,000     492,751       1.01       12    12.00
+S2               500,000     492,606       1.02       12    12.00
 ```
+
+Paired input searches both mates for the tag and swaps the pair so R1 always carries it — an
+amplicon library sequenced in both orientations otherwise loses half of each MIG at consensus, and
+nothing upstream reports it.
 
 Reads come out trimmed of adapter, sample tag and UMI, with the barcode carried in SAM-style tags
 that survive `bwa mem -C` and `minimap2 -y` into the BAM:
@@ -85,6 +92,47 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
+
+### Speed and memory are reported, not assumed
+
+`--threads` defaults to one per core and **the output is byte-identical whatever it is set to** —
+reads are matched in chunks and written back in input order, so `-t` changes the wall clock and
+nothing else.
+
+| threads | reads/s | peak RSS |
+|---|---|---|
+| 1 | 152,822 | 139 MB |
+| 8 | 917,339 | 204 MB |
+| 16 | **1,178,648** | 295 MB |
+
+2 M single-end 115 nt reads, four barcode patterns, M-series laptop. Two things had to be true for
+that to scale. zlib compresses random DNA at **7 MB/s** at its default level 6, so compression runs
+on the workers (concatenated gzip members are a valid gzip stream) at level 1 — 137 MB/s for 13%
+more bytes. And the log-likelihood score tabulates into 1.2 kB, because the `log2` in the inner loop
+was 90% of runtime.
+
+The UMI counters are a sorted `(key, count)` array rather than a hash map: **~22 bytes per distinct
+UMI against ~48**, which at the 4·10⁸ distinct UMIs of an ordinary NovaSeq run is 8.8 GB against
+19 GB. That still does not fit a laptop — the counters are not yet partitioned, so checkout warns
+when they pass 1 GB rather than letting you find out from the OOM killer. See
+[`docs/performance.rst`](docs/performance.rst).
+
+### Grouping accuracy is measured against Calib
+
+`scripts/compare_calib.py` scores both tools' read partitions against a known truth with the
+adjusted Rand index, and reports **splitting and merging separately** — splitting inflates the
+molecule count and is recoverable, merging mixes molecules and destroys real variants.
+
+| UMI | UMI error | ARI | reads split | reads merged |
+|---|---|---|---|---|
+| 12 nt | 0 | **1.0000** | 0.0000 | 0.0000 |
+| 12 nt | 5·10⁻³ | 0.9348 | 0.5165 | 0.0004 |
+| 6 nt | 0 | 0.8877 | 0.0000 | 0.3982 |
+
+Calib clusters on barcode *and* sequence; migec today groups on the barcode alone, and the gap is
+exactly the collision rate — which `eff len` predicts before any clustering runs. A clean 12 nt
+barcode needs nothing cleverer; a 6 nt one cannot be rescued by any amount of barcode cleverness,
+only by sequence, which is what `assemble` adds.
 
 ### `eff len` is the number to look at
 

@@ -39,9 +39,20 @@ def info() -> None:
 
 @app.command()
 def checkout(
-    reads: Path = typer.Argument(..., help="Input FASTQ, optionally gzipped."),
+    reads: Path = typer.Argument(..., help="Input FASTQ (R1), optionally gzipped."),
+    reads2: Optional[Path] = typer.Argument(
+        None,
+        help="Second mate. When given, the tag is looked for in either mate and the pair is "
+        "swapped so R1 always carries it.",
+    ),
     barcodes: Path = typer.Option(..., "--barcodes", "-b", help="MIGEC-style barcode table."),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
+    threads: int = typer.Option(
+        0,
+        "--threads",
+        "-t",
+        help="Worker threads; 0 uses one per core. Output is byte-identical whatever this is.",
+    ),
     trim: str = typer.Option(
         "pattern",
         "--trim",
@@ -63,7 +74,16 @@ def checkout(
 
     if trim not in ("pattern", "none"):
         raise typer.BadParameter("--trim must be 'pattern' or 'none'")
-    summary = run(reads, barcodes, out_dir, trim, min_umi_quality, write_unmatched)
+    summary = run(
+        reads,
+        barcodes,
+        out_dir,
+        reads2=reads2,
+        trim=trim,
+        min_umi_quality=min_umi_quality,
+        write_unmatched=write_unmatched,
+        threads=threads,
+    )
     typer.echo(format_report(summary))
     typer.echo(f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition}}.tsv")
 

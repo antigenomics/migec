@@ -59,6 +59,17 @@ correction is written up in `project/review-algorithms.md`.
   neighbours to uncorrelated buckets, which makes correction impossible to apply and splits the
   molecule permanently — and the halves each look like a well-formed MIG, so nothing detects it.
 - ⛔ **No indels anywhere.** Substitutions only. Reinstate when there is a dataset to verify against.
+- ⛔ **Nothing that scales with the input on the serial path, and no hash map keyed by barcode.**
+  zlib level 6 does 7 MB/s on random DNA, so compression belongs on the workers (concatenated gzip
+  members are a valid stream) at level 1. A `unordered_map<uint64,uint32>` costs ~48 B per distinct
+  UMI against 22 for a sorted array, which at NovaSeq scale is 19 GB against 8.8. Both were
+  measured; `tests/benchmark/` guards them.
+- ⛔ **`-t` must never change the output.** Chunks are matched in parallel and written in input
+  order. A demultiplexer whose output depends on its thread count produces results that cannot be
+  compared between runs, and the failure is invisible.
+- ⚠ **No `log2`/`exp`/`pow` in a per-base loop.** The score depends only on the reported Phred and
+  the IUPAC set size, both small integers; it tabulates into 1.2 kB. The transcendental was 90% of
+  checkout's runtime before it did.
 - ⚠ **Strand normalisation happens in `checkout`.** The `.mig` flags describe what has *already*
   been applied. A group containing both orientations silently loses half its reads in consensus.
 - ⚠ **Nominal Phred is not the error rate.** On 2-colour instruments there are ~4 distinct Q
@@ -81,7 +92,14 @@ correction is written up in `project/review-algorithms.md`.
 ## Open loops
 
 - M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
-  correction. Single-end only so far — paired input, whitelists and `.mig` output are still open.
+  correction, **paired input with strand normalisation**, and **multi-core with byte-identical
+  output at any `-t`** (1.18 M reads/s at 16 threads). Whitelists, dual-end barcodes and `.mig`
+  bucket output are still open.
+- ⚠ **The UMI counters are not partitioned yet.** ~22 B per distinct UMI is 8.8 GB at NovaSeq
+  scale, held in one piece. The fix is the range partition (M2, with `.mig` bucket output), not a
+  smaller struct. Until then checkout warns past 1 GB.
+- Grouping accuracy vs Calib is wired up (`scripts/compare_calib.py`, `docs/grouping.rst`) and the
+  migec column is asserted in CI. Running the Calib column needs Calib built locally.
 - Next, in order: **X1** (read-start dispersion on 10x — decides whether fragmented mode is
   mandatory), then M1 (`assemble` + the quality model, validated on a clonal control).
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
@@ -89,8 +107,6 @@ correction is written up in `project/review-algorithms.md`.
   `mikessh/migec` is a redirect, and `gh` commands must use the former.
 - ⚠ `gh repo edit --default-branch` and force-pushes may be blocked by the permission classifier;
   hand those to the user rather than working around them.
-- `mikessh/mageri` is **not** archived yet — it has not moved orgs and still needs the
-  orphan + README stub + `gh repo archive` sequence from the plan.
 - `isalgo/umi_data` does not exist yet; nothing has been uploaded.
 - ⚠ Do **not** add seqtk as a dependency. It is the right tool for generic FASTQ slicing in a
   benchmark harness, but it cannot subsample by whole UMI (it samples reads), which is the one

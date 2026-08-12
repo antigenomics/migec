@@ -172,3 +172,89 @@ def test_trim_none_keeps_the_read_whole(tmp_path):
     # Untrimmed reads still start with the adapter region.
     assert lines[1].startswith("AAACT" + ADAPTER)
     assert len(lines[1]) > len(truth[0][3])
+
+
+def make_pairs(r1_path, r2_path, n=400, seed=11, flip_every=3):
+    """Paired reads where every `flip_every`-th pair carries the tag on R2 instead of R1."""
+    rng = random.Random(seed)
+    truth = []
+    with gzip.open(r1_path, "wt") as f1, gzip.open(r2_path, "wt") as f2:
+        for i in range(n):
+            sample = list(TAGS)[i % 4]
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(60))
+            mate = "".join(rng.choice("ACGT") for _ in range(60))
+            tagged = ("AA" + TAGS[sample] + ADAPTER + umi[:4] + "T" + umi[4:8] + "T" + umi[8:]
+                      + payload)
+            flipped = i % flip_every == 0
+            a, b = (mate, tagged) if flipped else (tagged, mate)
+            f1.write(f"@p{i}\n{a}\n+\n{'I' * len(a)}\n")
+            f2.write(f"@p{i}\n{b}\n+\n{'I' * len(b)}\n")
+            truth.append((f"p{i}", sample, umi, payload, mate, flipped))
+    return truth
+
+
+def test_paired_checkout_normalises_orientation(tmp_path):
+    from migec.checkout import run
+
+    r1, r2 = tmp_path / "R1.fq.gz", tmp_path / "R2.fq.gz"
+    truth = make_pairs(r1, r2)
+    (tmp_path / "barcodes.txt").write_text(BARCODES)
+    summary = run(r1, tmp_path / "barcodes.txt", tmp_path / "out", reads2=r2)
+
+    assert summary["assigned"] == len(truth)
+    assert summary["paired"]
+    # A pair whose tag sits on R2 must be swapped, not discarded: an amplicon library sequenced in
+    # both orientations otherwise loses those reads at consensus without anything reporting it.
+    assert summary["normalised"] == sum(1 for t in truth if t[5])
+
+    by_read = {t[0]: t for t in truth}
+    seen = 0
+    for s in summary["samples"]:
+        with gzip.open(tmp_path / "out" / f"{s['sample_id']}_R1.fq.gz", "rt") as fh:
+            a = fh.read().splitlines()
+        with gzip.open(tmp_path / "out" / f"{s['sample_id']}_R2.fq.gz", "rt") as fh:
+            b = fh.read().splitlines()
+        assert len(a) == len(b)
+        for j in range(0, len(a), 4):
+            name = a[j][1:].split(" ")[0]
+            _, sample, umi, payload, mate, _flipped = by_read[name]
+            assert sample == s["sample_id"]
+            assert a[j + 1] == payload, "R1 always carries the tag after normalisation"
+            assert b[j + 1] == mate, "the mate is passed through whole"
+            # Both mates carry the barcode, or nothing downstream can group the pair.
+            assert f"RX:Z:{umi}" in a[j] and f"RX:Z:{umi}" in b[j]
+            seen += 1
+    assert seen == len(truth)
+
+
+def test_output_does_not_depend_on_thread_count(tmp_path):
+    from migec.checkout import run
+
+    reads = tmp_path / "in.fq.gz"
+    make_reads(reads, n_per_sample=600, seed=13)
+    (tmp_path / "barcodes.txt").write_text(BARCODES)
+
+    digests = []
+    for threads in (1, 4):
+        out = tmp_path / f"t{threads}"
+        summary = run(reads, tmp_path / "barcodes.txt", out, threads=threads)
+        assert summary["threads"] == threads
+        digests.append((tmp_path / f"t{threads}" / "S1.fq.gz").read_bytes())
+    assert digests[0] == digests[1], "checkout output must not depend on -t"
+
+
+def test_resource_use_is_reported(tmp_path):
+    from migec.checkout import format_report, run
+
+    reads = tmp_path / "in.fq.gz"
+    make_reads(reads, seed=17)
+    (tmp_path / "barcodes.txt").write_text(BARCODES)
+    summary = run(reads, tmp_path / "barcodes.txt", tmp_path / "out")
+
+    assert summary["wall_seconds"] > 0
+    assert summary["reads_per_second"] > 0
+    assert summary["peak_rss_bytes"] > 0
+    assert 0 < summary["umi_memory_bytes"] < summary["peak_rss_bytes"]
+    report = format_report(summary)
+    assert "reads/s" in report and "peak RSS" in report

@@ -7,6 +7,7 @@ trims the synthetic sequence away, and puts the barcode in the read header.
 .. code-block:: bash
 
    migec checkout reads.fq.gz --barcodes barcodes.txt --out out/
+   migec checkout R1.fq.gz R2.fq.gz --barcodes barcodes.txt --out out/ -t 8
 
 Barcode patterns
 ----------------
@@ -83,6 +84,22 @@ A read whose best sample tag does not beat the runner-up by ``--min-margin`` bit
 ambiguous means the barcodes in the sheet are too close together, unmatched means the pattern is
 wrong or absent. One counter cannot say both, so there are two.
 
+Paired input and strand normalisation
+-------------------------------------
+
+Give a second mate and checkout looks for the tag in R1 first, then — **only** if R1 came up empty,
+so the cost falls on reads that would otherwise be discarded — in R2. When it turns up there the
+pair is swapped, so the output R1 always carries the tag. For single-end input the same fallback
+reverse-complements the read.
+
+This is not a convenience. Amplicon libraries are sequenced in both orientations, and a MIG holding
+both orientations of one molecule loses half its reads at consensus while nothing upstream reports
+it. The count of reads that were flipped is in the report and in ``normalised``.
+
+The mate is passed through whole: trimming it would need a second tag, and dual-end barcodes are
+not implemented yet (see :doc:`roadmap`). Both mates carry the ``RX``/``QX``/``BC`` tags, because a
+downstream tool that sees only one of them cannot group the pair.
+
 Trimming
 --------
 
@@ -129,12 +146,14 @@ Output
 ===================================  =========================================================
 file                                 content
 ===================================  =========================================================
-``<sample>.fq.gz``                   trimmed reads with barcodes in the header
-``unmatched.fq.gz``                  reads matching no pattern (``--write-unmatched``)
+``<sample>.fq.gz``                   trimmed reads with barcodes in the header (single-end)
+``<sample>_R1.fq.gz``, ``_R2``       the same, for paired input
+``unmatched*.fq.gz``                 reads matching no pattern (``--write-unmatched``)
 ``checkout.summary.tsv``             one row per sample: yields, UMI statistics, correction
 ``checkout.coverage.tsv``            reads and distinct UMIs per power-of-two MIG size
 ``checkout.umi_composition.tsv``     per-position base usage, entropy, information, collision
 ``checkout.json``                    everything above, machine-readable
 ===================================  =========================================================
 
-See :doc:`umi_statistics` for what the last two contain and how to read them.
+See :doc:`umi_statistics` for what the last two contain and how to read them, and
+:doc:`performance` for ``--threads`` and what the run costs in time and memory.

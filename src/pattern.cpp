@@ -9,8 +9,7 @@ namespace migec {
 namespace {
 
 // log2(4e/3) for a mismatch, and the matched-position term, both as functions of the error
-// probability. Tabulating by Phred is not enough once a calibration table is in play, so these
-// stay as calls; they are a handful of instructions and the offset loop is the cost, not this.
+// probability.
 inline double mismatch_bits(double e) {
     // Clamp: e = 0 would give -inf and reject a read on one perfect-quality mismatch, which is
     // exactly the over-confidence the calibration table exists to prevent.
@@ -24,6 +23,32 @@ inline double match_bits(double e, int m) {
     // miscalled into this one.
     const double p = (1.0 - e) / m + (m - 1) * e / (3.0 * m);
     return std::log2(4.0 * p);
+}
+
+// Both of the above are log2 calls, which at ~25 ns each dominated everything: the scan touches a
+// few thousand positions per read, so the transcendental was 90% of checkout's runtime. The score
+// only ever depends on the reported Phred and the size of the IUPAC set, and both are small
+// integers, so the whole thing tabulates into 1.2 kB.
+struct ScoreTable {
+    float mismatch[kMaxPhred + 1];
+    float match[5][kMaxPhred + 1];  // indexed by |S| in 1..4; row 0 unused
+};
+
+ScoreTable build_table(const std::vector<double>& calibration) {
+    ScoreTable t{};
+    for (int q = 0; q <= kMaxPhred; ++q) {
+        const double e = (!calibration.empty() && static_cast<size_t>(q) < calibration.size())
+                             ? calibration[q]
+                             : phred_error(static_cast<uint8_t>(q));
+        t.mismatch[q] = static_cast<float>(mismatch_bits(e));
+        for (int m = 1; m <= 4; ++m) t.match[m][q] = static_cast<float>(match_bits(e, m));
+    }
+    return t;
+}
+
+const ScoreTable& nominal_table() {
+    static const ScoreTable t = build_table({});
+    return t;
 }
 
 }  // namespace
@@ -96,35 +121,55 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
                                  ? params.min_score
                                  : default_min_score(seq.size());
     const auto& calib = params.quality_calibration;
+    // ponytail: the calibrated path rebuilds its table per read (~300 log2, ~8 us). Nothing
+    // supplies a calibration yet -- it arrives from the .mig header in M2 -- and when it does the
+    // table gets built once at that boundary rather than here.
+    ScoreTable local;
+    const ScoreTable* tab = &nominal_table();
+    if (!calib.empty()) {
+        local = build_table(calib);
+        tab = &local;
+    }
+    const bool have_qual = !qual.empty();
 
     double best = -1e300, second = -1e300;
     long best_off = -1;
 
-    // ponytail: plain O(offsets x pattern) scan. At 150 nt reads and a 40 nt pattern that is ~4400
-    // scored positions per read, which is not the bottleneck next to gzip. Upgrade path if it ever
-    // is: shift-or over the longest uppercase run to generate candidate offsets, then score only
-    // those.
+    // An offset scoring below this can be neither the winner nor the runner-up that sets the
+    // margin, so it can be abandoned the moment it is out of reach -- which is every wrong offset,
+    // within a handful of positions.
+    const double prune_floor = min_score - params.min_margin;
+
+    // ponytail: plain O(offsets x pattern) scan, made cheap by the table above and the early exit
+    // below rather than by a smarter algorithm. Upgrade path if a long read ever makes it matter:
+    // shift-or over the longest uppercase run to generate candidate offsets, then score only those.
     for (size_t off = 0; off <= last_offset; ++off) {
+        const double bar = best > prune_floor ? best : prune_floor;
         double s = 0.0;
+        bool pruned = false;
         for (size_t i = 0; i < plen; ++i) {
             const uint8_t m = mask_[i];
             if (m == 0) continue;  // UMI or wildcard: never scored
-            const char b = seq[off + i];
-            const uint8_t code = base_code(b);
-            uint8_t q = qual.empty() ? 30 : phred_from_char(qual[off + i]);
-            double e = (!calib.empty() && q < calib.size()) ? calib[q] : phred_error(q);
+            const uint8_t code = base_code(seq[off + i]);
+            const uint8_t q = have_qual ? phred_from_char(qual[off + i]) : 30;
             if (code != kInvalidBase && ((m >> code) & 1u)) {
-                s += match_bits(e, iupac_size(m));
+                s += tab->match[iupac_size(m)][q];
             } else {
                 // An N in the read is not evidence against the tag; it is no evidence at all.
                 // Scoring it as a mismatch at its (low) quality already handles that, and an
                 // uncallable base carries Q2, worth -0.6 bits.
-                s += weight_[i] * mismatch_bits(e);
+                s += weight_[i] * tab->mismatch[q];
             }
-            // Once this offset cannot beat the incumbent even with every remaining position
-            // matching perfectly, stop. Cheap and it cuts the common case (no match) short.
-            if (s + 2.0 * static_cast<double>(plen - i - 1) < best) break;
+            // Once this offset cannot reach the bar even with every remaining position matching
+            // perfectly, stop.
+            if (s + 2.0 * static_cast<double>(plen - i - 1) < bar) {
+                pruned = true;
+                break;
+            }
         }
+        // A pruned offset carries a partial score, which must never be mistaken for a real one:
+        // it is only known to be below the bar, and the bar can sit above the incumbent best.
+        if (pruned) continue;
         if (s > best) {
             second = best;
             best = s;

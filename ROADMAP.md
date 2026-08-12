@@ -13,7 +13,13 @@ adapter/tag/UMI, barcode transfer into SAM-style FASTQ headers, the power-of-two
 histogram, per-position base composition with Shannon entropy and information content, collision
 entropy and effective barcode length, data-driven UMI error-rate estimation, and count correction
 with a sequencing/polymerase/independent-molecule mixture plus the collision-corrected molecule
-count. `scripts/spikein_ratio.py` computes the published spike-in validation metric.
+count. `scripts/spikein_ratio.py` computes the published spike-in validation metric, and
+`scripts/compare_calib.py` scores UMI grouping against Calib by adjusted Rand index with splitting
+and merging reported separately.
+
+**Throughput and footprint**: 1.18 M reads/s at 16 threads (2 M single-end 115 nt reads, four
+patterns), output byte-identical at any `-t`; ~22 bytes per distinct UMI against a hash map's ~48.
+The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
 
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
 scientific claim and is validated before any throughput work.
@@ -60,10 +66,13 @@ scientific claim and is validated before any throughput work.
 - [x] Coverage histogram, composition/entropy/information, collision entropy, count correction
 - [ ] Bit-parallel matcher (the current scan is O(offsets x pattern) and is not the bottleneck yet)
 - [ ] Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded
-- [ ] Paired-end input; dual-end barcodes, strand normalisation, `.mig` bucket output
+- [x] Paired-end input; strand normalisation (tag searched in either mate, pair swapped)
+- [x] Multi-core, byte-identical output at any thread count; compression on the workers
+- [x] Speed and memory reported per run; `tests/benchmark/` regressions
+- [ ] Dual-end barcodes; `.mig` bucket output, which is also what bounds the UMI counters
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
-  threads
+  threads ✅; >1 M reads/s at 16 threads ✅
 
 ## M3 — `refine`
 

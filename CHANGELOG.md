@@ -6,6 +6,76 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### Paired input, and strand normalisation
+
+`migec checkout R1.fq.gz R2.fq.gz` looks for the tag in R1 first and, only if R1 came up empty, in
+R2 — so the extra work falls on reads that would otherwise be discarded. When the tag turns up
+there the pair is swapped, so the output R1 always carries it; single-end input gets the same
+fallback against the reverse complement.
+
+⚠ This is not a convenience. Amplicon libraries are sequenced in both orientations, and a MIG
+holding both orientations of one molecule loses half its reads at consensus while nothing upstream
+reports it. The flipped count is in the report and in `normalised`.
+
+The mate is passed through whole — trimming it needs a second tag, and dual-end barcodes are not
+implemented yet — but both mates carry RX/QX/BC, because a tool that sees only one of them cannot
+group the pair.
+
+### Multi-core, at 1.18 M reads/s, with the output independent of `-t`
+
+`--threads` defaults to one per core. **The output is byte-identical whatever it is set to**: reads
+are matched in fixed-size chunks and the chunks are written back in input order. A demultiplexer
+whose output depended on its thread count would produce results that could not be compared between
+runs, and the failure would be invisible.
+
+2 M single-end 115 nt reads over four patterns went from 53.7 s to 1.7 s. Three things were wrong,
+each measured:
+
+- **`log2` in the per-base scoring loop was 90% of runtime.** The score depends only on the
+  reported Phred and the size of the IUPAC set, both small integers, so it tabulates into 1.2 kB.
+- **zlib at level 6 compresses random DNA at 7 MB/s.** Read payload is close to incompressible, so
+  compression on the serial writer capped throughput no matter how many threads were matching. Each
+  worker now gzips its own chunk and the writer appends bytes; concatenated gzip members are a valid
+  gzip stream (RFC 1952 §2.2), so the output is an ordinary `.fq.gz`.
+- **The default compression level is now 1, not 6** — 137 MB/s for 13% more bytes.
+
+An offset that cannot reach the acceptance threshold is now also abandoned mid-scan rather than
+scored to the end.
+
+### UMI counters that fit: a sorted array, not a hash map
+
+`UmiCounts` is a bounded append buffer folded into a sorted `(key, count)` array. **~22 bytes per
+distinct UMI, measured, against ~48 for `unordered_map<uint64_t, uint32_t>`** once nodes, the
+cached hash and the bucket array are counted — at the 4·10⁸ distinct UMIs of an ordinary NovaSeq
+run, 8.8 GB against 19 GB. Sorted order is also what the range partition and the 1-substitution
+neighbourhood search both want. `CorrectionResult` is indexed in parallel with the entry array for
+the same reason, and the buffer grows with the data rather than costing a fixed ceiling per sample.
+
+⚠ 8.8 GB still does not fit a laptop, and the counters are **not yet partitioned**. The fix is the
+range partition, with `.mig` bucket output in M2. Until then checkout warns past 1 GB rather than
+letting you find out from the OOM killer.
+
+Fixed while rewriting: a child merged early could point at a parent merged later in the walk, so
+`root` is now flattened in a final pass and the documented invariant actually holds.
+
+### Speed and memory are reported on every run
+
+Wall clock, reads/s, thread count, peak RSS and the UMI-counter share of it, in the report and in
+`checkout.json`. `tests/benchmark/` (behind `RUN_BENCHMARK=1`) guards throughput, thread scaling,
+bytes per distinct UMI, and output determinism across thread counts.
+
+### Grouping accuracy against Calib
+
+`scripts/compare_calib.py` scores read partitions against a known truth by adjusted Rand index,
+reporting **splitting and merging separately** — splitting inflates the molecule count and is
+recoverable, merging mixes molecules and destroys real variants. Calib clusters on barcode *and*
+sequence; migec today groups on the barcode alone, and the measured gap is exactly the collision
+rate: ARI 1.0000 on a clean 12 nt barcode, 0.8877 at 6 nt with 40% of reads merged. The migec
+column is asserted on every test run; the Calib column needs Calib built locally.
+
+The simulator gained an `adapter` field, without which its reads carry no constant region for a
+barcode pattern to anchor on and cannot be checked out at all.
+
 ### Checkout: degenerate barcode patterns, trimming, header transfer
 
 The barcode side of the pipeline, against the published MIGEC barcode tables, which are read

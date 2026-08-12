@@ -15,8 +15,9 @@ scientific claim, so it is validated before any of the throughput work is done.
      - repo, ``.mig`` format, FASTQ IO, read simulator
      - done
    * - M2
-     - ``checkout``: patterns, trimming, header transfer, UMI statistics
-     - single-end done
+     - ``checkout``: patterns, trimming, header transfer, UMI statistics, paired input,
+       strand normalisation, multi-core
+     - done bar whitelists, dual-end barcodes and ``.mig`` buckets
    * - M1
      - ``assemble``: consensus, sub-clustering, quality model
      - planned

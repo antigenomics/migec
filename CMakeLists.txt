@@ -24,6 +24,7 @@ find_package(ZLIB REQUIRED)  # gzipped FASTQ, and the .mig block codec
 
 add_library(migec_core STATIC
   src/types.cpp
+  src/resource.cpp
   src/fastq.cpp
   src/mig_record.cpp
   src/pattern.cpp
@@ -50,6 +51,7 @@ if(MIGEC_TESTS)
     tests/cpp/test_pattern.cpp
     tests/cpp/test_umi_stats.cpp
     tests/cpp/test_checkout.cpp
+    tests/cpp/test_checkout_run.cpp
   )
   target_link_libraries(migec_tests PRIVATE migec_core)
   target_include_directories(migec_tests PRIVATE tests/cpp)

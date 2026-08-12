@@ -18,7 +18,6 @@
 
 #include <array>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 namespace migec {
@@ -68,15 +67,63 @@ struct UmiComposition {
 };
 
 // Observed UMI counts. Keys are packed barcodes (see types.hpp).
+//
+// Storage is a bounded append buffer that is periodically sorted and run-length reduced into a
+// sorted (key, count) array, NOT a hash map. On a deeply sequenced run this is the single largest
+// allocation in the process, and the difference is not academic: libstdc++'s
+// unordered_map<uint64_t,uint32_t> costs ~48 bytes per distinct UMI once the node, the cached
+// hash and the bucket array are counted, against 16 here. At 4e8 distinct UMIs -- an ordinary
+// NovaSeq output at 5 reads per molecule -- that is 19 GB against 6.4 GB.
+//
+// Sorted order is not a side effect, it is the point: it is what the range partition and the
+// neighbourhood search both want, and it makes the whole structure a flat scan instead of a
+// pointer chase.
+//
+// The ceiling is real and is not fixed here. 16 bytes x (distinct UMIs) still does not fit a
+// laptop for a full run, and the answer is the range partition -- process one bucket of the
+// barcode space at a time, so this object only ever holds 1/2^bits of the library. That lands
+// with `.mig` bucket output in M2; until then `memory_bytes()` is reported on every run and
+// `checkout` warns when it goes past a threshold.
 class UmiCounts {
 public:
-    explicit UmiCounts(int umi_length) : length_(umi_length) {}
+    struct Entry {
+        uint64_t key;
+        uint32_t count;
+    };
 
-    void add(uint64_t packed, uint32_t n = 1) { counts_[packed] += n; }
-    size_t distinct() const { return counts_.size(); }
-    uint64_t total() const;
+    // `buffer_umis` is the CEILING on the unsorted append buffer, not its size. The buffer grows
+    // with the data -- half the distinct count, so merges stay amortised O(1) per add -- and a
+    // fixed-size buffer would otherwise cost that ceiling per sample whatever the sample holds,
+    // which on a 96-plex sheet is gigabytes of empty space.
+    explicit UmiCounts(int umi_length, size_t buffer_umis = 1u << 20)
+        : length_(umi_length), buffer_limit_(buffer_umis ? buffer_umis : 1) {
+        flush_at_ = std::min<size_t>(buffer_limit_, kMinBuffer);
+    }
+
+    void add(uint64_t packed, uint32_t n = 1) {
+        buf_.push_back(Entry{packed, n});
+        total_ += n;
+        if (buf_.size() >= flush_at_) flush();
+    }
+
+    // Folds another counter in. Used to combine per-thread accumulators; the result does not
+    // depend on the order the threads finished in.
+    void merge(const UmiCounts& other);
+
+    size_t distinct() const { flush(); return entries_.size(); }
+    uint64_t total() const { return total_; }
     int length() const { return length_; }
-    const std::unordered_map<uint64_t, uint32_t>& map() const { return counts_; }
+
+    // Sorted by key, ascending. Flushes first, so it is O(n log n) on the first call after adds
+    // and free afterwards.
+    const std::vector<Entry>& entries() const { flush(); return entries_; }
+
+    // Read count for a packed barcode, or nullptr. Binary search over the sorted array: the top
+    // levels stay resident, which is why this beats a hash probe here despite the log factor.
+    const uint32_t* find(uint64_t key) const;
+
+    // Resident bytes actually held by this counter, buffer included.
+    size_t memory_bytes() const;
 
     CoverageHistogram histogram() const;
     // `weight_by_reads` draws the composition MIGEC calls `pwm.txt` (each UMI counted once per
@@ -86,8 +133,17 @@ public:
     UmiComposition composition(bool weight_by_reads = false) const;
 
 private:
+    // const because every accessor needs it and none of them change what the object *means*.
+    void flush() const;
+
+    static constexpr size_t kMinBuffer = 4096;
+
     int length_;
-    std::unordered_map<uint64_t, uint32_t> counts_;
+    size_t buffer_limit_;
+    mutable size_t flush_at_ = kMinBuffer;
+    uint64_t total_ = 0;
+    mutable std::vector<Entry> buf_;
+    mutable std::vector<Entry> entries_;
 };
 
 struct CorrectionParams {
@@ -107,9 +163,15 @@ struct CorrectionParams {
 };
 
 struct CorrectionResult {
-    // child packed UMI -> parent packed UMI. Chains are resolved, so every value is a root.
-    std::unordered_map<uint64_t, uint64_t> parent;
-    std::unordered_map<uint64_t, uint32_t> corrected;  // packed UMI -> corrected read count
+    // Both vectors are indexed in parallel with UmiCounts::entries(), which is what keeps this
+    // O(12 bytes) per distinct UMI instead of two hash maps at ~48 each.
+    //
+    // `root[i]` is the index of the barcode entry i was folded into, or i itself when entry i is
+    // a root. Chains are already resolved, so root[root[i]] == root[i].
+    std::vector<uint32_t> root;
+    // Read count after correction. A barcode that was merged away has 0 and its reads appear in
+    // its root's count.
+    std::vector<uint32_t> corrected;
     double estimated_error = 0.0;   // per-base UMI error actually used
     size_t merged = 0;              // number of distinct UMIs folded into a parent
     uint64_t merged_reads = 0;
@@ -132,6 +194,10 @@ struct CorrectionResult {
 double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp);
 
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {});
+
+// Position of `key` in counts.entries(), or SIZE_MAX. For tests and for translating a barcode
+// into the index space CorrectionResult uses.
+size_t index_of(const UmiCounts& counts, uint64_t key);
 
 }  // namespace migec
 

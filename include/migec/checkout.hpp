@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "migec/pattern.hpp"
+#include "migec/umi_stats.hpp"
 
 namespace migec {
 
@@ -44,7 +45,12 @@ struct CheckoutCounters {
     uint64_t ambiguous = 0;
     uint64_t short_payload = 0;
     uint64_t bad_umi = 0;
+    // Reads normalised onto the pattern's strand: the mate was swapped (paired) or the read was
+    // reverse-complemented (single-end) because the pattern was only found the other way round.
+    uint64_t normalised = 0;
     std::vector<uint64_t> per_sample;
+
+    void merge(const CheckoutCounters& o);
 };
 
 struct CheckoutRead {
@@ -58,12 +64,42 @@ struct CheckoutRead {
     double score = 0.0;
 };
 
+// Reusable buffers for the paired path. Strand normalisation has to reverse-complement, which
+// cannot be done in a view, and a fresh allocation per read is a measurable fraction of the
+// per-read cost -- so the caller keeps one of these and it stops allocating after the first read.
+struct CheckoutScratch {
+    std::string seq1, qual1, seq2, qual2;
+};
+
+struct CheckoutPair {
+    bool ok = false;
+    int sample = -1;
+    std::string umi;
+    std::string umi_qual;
+    // Views into `scratch`, valid until the next call with the same scratch.
+    std::string_view seq1, qual1, seq2, qual2;
+    bool normalised = false;  // the mates were swapped, or the single read was rc'd
+    double score = 0.0;
+};
+
 // Stateless apart from the pattern set and the counters.
 class Checkout {
 public:
     Checkout(const PatternSet& patterns, CheckoutParams params);
 
     CheckoutRead process(std::string_view seq, std::string_view qual);
+
+    // Single-end when `seq2` is empty.
+    //
+    // The pattern is looked for in R1 first. On failure -- and only on failure, so the cost is
+    // paid for reads that would otherwise be discarded -- it is looked for in R2, or in the
+    // reverse complement for single-end input. When it turns up there the pair is swapped (or the
+    // read flipped) so that everything downstream sees one orientation. A MIG holding both
+    // orientations of the same molecule loses half its reads at consensus and nothing upstream
+    // reports it, which is why this is not optional.
+    CheckoutPair process_pair(std::string_view seq1, std::string_view qual1,
+                              std::string_view seq2, std::string_view qual2,
+                              CheckoutScratch& scratch);
 
     const CheckoutCounters& counters() const { return counters_; }
 
@@ -77,7 +113,45 @@ private:
     const PatternSet& patterns_;
     CheckoutParams params_;
     CheckoutCounters counters_;
+    CheckoutScratch scratch_;  // backs the single-read process() overload
 };
+
+// ---------------------------------------------------------------------------------------------
+// The whole-file driver.
+
+struct CheckoutRequest {
+    std::string r1;                  // input FASTQ, plain or gzipped
+    std::string r2;                  // empty for single-end
+    std::string out_prefix;          // "<prefix><sample>_R1.fq.gz", or "<prefix><sample>.fq.gz"
+    bool write_unmatched = false;
+    // Level 1, not zlib's default 6. Read payload is close to incompressible, and on random DNA
+    // level 6 runs at 7 MB/s against level 1's 137 MB/s for 13% more bytes. Paying 20x the CPU
+    // for a tenth of the file is not a trade anyone would make deliberately.
+    int gzip_level = 1;
+    // 0 means one per hardware thread. Output is byte-identical whatever this is set to: reads are
+    // processed in chunks and the chunks are written back in input order, so threading changes the
+    // wall clock and nothing else.
+    int threads = 0;
+    // Bounds the per-worker buffers, and with them the only part of peak RSS that scales with
+    // -t rather than with the library. 8192 x threads reads in flight costs ~5 MB per thread and
+    // leaves the thread-spawn overhead per round under a tenth of a percent.
+    size_t chunk_reads = 8192;
+};
+
+struct CheckoutStats {
+    CheckoutCounters counters;
+    std::vector<UmiCounts> umi_counts;  // one per sample, in pattern order
+    double wall_seconds = 0.0;
+    double reads_per_second = 0.0;
+    size_t peak_rss_bytes = 0;
+    size_t umi_memory_bytes = 0;  // the part of the above that is the UMI counters
+    int threads = 1;
+};
+
+// Demultiplex, extract, trim and write. Throws MigecError on malformed input or an unwritable
+// output path.
+CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& params,
+                           const CheckoutRequest& request);
 
 }  // namespace migec
 

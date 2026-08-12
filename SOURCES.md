@@ -74,9 +74,14 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 
 | Item | Value |
 |---|---|
-| Use | its read simulator provides UMI grouping ground truth |
-| Storage | ⛔ do not store the simulated reads — record the exact `calib simulate` command and seed here instead |
-| Provenance | derived |
+| Use | comparator for UMI grouping accuracy — it clusters on barcode *and* sequence, we (today) on barcode alone |
+| Get it | `git clone https://github.com/vpc-ccg/calib && cd calib && make` → `calib`, `calib_cons` |
+| Run | `calib -f R1.fq -r R2.fq -l <barcode_len> -o prefix` → `prefix.cluster` |
+| `.cluster` format | 9 TSV columns: `cluster_id, node_id, read_id, f_name, f_seq, f_qual, r_name, r_seq, r_qual` (verified against the upstream README, 2026-08-13) |
+| Truth used here | **our** simulator, `tests/synthetic/_sim.py`, which writes `truth_reads.tsv` (`read_id`, `molecule_id`). Calib's own simulator emits no read→molecule map |
+| Compared by | `scripts/compare_calib.py` — adjusted Rand index, plus split and merge fractions separately |
+| Storage | ⛔ do not store simulated reads — record the exact command and seed here instead |
+| Provenance | derived (simulated) |
 
 ## HuggingFace — `isalgo/umi_data`
 

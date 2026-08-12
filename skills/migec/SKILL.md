@@ -48,7 +48,9 @@ prints what each row extracts without running anything.
 ## Commands
 
 ```bash
-migec checkout reads.fq.gz -b barcodes.txt -o out/     # demux, extract UMI, trim, QC tables
+migec checkout reads.fq.gz -b barcodes.txt -o out/      # demux, extract UMI, trim, QC tables
+migec checkout R1.fq.gz R2.fq.gz -b bc.txt -o out/      # paired; tag found in either mate
+migec checkout ... -t 8                                 # threads; output identical at any -t
 migec checkout ... --trim none                          # keep the read whole, UMI in header only
 migec checkout ... --min-umi-quality 15                 # MIGEC v1 behaviour; NOT the default
 migec checkout ... --write-unmatched
@@ -60,7 +62,7 @@ Python:
 
 ```python
 from migec.checkout import run, format_report
-summary = run("reads.fq.gz", "barcodes.txt", "out/")
+summary = run("reads.fq.gz", "barcodes.txt", "out/", reads2=None, threads=0)
 print(format_report(summary))
 
 from migec import _core
@@ -72,13 +74,16 @@ _core.umi_statistics(["ACGTACGTACGT", ...])                                 # hi
 
 | file | content |
 |---|---|
-| `<sample>.fq.gz` | trimmed reads, barcodes in the header |
+| `<sample>.fq.gz` | trimmed reads, barcodes in the header (`_R1`/`_R2` when paired) |
 | `checkout.summary.tsv` | per sample: yields, UMI stats, correction, saturation |
 | `checkout.coverage.tsv` | reads and distinct UMIs per power-of-two MIG size |
 | `checkout.umi_composition.tsv` | per position: A/C/G/T, entropy, information, collision |
 | `checkout.json` | all of the above, machine-readable |
 
-Header format: `@<name> RX:Z:<umi>\tQX:Z:<umi qual>\tBC:Z:<sample>`.
+Header format: `@<name> RX:Z:<umi>\tQX:Z:<umi qual>\tBC:Z:<sample>`. Both mates carry the tags.
+
+`summary` also carries `wall_seconds`, `reads_per_second`, `threads`, `peak_rss_bytes` and
+`umi_memory_bytes`; `format_report` prints them.
 
 ⛔ **Tags are TAB-separated.** `bwa mem -C` and `minimap2 -y` copy the FASTQ comment verbatim into
 the SAM record, so a space-separated comment produces a malformed BAM.
@@ -114,6 +119,32 @@ is for every decision.
 - **A neighbour of comparable size is not merged.** No error turns 10 000 reads into 9 000.
 - **`ambiguous` and `unmatched` are different counters.** Ambiguous means two sample tags are too
   close together; unmatched means the pattern is wrong or absent.
+- **`normalised` is not an error count.** It is reads whose tag was found on the other mate or the
+  other strand, so the pair was swapped or the read flipped. An amplicon library sequenced both
+  ways otherwise loses half of every MIG at consensus, silently.
+- **Output gzip is level 1, not 6.** zlib does 7 MB/s on random DNA at level 6 and 137 MB/s at
+  level 1 for 13% more bytes. The file is a little larger on purpose.
+- **`-t` never changes the output.** If it appears to, that is a bug, not a tuning question.
+
+## Speed and memory
+
+Reported on every run. ~1.18 M reads/s at 16 threads; matching *and* compression run on the
+workers, and the serial stage only appends bytes.
+
+⚠ **The UMI counters are the allocation that scales with the library** — ~22 bytes per distinct
+UMI (a sorted `(key, count)` array; a hash map is ~48). They are **not yet partitioned**, so a
+NovaSeq-scale run holds ~8.8 GB in one piece. checkout warns past 1 GB. The fix is the range
+partition with `.mig` bucket output (M2), not a smaller struct.
+
+## Comparing grouping accuracy
+
+`scripts/compare_calib.py` scores read partitions against a truth TSV by adjusted Rand index, and
+reports **splitting and merging separately** — splitting inflates the molecule count and is
+recoverable, merging mixes molecules and destroys real variants.
+
+migec today groups on the barcode alone; Calib clusters on barcode *and* sequence. The gap is the
+collision rate: ARI 1.0000 on a clean 12 nt barcode, 0.8877 at 6 nt with 40% of reads merged.
+`effective_length` predicts it before any clustering runs.
 
 ## Validating a pipeline
 
@@ -126,6 +157,7 @@ makes both variants count as zero and the metric look perfect.
 
 ## References in the repo
 
-- `docs/checkout.rst`, `docs/umi_statistics.rst`, `docs/validation.rst`, `docs/formats.rst`
+- `docs/checkout.rst`, `docs/umi_statistics.rst`, `docs/performance.rst`, `docs/grouping.rst`,
+  `docs/validation.rst`, `docs/formats.rst`
 - `CLAUDE.md` — the non-negotiables and why each exists
 - `project/` — the design record: six subsystem designs and two critiques, with 25 corrected errors

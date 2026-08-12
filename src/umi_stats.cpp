@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <unordered_map>
 #include <vector>
 
 #include "migec/types.hpp"
@@ -112,17 +113,97 @@ double UmiComposition::expected_collisions(double n_molecules) const {
     return 0.5 * n_molecules * n_molecules * prod;
 }
 
-uint64_t UmiCounts::total() const {
-    uint64_t t = 0;
-    for (const auto& kv : counts_) t += kv.second;
-    return t;
+void UmiCounts::flush() const {
+    if (buf_.empty()) return;
+    std::sort(buf_.begin(), buf_.end(),
+              [](const Entry& a, const Entry& b) { return a.key < b.key; });
+    // Run-length reduce the buffer in place.
+    size_t w = 0;
+    for (size_t r = 0; r < buf_.size(); ++r) {
+        if (w > 0 && buf_[w - 1].key == buf_[r].key) {
+            buf_[w - 1].count += buf_[r].count;
+        } else {
+            buf_[w++] = buf_[r];
+        }
+    }
+    buf_.resize(w);
+
+    auto set_next_flush = [this] {
+        flush_at_ = std::min(buffer_limit_, std::max(kMinBuffer, entries_.size() / 2));
+    };
+
+    if (entries_.empty()) {
+        entries_.swap(buf_);
+        buf_.clear();
+        set_next_flush();
+        return;
+    }
+
+    // Merge two sorted runs *backwards into the grown array* rather than into a fresh vector: at
+    // this size the transient copy is the peak memory of the whole process.
+    const size_t n = entries_.size();
+    // reserve() before resize(): resize alone grows geometrically, so the array would sit at up to
+    // twice the bytes it needs for the whole run. This is the largest allocation in the process.
+    entries_.reserve(n + w);
+    entries_.resize(n + w);
+    size_t i = n, j = w, out = n + w;
+    while (i > 0 && j > 0) {
+        const Entry& a = entries_[i - 1];
+        const Entry& b = buf_[j - 1];
+        if (a.key == b.key) {
+            entries_[--out] = Entry{a.key, a.count + b.count};
+            --i;
+            --j;
+        } else if (a.key > b.key) {
+            entries_[--out] = a;
+            --i;
+        } else {
+            entries_[--out] = b;
+            --j;
+        }
+    }
+    while (j > 0) entries_[--out] = buf_[--j];
+    // Equal keys collapsed, so the merged run can be shorter than the space reserved for it; the
+    // survivors sit at the top and are shifted down.
+    if (out > 0) {
+        std::move(entries_.begin() + static_cast<long>(out), entries_.end(),
+                  entries_.begin() + static_cast<long>(i));
+        entries_.resize(i + (n + w - out));
+    }
+    buf_.clear();
+    set_next_flush();
+}
+
+void UmiCounts::merge(const UmiCounts& other) {
+    other.flush();
+    for (const Entry& e : other.entries_) add(e.key, e.count);
+}
+
+const uint32_t* UmiCounts::find(uint64_t key) const {
+    flush();
+    auto it = std::lower_bound(entries_.begin(), entries_.end(), key,
+                               [](const Entry& e, uint64_t k) { return e.key < k; });
+    if (it == entries_.end() || it->key != key) return nullptr;
+    return &it->count;
+}
+
+size_t UmiCounts::memory_bytes() const {
+    return entries_.capacity() * sizeof(Entry) + buf_.capacity() * sizeof(Entry);
+}
+
+size_t index_of(const UmiCounts& counts, uint64_t key) {
+    const std::vector<UmiCounts::Entry>& e = counts.entries();
+    auto it = std::lower_bound(e.begin(), e.end(), key,
+                               [](const UmiCounts::Entry& x, uint64_t k) { return x.key < k; });
+    if (it == e.end() || it->key != key) return static_cast<size_t>(-1);
+    return static_cast<size_t>(it - e.begin());
 }
 
 CoverageHistogram UmiCounts::histogram() const {
     CoverageHistogram h;
-    for (const auto& kv : counts_) {
-        const int b = log2_bin(kv.second);
-        h.reads[static_cast<size_t>(b)] += kv.second;
+    for (const Entry& e : entries()) {
+        const int b = log2_bin(e.count);
+        h.reads[static_cast<size_t>(b)] += e.count;
         h.units[static_cast<size_t>(b)] += 1;
     }
     return h;
@@ -133,10 +214,10 @@ UmiComposition UmiCounts::composition(bool weight_by_reads) const {
     c.length = length_;
     c.freq.assign(static_cast<size_t>(length_), {0.0, 0.0, 0.0, 0.0});
     double total = 0.0;
-    for (const auto& kv : counts_) {
-        const double w = weight_by_reads ? static_cast<double>(kv.second) : 1.0;
+    for (const Entry& e : entries()) {
+        const double w = weight_by_reads ? static_cast<double>(e.count) : 1.0;
         for (int j = 0; j < length_; ++j) {
-            const uint8_t code = static_cast<uint8_t>((kv.first >> (62 - 2 * j)) & 3u);
+            const uint8_t code = static_cast<uint8_t>((e.key >> (62 - 2 * j)) & 3u);
             c.freq[static_cast<size_t>(j)][code] += w;
         }
         total += w;
@@ -155,15 +236,15 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
 
     // Observed distinct-barcode pairs at Hamming distance 1, counted once each.
     uint64_t d1_obs = 0;
-    const auto& m = counts.map();
-    for (const auto& kv : m) {
+    const std::vector<UmiCounts::Entry>& m = counts.entries();
+    for (const UmiCounts::Entry& e : m) {
         for (int j = 0; j < L; ++j) {
             const int shift = 62 - 2 * j;
-            const uint64_t cur = (kv.first >> shift) & 3u;
+            const uint64_t cur = (e.key >> shift) & 3u;
             for (uint64_t b = 0; b < 4; ++b) {
                 if (b == cur) continue;
-                const uint64_t nb = (kv.first & ~(uint64_t{3} << shift)) | (b << shift);
-                if (nb > kv.first && m.count(nb)) ++d1_obs;  // count each pair once
+                const uint64_t nb = (e.key & ~(uint64_t{3} << shift)) | (b << shift);
+                if (nb > e.key && counts.find(nb)) ++d1_obs;  // count each pair once
             }
         }
     }
@@ -183,8 +264,8 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
     // Bisect on log(eps) against the parent-child plus sibling expectation.
     auto expected = [&](double eps) {
         double parent_child = 0.0, sibling = 0.0;
-        for (const auto& kv : m) {
-            const double t = 1.0 - std::exp(-static_cast<double>(kv.second) * eps);
+        for (const UmiCounts::Entry& e : m) {
+            const double t = 1.0 - std::exp(-static_cast<double>(e.count) * eps);
             parent_child += t;
             sibling += t * t;
         }
@@ -208,14 +289,29 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params) {
     CorrectionResult res;
     const int L = counts.length();
-    const auto& m = counts.map();
-    res.corrected.reserve(m.size());
-    for (const auto& kv : m) res.corrected[kv.first] = kv.second;
-    if (L <= 0 || m.size() < 2) {
-        res.molecules_observed = m.size();
-        res.molecules_corrected = static_cast<double>(m.size());
+    const std::vector<UmiCounts::Entry>& m = counts.entries();
+    const size_t n_entries = m.size();
+
+    res.root.resize(n_entries);
+    res.corrected.resize(n_entries);
+    for (size_t i = 0; i < n_entries; ++i) {
+        res.root[i] = static_cast<uint32_t>(i);
+        res.corrected[i] = m[i].count;
+    }
+    if (L <= 0 || n_entries < 2) {
+        res.molecules_observed = n_entries;
+        res.molecules_corrected = static_cast<double>(n_entries);
         return res;
     }
+
+    // Index of a packed barcode in the sorted entry array. Binary search: the alternative would be
+    // a side hash map, which is exactly the allocation this class exists to avoid.
+    auto find_idx = [&m](uint64_t key) -> size_t {
+        auto it = std::lower_bound(m.begin(), m.end(), key,
+                                   [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
+        if (it == m.end() || it->key != key) return static_cast<size_t>(-1);
+        return static_cast<size_t>(it - m.begin());
+    };
 
     const UmiComposition comp = counts.composition(false);
     double eps = params.sequencing_error;
@@ -225,7 +321,7 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
 
     double p_coll = 1.0;
     for (int j = 0; j < L; ++j) p_coll *= comp.collision(j);
-    const double n = static_cast<double>(m.size());
+    const double n = static_cast<double>(n_entries);
     const double space = comp.effective_space();
     res.saturated = space > 0.0 && n > 0.05 * space;
 
@@ -243,23 +339,25 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
     // ...and if it is a real molecule, its read count follows the library's own MIG size
     // distribution. Using the empirical distribution rather than a parametric one means the test
     // adapts to how deeply the library was sequenced without another tunable.
-    std::unordered_map<uint32_t, double> size_pmf;
-    for (const auto& kv : m) size_pmf[kv.second] += 1.0;
+    std::unordered_map<uint32_t, double> size_pmf;  // keyed by MIG size, so it stays small
+    for (const UmiCounts::Entry& e : m) size_pmf[e.count] += 1.0;
     for (auto& kv : size_pmf) kv.second /= n;
     const double size_floor = 1.0 / (n + 1.0);  // never claim a size is impossible
 
-    // Order by count descending so a parent is always processed before its children, then walk
-    // each barcode's 3L neighbourhood.
-    std::vector<std::pair<uint64_t, uint32_t>> order(m.begin(), m.end());
-    std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
-        if (a.second != b.second) return a.second > b.second;
-        return a.first < b.first;  // total order, so the result is reproducible
+    // Order by count descending, then walk each barcode's 3L neighbourhood from the smallest MIG
+    // upwards. Indices, not copies of the entries: 4 bytes each rather than 16.
+    std::vector<uint32_t> order(n_entries);
+    for (size_t i = 0; i < n_entries; ++i) order[i] = static_cast<uint32_t>(i);
+    std::sort(order.begin(), order.end(), [&m](uint32_t a, uint32_t b) {
+        if (m[a].count != m[b].count) return m[a].count > m[b].count;
+        return m[a].key < m[b].key;  // total order, so the result is reproducible
     });
 
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        const uint64_t child = it->first;
-        const uint32_t c_child = it->second;
-        uint64_t best_parent = 0;
+        const size_t child_idx = *it;
+        const uint64_t child = m[child_idx].key;
+        const uint32_t c_child = m[child_idx].count;
+        size_t best_parent = static_cast<size_t>(-1);
         double best_post = 0.0;
 
         for (int j = 0; j < L; ++j) {
@@ -268,9 +366,9 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
             for (uint64_t b = 0; b < 4; ++b) {
                 if (b == cur) continue;
                 const uint64_t cand = (child & ~(uint64_t{3} << shift)) | (b << shift);
-                auto f = m.find(cand);
-                if (f == m.end()) continue;
-                const uint32_t c_par = f->second;
+                const size_t cand_idx = find_idx(cand);
+                if (cand_idx == static_cast<size_t>(-1)) continue;
+                const uint32_t c_par = m[cand_idx].count;
                 if (c_par <= c_child) continue;  // a parent must be strictly larger
                 if (static_cast<double>(c_child) >
                     params.max_child_fraction * static_cast<double>(c_par)) {
@@ -294,29 +392,38 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
                 const double post = l_err / (l_err + l_ind);
                 if (post > best_post) {
                     best_post = post;
-                    best_parent = cand;
+                    best_parent = cand_idx;
                 }
             }
         }
 
-        if (best_post >= params.min_posterior && best_parent != 0) {
-            // Resolve the chain: the parent may itself already have been merged.
-            uint64_t root = best_parent;
-            for (int guard = 0; guard < 64; ++guard) {
-                auto p = res.parent.find(root);
-                if (p == res.parent.end()) break;
-                root = p->second;
-            }
-            if (root == child) continue;  // never make a cycle
-            res.parent[child] = root;
-            res.corrected[root] += res.corrected[child];
-            res.merged_reads += res.corrected[child];
-            res.corrected.erase(child);
+        if (best_post >= params.min_posterior && best_parent != static_cast<size_t>(-1)) {
+            // Follow the parent to its current root -- it may itself already have been merged.
+            uint32_t root = static_cast<uint32_t>(best_parent);
+            for (int guard = 0; guard < 64 && res.root[root] != root; ++guard) root = res.root[root];
+            if (root == child_idx) continue;  // never make a cycle
+            res.root[child_idx] = root;
+            res.corrected[root] += res.corrected[child_idx];
+            res.merged_reads += res.corrected[child_idx];
+            res.corrected[child_idx] = 0;
             ++res.merged;
         }
     }
 
-    res.molecules_observed = res.corrected.size();
+    // Flatten. A child merged early can point at a parent that was itself merged later in the
+    // walk, so the invariant "root[root[i]] == root[i]" only holds after this pass. The read
+    // counts were already correct -- they follow the chain as it forms -- but a consumer reading
+    // `root` directly would otherwise land on an intermediate.
+    for (size_t i = 0; i < n_entries; ++i) {
+        uint32_t r = res.root[i];
+        for (int guard = 0; guard < 64 && res.root[r] != r; ++guard) r = res.root[r];
+        res.root[i] = r;
+    }
+
+    res.molecules_observed = 0;
+    for (uint32_t c : res.corrected) {
+        if (c > 0) ++res.molecules_observed;
+    }
     // Two molecules drawing the same UMI are invisible to any method, so the observed count is
     // biased low. Inverting the Poisson occupancy recovers the estimate:
     //     M_hat = S_eff * -ln(1 - M_obs / S_eff)

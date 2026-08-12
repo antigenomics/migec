@@ -56,6 +56,9 @@ class SimConfig:
     umi_error: float = 3e-4  # per base, sequencing error in the UMI
     umi_base_freqs: tuple[float, float, float, float] = (0.25, 0.25, 0.25, 0.25)
     mean_qual: int = 32
+    # Constant region between the UMI and the payload. Empty gives a bare `<umi><payload>` read,
+    # which no barcode pattern can anchor on -- set it when the reads have to survive checkout.
+    adapter: str = ""
     seed: int = 20260813
     paired: bool = False
     truth: dict = field(default_factory=dict)
@@ -171,10 +174,8 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
                 read_seq, n_err = _mutate(consensus_seq, cfg.seq_error, rng)
                 umi_obs, _ = _mutate(umi, cfg.umi_error, rng)
                 rid = f"r{n_reads}"
-                fq.write(
-                    f"@{rid} UMI:{umi_obs}\n{umi_obs}{read_seq}\n+\n"
-                    f"{qual_char * (len(umi_obs) + len(read_seq))}\n"
-                )
+                full = f"{umi_obs}{cfg.adapter}{read_seq}"
+                fq.write(f"@{rid} UMI:{umi_obs}\n{full}\n+\n{qual_char * len(full)}\n")
                 tr.write(f"{rid}\t{mol}\t{clone}\t{umi}\t{umi_obs}\t{n_err}\n")
                 n_reads += 1
 
@@ -187,6 +188,8 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         "n_molecules": cfg.n_molecules,
         "n_distinct_umis": len(seen_umis),
         "n_umi_collisions": n_collisions,
+        # Paste-ready barcode pattern for `migec checkout` on this corpus.
+        "pattern": "N" * cfg.umi_len + cfg.adapter.lower(),
     }
 
 

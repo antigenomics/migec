@@ -122,6 +122,20 @@ UmiCounts background_library(int n_umis, int umi_len, uint32_t seed) {
     return c;
 }
 
+// CorrectionResult is indexed in parallel with counts.entries() rather than keyed by barcode --
+// 12 bytes per UMI instead of two hash maps' worth. These translate back to barcodes for the
+// assertions.
+bool merged_away(const UmiCounts& c, const CorrectionResult& r, const std::string& s) {
+    const size_t i = index_of(c, umi(s));
+    return i != static_cast<size_t>(-1) && r.root[i] != i;
+}
+uint64_t root_of(const UmiCounts& c, const CorrectionResult& r, const std::string& s) {
+    return c.entries()[r.root[index_of(c, umi(s))]].key;
+}
+uint32_t reads_of(const UmiCounts& c, const CorrectionResult& r, const std::string& s) {
+    return r.corrected[index_of(c, umi(s))];
+}
+
 }  // namespace
 
 TEST_CASE("a small child of a large parent is merged") {
@@ -135,10 +149,10 @@ TEST_CASE("a small child of a large parent is merged") {
     p.sequencing_error = 1e-3;
     CorrectionResult r = correct_umis(c, p);
 
-    REQUIRE(r.parent.count(umi("ACGTACGTACGA")) == 1);
-    CHECK(r.parent.at(umi("ACGTACGTACGA")) == umi("ACGTACGTACGT"));
-    CHECK(r.corrected.at(umi("ACGTACGTACGT")) == 10002);
-    CHECK(r.corrected.count(umi("ACGTACGTACGA")) == 0);
+    REQUIRE(merged_away(c, r, "ACGTACGTACGA"));
+    CHECK(root_of(c, r, "ACGTACGTACGA") == umi("ACGTACGTACGT"));
+    CHECK(reads_of(c, r, "ACGTACGTACGT") == 10002);
+    CHECK(reads_of(c, r, "ACGTACGTACGA") == 0);
 }
 
 TEST_CASE("a neighbour of comparable size is not merged") {
@@ -151,7 +165,7 @@ TEST_CASE("a neighbour of comparable size is not merged") {
     CorrectionParams p;
     p.sequencing_error = 1e-3;
     CorrectionResult r = correct_umis(c, p);
-    CHECK(r.parent.count(umi("ACGTACGTACGA")) == 0);
+    CHECK(!merged_away(c, r, "ACGTACGTACGA"));
 }
 
 TEST_CASE("an isolated low-coverage UMI keeps its reads") {
@@ -161,8 +175,8 @@ TEST_CASE("an isolated low-coverage UMI keeps its reads") {
     c.add(umi("TTTTTTTTTTTT"), 4);  // 12 substitutions from anything else, by construction
 
     CorrectionResult r = correct_umis(c);
-    CHECK(r.parent.count(umi("TTTTTTTTTTTT")) == 0);
-    CHECK(r.corrected.at(umi("TTTTTTTTTTTT")) == 4);
+    CHECK(!merged_away(c, r, "TTTTTTTTTTTT"));
+    CHECK(reads_of(c, r, "TTTTTTTTTTTT") == 4);
 }
 
 TEST_CASE("a child is never merged into a smaller or equal barcode") {
@@ -170,8 +184,8 @@ TEST_CASE("a child is never merged into a smaller or equal barcode") {
     c.add(umi("ACGTACGTACGT"), 50);
     c.add(umi("ACGTACGTACGA"), 50);
     CorrectionResult r = correct_umis(c);
-    CHECK(r.parent.count(umi("ACGTACGTACGT")) == 0);
-    CHECK(r.parent.count(umi("ACGTACGTACGA")) == 0);
+    CHECK(!merged_away(c, r, "ACGTACGTACGT"));
+    CHECK(!merged_away(c, r, "ACGTACGTACGA"));
 }
 
 TEST_CASE("chains resolve to a root, never to a cycle") {
@@ -186,9 +200,10 @@ TEST_CASE("chains resolve to a root, never to a cycle") {
 
     // Whatever merges, every surviving barcode must be a root and the reads must be conserved.
     uint64_t total = 0;
-    for (const auto& kv : r.corrected) {
-        CHECK(r.parent.count(kv.first) == 0);
-        total += kv.second;
+    for (size_t i = 0; i < r.corrected.size(); ++i) {
+        if (r.corrected[i] == 0) continue;
+        CHECK(r.root[i] == i);  // every surviving barcode is its own root
+        total += r.corrected[i];
     }
     CHECK(total == 100305);
 }
@@ -207,7 +222,7 @@ TEST_CASE("reads are conserved by correction, always") {
     }
     CorrectionResult r = correct_umis(c);
     uint64_t total = 0;
-    for (const auto& kv : r.corrected) total += kv.second;
+    for (uint32_t n : r.corrected) total += n;
     CHECK(total == c.total());
     CHECK(c.total() <= expected);  // duplicate draws merged at add() time
 }
@@ -281,4 +296,72 @@ TEST_CASE("an over-full barcode space declines to estimate rather than reporting
     CorrectionResult r = correct_umis(c);
     CHECK(r.saturated);
     CHECK(r.molecules_corrected == doctest::Approx(static_cast<double>(r.molecules_observed)));
+}
+
+TEST_CASE("the flush path gives the same answer as one big buffer") {
+    // Counts are accumulated into a bounded buffer that is sorted and folded into a sorted array
+    // whenever it fills. A run whose buffer flushes a hundred times must be indistinguishable from
+    // one that never flushes -- otherwise the answer depends on how much RAM was available.
+    std::mt19937 rng(31);
+    std::vector<uint64_t> draws;
+    const char* B = "ACGT";
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s.push_back(B[rng() % 4]);
+        draws.push_back(umi(s));
+    }
+
+    UmiCounts big(8, 1u << 20);   // never flushes until the end
+    UmiCounts small(8, 64);       // flushes ~300 times
+    for (uint64_t d : draws) {
+        big.add(d);
+        small.add(d);
+    }
+
+    REQUIRE(big.distinct() == small.distinct());
+    CHECK(big.total() == small.total());
+    CHECK(big.total() == 20000);
+    const std::vector<UmiCounts::Entry>& a = big.entries();
+    const std::vector<UmiCounts::Entry>& b = small.entries();
+    for (size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i].key == b[i].key);
+        CHECK(a[i].count == b[i].count);
+    }
+    // Sorted, which is what the range partition and the neighbourhood search both rely on.
+    for (size_t i = 1; i < a.size(); ++i) CHECK(a[i - 1].key < a[i].key);
+}
+
+TEST_CASE("merging two counters is the same as counting once") {
+    UmiCounts x(6), y(6), both(6);
+    std::mt19937 rng(17);
+    const char* B = "ACGT";
+    for (int i = 0; i < 3000; ++i) {
+        std::string s;
+        for (int j = 0; j < 6; ++j) s.push_back(B[rng() % 4]);
+        (i % 2 ? y : x).add(umi(s));
+        both.add(umi(s));
+    }
+    x.merge(y);
+    REQUIRE(x.distinct() == both.distinct());
+    CHECK(x.total() == both.total());
+    for (size_t i = 0; i < both.entries().size(); ++i) {
+        CHECK(x.entries()[i].key == both.entries()[i].key);
+        CHECK(x.entries()[i].count == both.entries()[i].count);
+    }
+}
+
+TEST_CASE("the counter costs a small constant per distinct UMI") {
+    // The number this class exists for. A hash map of the same contents runs to ~48 bytes per
+    // entry once nodes and the bucket array are counted, which is the difference between a run
+    // fitting in memory and not.
+    UmiCounts c(12, 4096);
+    std::mt19937 rng(23);
+    const char* B = "ACGT";
+    for (int i = 0; i < 100000; ++i) {
+        std::string s;
+        for (int j = 0; j < 12; ++j) s.push_back(B[rng() % 4]);
+        c.add(umi(s));
+    }
+    const double per_umi = static_cast<double>(c.memory_bytes()) / static_cast<double>(c.distinct());
+    CHECK(per_umi < 32.0);
 }

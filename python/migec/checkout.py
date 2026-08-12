@@ -18,25 +18,30 @@ def run(
     reads: str | Path,
     barcodes: str | Path,
     out_dir: str | Path,
+    reads2: str | Path | None = None,
     trim: str = "pattern",
     min_umi_quality: int = 0,
     write_unmatched: bool = False,
+    threads: int = 0,
 ) -> dict:
-    """Demultiplex `reads` using the patterns in `barcodes`, writing into `out_dir`."""
+    """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`."""
     rows: list[SampleRow] = read_barcodes(barcodes)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     summary = _core.run_checkout(
         str(reads),
+        "" if reads2 is None else str(reads2),
         [r.sample_id for r in rows],
         [r.pattern for r in rows],
         str(out) + "/",
         trim,
         min_umi_quality,
         write_unmatched,
+        threads,
     )
     summary["input"] = str(reads)
+    summary["input2"] = "" if reads2 is None else str(reads2)
     summary["barcodes"] = str(barcodes)
     summary["patterns"] = {r.sample_id: r.pattern for r in rows}
 
@@ -98,6 +103,18 @@ def format_report(summary: dict) -> str:
         lines.append(f"  bad UMI   {c['bad_umi']:,} ({_pct(c['bad_umi'], c['total'])})")
     if c["short_payload"]:
         lines.append(f"  too short {c['short_payload']:,} ({_pct(c['short_payload'], c['total'])})")
+    if c.get("normalised"):
+        lines.append(
+            f"  flipped   {c['normalised']:,} ({_pct(c['normalised'], c['total'])}) "
+            f"-- tag found on the other mate/strand, reads normalised"
+        )
+    lines.append("")
+    lines.append(
+        f"{_dur(c.get('wall_seconds', 0.0))} "
+        f"({c.get('reads_per_second', 0.0):,.0f} reads/s on {c.get('threads', 1)} threads), "
+        f"peak RSS {_bytes(c.get('peak_rss_bytes', 0))} "
+        f"of which UMI counters {_bytes(c.get('umi_memory_bytes', 0))}"
+    )
     lines.append("")
     lines.append(
         f"{'sample':<12}{'reads':>12}{'UMIs':>12}{'reads/UMI':>11}{'UMI len':>9}{'eff len':>9}"
@@ -109,6 +126,15 @@ def format_report(summary: dict) -> str:
         )
 
     warnings = []
+    # The UMI counters are the one allocation that grows with the library rather than with the
+    # chunk size, so they are the thing that decides whether a run fits. Range partitioning is
+    # what fixes it; until that lands (M2) the honest thing is to say so before the OOM.
+    if c.get("umi_memory_bytes", 0) > 1 << 30:
+        warnings.append(
+            f"UMI counters hold {_bytes(c['umi_memory_bytes'])}. This grows with the number of "
+            f"distinct UMIs and is not yet partitioned across buckets, so a much larger input may "
+            f"not fit in memory"
+        )
     if c["total"] and c["assigned"] / c["total"] < 0.5:
         warnings.append(
             "less than half of reads matched a pattern -- run `migec suggest` to check where the "
@@ -140,3 +166,17 @@ def format_report(summary: dict) -> str:
 
 def _pct(n: int, total: int) -> str:
     return f"{100.0 * n / total:.1f}%" if total else "n/a"
+
+
+def _bytes(n: int) -> str:
+    for unit in ("B", "kB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
+
+
+def _dur(s: float) -> str:
+    if s < 60:
+        return f"{s:.1f} s"
+    return f"{int(s // 60)}m{s % 60:04.1f}s"

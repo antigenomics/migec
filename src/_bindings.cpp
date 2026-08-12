@@ -12,6 +12,7 @@
 #include "migec/fastq.hpp"
 #include "migec/mig_record.hpp"
 #include "migec/pattern.hpp"
+#include "migec/resource.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
 #include "migec/version.hpp"
@@ -75,11 +76,13 @@ private:
     MigReader reader_;
 };
 
-// Runs a whole FASTQ through checkout in C++, writing one output per sample. Whole-file, so the
-// pybind boundary is crossed once per run rather than once per read.
-py::dict run_checkout(const std::string& in_path, const std::vector<std::string>& sample_ids,
-                      const std::vector<std::string>& patterns, const std::string& out_prefix,
-                      const std::string& trim, int min_umi_quality, bool write_unmatched) {
+// Runs a whole FASTQ (or a pair) through checkout in C++, writing one output per sample.
+// Whole-file, so the pybind boundary is crossed once per run rather than once per read.
+py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2,
+                         const std::vector<std::string>& sample_ids,
+                         const std::vector<std::string>& patterns, const std::string& out_prefix,
+                         const std::string& trim, int min_umi_quality, bool write_unmatched,
+                         int threads) {
     if (sample_ids.size() != patterns.size()) {
         throw MigecError("run_checkout: sample_ids and patterns have different lengths");
     }
@@ -96,42 +99,20 @@ py::dict run_checkout(const std::string& in_path, const std::vector<std::string>
         throw MigecError("run_checkout: trim must be 'none' or 'pattern', got '" + trim + "'");
     }
 
-    Checkout co(set, params);
-    std::vector<std::unique_ptr<FastqWriter>> writers;
-    for (const auto& s : sample_ids) {
-        writers.push_back(std::make_unique<FastqWriter>(out_prefix + s + ".fq.gz"));
-    }
-    std::unique_ptr<FastqWriter> unmatched;
-    if (write_unmatched) {
-        unmatched = std::make_unique<FastqWriter>(out_prefix + "unmatched.fq.gz");
-    }
+    CheckoutRequest req;
+    req.r1 = in_path;
+    req.r2 = in_path2;
+    req.out_prefix = out_prefix;
+    req.write_unmatched = write_unmatched;
+    req.threads = threads;
 
-    // Per-sample UMI counts, so the histogram and composition come out of the same pass.
-    std::vector<UmiCounts> umi_counts;
-    for (size_t i = 0; i < patterns.size(); ++i) {
-        umi_counts.emplace_back(set.pattern(i).umi_length());
-    }
-
+    CheckoutStats stats;
     {
         py::gil_scoped_release release;
-        FastqReader reader(in_path);
-        FastqRecord rec;
-        while (reader.next(rec)) {
-            CheckoutRead r = co.process(rec.seq, rec.qual);
-            if (!r.ok) {
-                if (unmatched) unmatched->write(rec.name, rec.comment, rec.seq, rec.qual);
-                continue;
-            }
-            const std::string tags =
-                Checkout::header_tags(r.umi, r.umi_qual, sample_ids[static_cast<size_t>(r.sample)]);
-            writers[static_cast<size_t>(r.sample)]->write(rec.name, tags, r.seq, r.qual);
-            umi_counts[static_cast<size_t>(r.sample)].add(pack_barcode(r.umi));
-        }
-        for (auto& w : writers) w->close();
-        if (unmatched) unmatched->close();
+        stats = run_checkout(set, params, req);
     }
 
-    const CheckoutCounters& c = co.counters();
+    const CheckoutCounters& c = stats.counters;
     py::dict out;
     out["total"] = c.total;
     out["assigned"] = c.assigned;
@@ -139,7 +120,15 @@ py::dict run_checkout(const std::string& in_path, const std::vector<std::string>
     out["ambiguous"] = c.ambiguous;
     out["short_payload"] = c.short_payload;
     out["bad_umi"] = c.bad_umi;
+    out["normalised"] = c.normalised;
+    out["paired"] = !in_path2.empty();
+    out["threads"] = stats.threads;
+    out["wall_seconds"] = stats.wall_seconds;
+    out["reads_per_second"] = stats.reads_per_second;
+    out["peak_rss_bytes"] = stats.peak_rss_bytes;
+    out["umi_memory_bytes"] = stats.umi_memory_bytes;
 
+    const std::vector<UmiCounts>& umi_counts = stats.umi_counts;
     py::list per_sample;
     for (size_t i = 0; i < sample_ids.size(); ++i) {
         const CoverageHistogram h = umi_counts[i].histogram();
@@ -261,13 +250,21 @@ PYBIND11_MODULE(_core, m) {
         },
         py::arg("path"), "Count records in a (optionally gzipped) FASTQ. Validates as it goes.");
 
-    m.def("run_checkout", &run_checkout, py::arg("in_path"), py::arg("sample_ids"),
-          py::arg("patterns"), py::arg("out_prefix"), py::arg("trim") = "pattern",
-          py::arg("min_umi_quality") = 0, py::arg("write_unmatched") = false,
-          "Demultiplex a FASTQ by barcode pattern, extract and trim the UMI, and write one gzipped "
-          "FASTQ per sample with RX/QX/BC tags in the header. Returns a summary dict including the "
-          "per-sample coverage histogram, UMI composition and correction statistics. The whole "
-          "file is processed in C++ with the GIL released.");
+    m.def("run_checkout", &py_run_checkout, py::arg("in_path"), py::arg("in_path2") = std::string(),
+          py::arg("sample_ids") = std::vector<std::string>(),
+          py::arg("patterns") = std::vector<std::string>(), py::arg("out_prefix") = std::string(),
+          py::arg("trim") = "pattern", py::arg("min_umi_quality") = 0,
+          py::arg("write_unmatched") = false, py::arg("threads") = 0,
+          "Demultiplex a FASTQ (or an R1/R2 pair) by barcode pattern, extract and trim the UMI, "
+          "and write one gzipped FASTQ per sample with RX/QX/BC tags in the header. Returns a "
+          "summary dict including the per-sample coverage histogram, UMI composition, correction "
+          "statistics, and the wall clock, throughput and peak RSS of the run. The whole file is "
+          "processed in C++ with the GIL released, across `threads` workers (0 = one per core); "
+          "the output is byte-identical whatever that is set to.");
+
+    m.def("peak_rss_bytes", &peak_rss_bytes,
+          "Peak resident set size of this process in bytes, 0 if the platform will not say.");
+    m.def("hardware_threads", &hardware_threads);
 
     m.def(
         "match_pattern",
