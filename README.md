@@ -6,10 +6,10 @@ A complete C++20 rewrite of [MIGEC](https://doi.org/10.1038/nmeth.2960) (Shugay 
 Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shugay et al., *PLoS
 Computational Biology* 2017).
 
-> **Version 2 is under construction.** This build ships the `.mig` intermediate format and the
-> FASTQ IO layer; `checkout`, `refine` and `assemble` land over the following milestones. The
-> Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and at tag
-> `v1-final` — Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
+> **Version 2 is under construction.** `checkout` works today — barcode extraction, trimming,
+> header transfer and the UMI statistics. `refine` and `assemble` land over the following
+> milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
+> at tag `v1-final` — Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
 
 ## Why
 
@@ -47,6 +47,55 @@ pip install migec
 ```
 
 Wheels for CPython 3.10–3.13 on Linux x86-64 and macOS arm64. From source: `bash setup.sh`.
+
+## Usage
+
+Barcode tables are MIGEC's, read verbatim — uppercase is matched exactly (IUPAC degeneracy
+allowed), lowercase is the fuzzy adapter region, `N` marks a UMI position, and UMI runs need not be
+contiguous:
+
+```
+S1	aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN
+S2	aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
+```
+
+```bash
+migec sheet barcodes.txt                             # what will each row extract?
+migec checkout reads.fq.gz -b barcodes.txt -o out/
+```
+
+```
+reads       4,642
+  assigned  4,342 (93.5%)
+  unmatched 300 (6.5%)
+  ambiguous 0 (0.0%)
+
+sample             reads        UMIs  reads/UMI  UMI len  eff len
+S1                 1,071         150       7.14       12    11.83
+S2                 1,174         150       7.83       12    11.82
+```
+
+Reads come out trimmed of adapter, sample tag and UMI, with the barcode carried in SAM-style tags
+that survive `bwa mem -C` and `minimap2 -y` into the BAM:
+
+```
+@r0 RX:Z:GCTAAAGACAAT	QX:Z:IIIIIIIIIIII	BC:Z:S1
+TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
+```
+
+alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
+`checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
+
+### `eff len` is the number to look at
+
+A 12 nt UMI is not worth 12 nt unless its bases are uniform. `effective_length` is
+$-\sum_j \log_4 \sum_a p_j(a)^2$ — what the barcode is actually worth. A 12 nt UMI with eight
+fixed positions has an effective length of 4, a usable space of 256, and will collide constantly.
+
+The distinction matters more than it looks: a sequence logo draws *Shannon* entropy, but the
+probability two molecules collide is the *Rényi-2* (collision) entropy. Since H₂ ≤ H₁, using
+Shannon overstates the usable space and understates collisions — the direction that silently merges
+distinct molecules. Both are reported; only the collision form feeds any decision.
 
 ## Documentation
 

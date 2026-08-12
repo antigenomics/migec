@@ -6,6 +6,58 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### Checkout: degenerate barcode patterns, trimming, header transfer
+
+The barcode side of the pipeline, against the published MIGEC barcode tables, which are read
+verbatim. Acceptance is a quality-aware log-likelihood ratio in bits rather than a mismatch count:
+a match is worth +2.00 bits, a mismatch −9.55 bits at Q30 and −0.60 bits at Q2, so a mismatch on a
+bad base is nearly free and one on a good base is fatal. Lowercase is a half weight rather than a
+wildcard — v1 treated it as matching anything and discarded the evidence. Both of v1's real
+defects are reproduced as tests: quality indexed from the read start rather than the match offset,
+and a dangling `else` that meant low-quality mismatches were never counted.
+
+`--trim pattern` leaves exactly the biological payload; the barcode travels on in SAM-style
+RX/QX/BC tags, TAB-separated because `bwa mem -C` and `minimap2 -y` copy the comment verbatim into
+the SAM record.
+
+⚠ A read equidistant from two sample tags is reported as **ambiguous**, not assigned to one of
+them. That is a different diagnosis from "unmatched" — barcodes too close together versus a wrong
+pattern — and one counter cannot say both.
+
+### UMI statistics, and which entropy is allowed near a decision
+
+Coverage histogram in MIGEC's power-of-two bins, per-position base composition with Shannon
+entropy and information content for a logo, and the collision statistics.
+
+⛔ A logo draws Shannon entropy. The probability two molecules collide is the Rényi entropy of
+order 2, `Π_j Σ_a p_j(a)²`. Since H₂ ≤ H₁, using Shannon overstates the usable barcode space and
+understates collisions — the direction that silently merges distinct molecules. Both are reported;
+only the collision form feeds the effective length, the correction, and the molecule count.
+
+Count correction weighs three hypotheses per neighbour pair: a sequencing miscall (zero-truncated
+Poisson at ε/3, since a miscall lands on one specific base), a polymerase error (a Luria–Delbrück
+1/f² tail — an early-cycle error reaches a large share of the family and carries high quality in
+every read, so a Poisson on the sequencing rate rejects it and it survives as a spurious second
+molecule), and the barcode belonging to another real molecule whose size is drawn from the
+library's own MIG size distribution. An isolated low-coverage UMI has no parent and keeps its
+reads.
+
+⚠ The collision correction is declined above 90% occupancy rather than reported: the barcode space
+is estimated from the observed barcodes, so at saturation the estimate collapses onto the observed
+count and would report "no collisions" for the most collided library possible.
+
+### Spike-in validation
+
+`scripts/spikein_ratio.py` computes the published MIGEC metric — a real spike-in variant against
+the worst *error* at the same substitution distance. Raw reads give V1/Err1 ≈ 1.4 and V2/Err2 ≈
+0.3; UMI consensus is expected to reach 26–76 and 4.6–6.2. V2 is *less* abundant than the worst
+2-substitution PCR error, so no abundance threshold can separate them — which is the entire
+justification for molecular barcoding.
+
+⚠ The junction is anchored on its 3′ end only. Requiring the 5′ end too looks more robust and is
+catastrophically wrong: V1 differs at position 4 and V2 at 7–8, so both variants count as zero and
+the metric looks perfect.
+
 ### The rewrite
 
 MIGEC and MAGERI are replaced by a single C++20 core with a pybind11 module and a typer CLI. The

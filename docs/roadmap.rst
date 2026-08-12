@@ -4,16 +4,31 @@ Roadmap
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
 scientific claim, so it is validated before any of the throughput work is done.
 
-============  ==========================================================  ===========
-milestone     content                                                     state
-============  ==========================================================  ===========
-M0            repo, ``.mig`` format, FASTQ IO, read simulator             in progress
-M1            ``assemble``: consensus, sub-clustering, quality model      planned
-M2            ``checkout``: patterns, whitelists, buckets                 planned
-M3            ``refine``: error model, barcode correction, QC             planned
-M4            end-to-end, ``suggest``, ``sort``, ``subsample``, notebooks planned
-M5            benchmarks, ``isalgo/umi_data``, release                    planned
-============  ==========================================================  ===========
+.. list-table::
+   :header-rows: 1
+   :widths: 12 60 28
+
+   * - milestone
+     - content
+     - state
+   * - M0
+     - repo, ``.mig`` format, FASTQ IO, read simulator
+     - done
+   * - M2
+     - ``checkout``: patterns, trimming, header transfer, UMI statistics
+     - single-end done
+   * - M1
+     - ``assemble``: consensus, sub-clustering, quality model
+     - planned
+   * - M3
+     - ``refine``: error model, barcode correction, QC
+     - planned
+   * - M4
+     - end-to-end, ``suggest``, ``sort``, ``subsample``, notebooks
+     - planned
+   * - M5
+     - benchmarks, ``isalgo/umi_data``, release
+     - planned
 
 Explicitly out of scope for v2.0
 --------------------------------

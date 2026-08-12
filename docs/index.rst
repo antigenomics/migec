@@ -7,10 +7,10 @@ complete C++20 rewrite of `MIGEC <https://doi.org/10.1038/nmeth.2960>`_ and
 
 .. warning::
 
-   **Version 2 is under construction.** This build ships the ``.mig`` intermediate format and the
-   FASTQ IO layer. ``checkout``, ``refine`` and ``assemble`` land over the following milestones —
-   see :doc:`roadmap`. The Groovy MIGEC 1.2.9 that this replaces is archived on the ``legacy-v1``
-   branch and at tag ``v1-final``.
+   **Version 2 is under construction.** ``checkout`` works today — barcode extraction, trimming,
+   header transfer and the UMI statistics. ``refine`` and ``assemble`` land over the following
+   milestones; see :doc:`roadmap`. The Groovy MIGEC 1.2.9 that this replaces is archived on the
+   ``legacy-v1`` branch and at tag ``v1-final``.
 
 What it does
 ------------
@@ -45,5 +45,8 @@ SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
    :maxdepth: 2
 
    installation
+   checkout
+   umi_statistics
+   validation
    formats
    roadmap

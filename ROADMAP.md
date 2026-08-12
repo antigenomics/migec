@@ -6,6 +6,15 @@ with strict validation, barcode packing/unpacking and the IUPAC/Phred primitives
 module, the read simulator with ground truth, CI (C++ on ubuntu+macos, Python 3.10/3.12 matrix,
 pinned ruff), sphinx docs with a zero-warning gate, and the PyPI publish workflow.
 
+**`migec checkout` works**: degenerate barcode patterns in the MIGEC dialect read verbatim from
+published barcode tables, quality-aware log-likelihood acceptance, sample assignment with an
+ambiguity verdict distinct from "unmatched", UMI extraction from non-contiguous runs, trimming of
+adapter/tag/UMI, barcode transfer into SAM-style FASTQ headers, the power-of-two coverage
+histogram, per-position base composition with Shannon entropy and information content, collision
+entropy and effective barcode length, data-driven UMI error-rate estimation, and count correction
+with a sequencing/polymerase/independent-molecule mixture plus the collision-corrected molecule
+count. `scripts/spikein_ratio.py` computes the published spike-in validation metric.
+
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
 scientific claim and is validated before any throughput work.
 
@@ -16,7 +25,7 @@ scientific claim and is validated before any throughput work.
 - [x] FASTQ reader/writer; a record straddling a buffer refill is covered by a test
 - [x] Read simulator with truth files, and tests for the simulator itself
 - [x] CMake + scikit-build-core + CI + docs shell
-- [ ] Push to origin (waiting on a network window)
+- [x] Push to origin
 
 ## X — experiments that must precede the milestones they inform
 
@@ -45,11 +54,13 @@ scientific claim and is validated before any throughput work.
 
 ## M2 — `checkout`
 
-- [ ] Pattern grammar with named captures, plus the MIGEC dialect behind `--pattern-dialect migec`
-- [ ] Bit-parallel matcher; quality-aware log-likelihood acceptance, threshold calibrated against
-      decoy patterns rather than trusted analytically
+- [x] MIGEC-dialect pattern grammar, read verbatim from published barcode tables
+- [x] Quality-aware log-likelihood acceptance; ambiguous distinguished from unmatched
+- [x] UMI extraction from non-contiguous runs, trimming, SAM-style header transfer
+- [x] Coverage histogram, composition/entropy/information, collision entropy, count correction
+- [ ] Bit-parallel matcher (the current scan is O(offsets x pattern) and is not the bottleneck yet)
 - [ ] Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded
-- [ ] Dual-end barcodes, strand normalisation, undef and unassigned-barcode tables
+- [ ] Paired-end input; dual-end barcodes, strand normalisation, `.mig` bucket output
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
   threads

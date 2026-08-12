@@ -19,6 +19,8 @@ MAGERI is archived at `mikessh/mageri`. Their algorithms are the specification, 
 | `tests/{unit,synthetic,realworld,benchmark}/` | pytest tiers; `synthetic/_sim.py` is the simulator |
 | `docs/` | flat sphinx, `formats.rst` is the inter-stage contract |
 | `project/` | the design record: six subsystem designs and two critiques |
+| `skills/migec/` | the Claude skill shipped with the repo |
+| `scripts/` | validation and analysis scripts (`spikein_ratio.py`) |
 | `notebooks/` | marimo examples |
 | gitignored | `build/`, `.venv/`, `*.mig`, `scratch/` |
 
@@ -78,10 +80,18 @@ correction is written up in `project/review-algorithms.md`.
 
 ## Open loops
 
-- M0 done: `.mig` format frozen, FASTQ IO, simulator, CI, docs shell.
+- M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
+  correction. Single-end only so far — paired input, whitelists and `.mig` output are still open.
 - Next, in order: **X1** (read-start dispersion on 10x — decides whether fragmented mode is
   mandatory), then M1 (`assemble` + the quality model, validated on a clonal control).
-- Pushes to `origin` are pending a network window: `legacy-v1` and `v1-final` are additive and go
-  first, then `master` with `--force-with-lease`. Recovery point:
-  `~/backup/migec-local-mirror-2026-08-13.git`. Note the canonical repo is **antigenomics/migec**; `mikessh/migec` is a redirect.
+- The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
+  `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
+  `mikessh/migec` is a redirect, and `gh` commands must use the former.
+- ⚠ `gh repo edit --default-branch` and force-pushes may be blocked by the permission classifier;
+  hand those to the user rather than working around them.
+- `mikessh/mageri` is **not** archived yet — it has not moved orgs and still needs the
+  orphan + README stub + `gh repo archive` sequence from the plan.
 - `isalgo/umi_data` does not exist yet; nothing has been uploaded.
+- ⚠ Do **not** add seqtk as a dependency. It is the right tool for generic FASTQ slicing in a
+  benchmark harness, but it cannot subsample by whole UMI (it samples reads), which is the one
+  thing we need and the thing that makes a UMI example fixture correct.
