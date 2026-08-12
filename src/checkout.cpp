@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -140,22 +141,11 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
         }
     }
 
-    size_t begin = 0, end = seq.size();
-    switch (params_.trim) {
-        case TrimMode::kNone:
-            break;
-        case TrimMode::kPattern:
-            // Everything 5' of the payload goes: adapter, sample tag, UMI. This is synthetic
-            // sequence and leaving it in costs soft-clips at best and mismapping at worst.
-            begin = static_cast<size_t>(m.payload_begin);
-            break;
-        case TrimMode::kPatternOnly:
-            // Splice the pattern out, keeping the flank before it. Returning a view is impossible
-            // here, so we keep the 3' side -- the flank is available to the caller via the match
-            // offset if it is genuinely wanted.
-            begin = static_cast<size_t>(m.payload_begin);
-            break;
-    }
+    size_t begin = 0;
+    const size_t end = seq.size();
+    // Everything 5' of the payload goes: adapter, sample tag, UMI. This is synthetic sequence and
+    // leaving it in costs soft-clips at best and mismapping at worst.
+    if (params_.trim == TrimMode::kPattern) begin = static_cast<size_t>(m.payload_begin);
     if (begin > end) begin = end;
 
     if (static_cast<int>(end - begin) < params_.min_payload) {
@@ -220,6 +210,7 @@ void gzip_member(std::string_view in, std::string& out, int level) {
 // and here the compression has already happened on a worker thread.
 struct BlockFile {
     std::FILE* f = nullptr;
+    bool wrote = false;
 
     explicit BlockFile(const std::string& path) : f(std::fopen(path.c_str(), "wb")) {
         if (!f) throw MigecError("checkout: cannot open " + path);
@@ -233,6 +224,7 @@ struct BlockFile {
         if (std::fwrite(b.data(), 1, b.size(), f) != b.size()) {
             throw MigecError("checkout: short write");
         }
+        wrote = true;
     }
     void close() {
         if (f) {
@@ -317,8 +309,21 @@ struct Worker {
     std::vector<std::pair<uint32_t, uint64_t>> umis;
 };
 
+// An empty buffer still has a gzip member's worth of header and trailer, and there is one member
+// per chunk per sample: on a 96-plex sheet a sample that is absent from most chunks accumulates
+// megabytes of nothing. Emitting no bytes at all is equally valid -- a gzip stream is the
+// concatenation of its members, and zero members decompresses to an empty file.
+void gzip_member_or_nothing(std::string_view in, std::string& out, int level) {
+    if (in.empty()) {
+        out.clear();
+        return;
+    }
+    gzip_member(in, out, level);
+}
+
 void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_level,
-                   const std::vector<std::string>& ids, Worker& w) {
+                   const std::vector<std::string>& ids, const std::vector<uint32_t>& file_of,
+                   Worker& w) {
     for (auto& s : w.out1) s.clear();
     for (auto& s : w.out2) s.clear();
     w.un1.clear();
@@ -346,8 +351,9 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
             continue;
         }
 
-        const size_t s = static_cast<size_t>(r.sample);
-        tags = Checkout::header_tags(r.umi, r.umi_qual, ids[s]);
+        // Rows sharing a sample id share one output file and one UMI counter.
+        const size_t s = file_of[static_cast<size_t>(r.sample)];
+        tags = Checkout::header_tags(r.umi, r.umi_qual, ids[static_cast<size_t>(r.sample)]);
         // When the mates were swapped the names travel with them.
         std::string_view name1 = n1, name2 = n2;
         if (r.normalised && paired) std::swap(name1, name2);
@@ -357,12 +363,12 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
     }
 
     for (size_t s = 0; s < w.out1.size(); ++s) {
-        gzip_member(w.out1[s], w.z1[s], gzip_level);
-        if (paired) gzip_member(w.out2[s], w.z2[s], gzip_level);
+        gzip_member_or_nothing(w.out1[s], w.z1[s], gzip_level);
+        if (paired) gzip_member_or_nothing(w.out2[s], w.z2[s], gzip_level);
     }
     if (write_unmatched) {
-        gzip_member(w.un1, w.zun1, gzip_level);
-        if (paired) gzip_member(w.un2, w.zun2, gzip_level);
+        gzip_member_or_nothing(w.un1, w.zun1, gzip_level);
+        if (paired) gzip_member_or_nothing(w.un2, w.zun2, gzip_level);
     }
 }
 
@@ -381,11 +387,36 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     const size_t chunk = request.chunk_reads ? request.chunk_reads : 16384;
 
     const std::vector<std::string>& ids = patterns.samples();
+
+    // Several rows may declare the same sample id -- that is how a sample sequenced with more than
+    // one tag is written in a MIGEC barcode table. They are one sample: one output file, one UMI
+    // counter. One file per row would open the same path twice and interleave two FILE* into it,
+    // which does not even produce a valid gzip stream, and the summary would report success.
+    CheckoutStats stats;
+    std::vector<uint32_t> file_of(n_samples);
+    for (size_t i = 0; i < n_samples; ++i) {
+        auto it = std::find(stats.sample_ids.begin(), stats.sample_ids.end(), ids[i]);
+        if (it == stats.sample_ids.end()) {
+            file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
+            stats.sample_ids.push_back(ids[i]);
+            stats.umi_counts.emplace_back(patterns.pattern(i).umi_length());
+        } else {
+            file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
+            // The rows would otherwise write UMIs of two lengths into one counter, and the
+            // composition, the collision statistics and the correction would all be nonsense.
+            if (patterns.pattern(i).umi_length() != stats.umi_counts[file_of[i]].length()) {
+                throw MigecError("checkout: sample '" + ids[i] +
+                                 "' is declared with two different UMI lengths");
+            }
+        }
+    }
+    const size_t n_files = stats.sample_ids.size();
+
     const std::string suffix1 = paired ? "_R1.fq.gz" : ".fq.gz";
     const std::string suffix2 = "_R2.fq.gz";
 
     std::vector<std::unique_ptr<BlockFile>> w1, w2;
-    for (const std::string& id : ids) {
+    for (const std::string& id : stats.sample_ids) {
         w1.push_back(std::make_unique<BlockFile>(request.out_prefix + id + suffix1));
         if (paired) w2.push_back(std::make_unique<BlockFile>(request.out_prefix + id + suffix2));
     }
@@ -395,20 +426,16 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         if (paired) u2 = std::make_unique<BlockFile>(request.out_prefix + "unmatched" + suffix2);
     }
 
-    CheckoutStats stats;
     stats.threads = nthreads;
-    for (size_t i = 0; i < n_samples; ++i) {
-        stats.umi_counts.emplace_back(patterns.pattern(i).umi_length());
-    }
 
     std::vector<Worker> workers(static_cast<size_t>(nthreads));
     for (Worker& w : workers) {
         w.co = std::make_unique<Checkout>(patterns, params);
-        w.out1.resize(n_samples);
-        w.z1.resize(n_samples);
+        w.out1.resize(n_files);
+        w.z1.resize(n_files);
         if (paired) {
-            w.out2.resize(n_samples);
-            w.z2.resize(n_samples);
+            w.out2.resize(n_files);
+            w.z2.resize(n_files);
         }
     }
 
@@ -426,23 +453,33 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         }
         if (filled == 0) break;
 
+        // An exception thrown on a worker would otherwise propagate out of the thread function and
+        // call std::terminate -- an abort with no message, no stack and no output flushed, for
+        // something as ordinary as a malformed pattern or a failed allocation.
+        std::exception_ptr err;
+        std::mutex err_mutex;
+        auto guarded = [&](size_t t) {
+            try {
+                process_chunk(chunks[t], paired, request.write_unmatched, request.gzip_level, ids,
+                              file_of, workers[t]);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(err_mutex);
+                if (!err) err = std::current_exception();
+            }
+        };
+
         // Chunk 0 stays on this thread; spawning a thread for it would only add a context switch.
         std::vector<std::thread> pool;
         pool.reserve(filled - 1);
-        for (size_t t = 1; t < filled; ++t) {
-            pool.emplace_back([&, t] {
-                process_chunk(chunks[t], paired, request.write_unmatched, request.gzip_level, ids,
-                              workers[t]);
-            });
-        }
-        process_chunk(chunks[0], paired, request.write_unmatched, request.gzip_level, ids,
-                      workers[0]);
+        for (size_t t = 1; t < filled; ++t) pool.emplace_back([&, t] { guarded(t); });
+        guarded(0);
         for (std::thread& th : pool) th.join();
+        if (err) std::rethrow_exception(err);
 
         // Serial, in chunk order: this is what makes the output independent of the thread count.
         for (size_t t = 0; t < filled; ++t) {
             Worker& w = workers[t];
-            for (size_t s = 0; s < n_samples; ++s) {
+            for (size_t s = 0; s < n_files; ++s) {
                 w1[s]->append(w.z1[s]);
                 if (paired) w2[s]->append(w.z2[s]);
             }
@@ -458,13 +495,24 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         if (r2->next(leftover)) throw MigecError("checkout: R1 ended before R2");
     }
 
-    for (auto& w : w1) w->close();
-    for (auto& w : w2) w->close();
-    if (u1) u1->close();
-    if (u2) u2->close();
+    // A file that received no chunk is zero bytes, and a zero-byte file is not a gzip stream --
+    // `gzip -t` and `zcat` both reject it. A sample that got no reads gets exactly one empty
+    // member, which reads as an empty FASTQ everywhere.
+    std::string empty_member;
+    gzip_member(std::string_view(), empty_member, request.gzip_level);
+    auto finish = [&empty_member](BlockFile& f) {
+        if (!f.wrote) f.append(empty_member);
+        f.close();
+    };
+    for (auto& w : w1) finish(*w);
+    for (auto& w : w2) finish(*w);
+    if (u1) finish(*u1);
+    if (u2) finish(*u2);
 
     for (const Worker& w : workers) stats.counters.merge(w.co->counters());
     stats.counters.per_sample.resize(n_samples, 0);
+    stats.sample_reads.assign(n_files, 0);
+    for (size_t i = 0; i < n_samples; ++i) stats.sample_reads[file_of[i]] += stats.counters.per_sample[i];
     stats.wall_seconds = clock.seconds();
     stats.reads_per_second =
         stats.wall_seconds > 0.0 ? static_cast<double>(stats.counters.total) / stats.wall_seconds

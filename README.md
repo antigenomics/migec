@@ -71,11 +71,12 @@ reads       2,000,000
   unmatched 0 (0.0%)
   ambiguous 0 (0.0%)
 
-2.2 s (917,339 reads/s on 8 threads), peak RSS 204.0 MB of which UMI counters 44.4 MB
+2.2 s (903,599 reads/s) = 1.5 s matching on 8 threads + 0.7 s UMI statistics, serial
+peak RSS 131.0 MB of which UMI counters 21.2 MB
 
 sample             reads        UMIs  reads/UMI  UMI len  eff len
-S1               500,000     492,751       1.01       12    12.00
-S2               500,000     492,606       1.02       12    12.00
+S1               500,000     125,000       4.00       12    12.00
+S2               500,000     125,000       4.00       12    12.00
 ```
 
 Paired input searches both mates for the tag and swaps the pair so R1 always carries it — an
@@ -99,17 +100,22 @@ alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogra
 reads are matched in chunks and written back in input order, so `-t` changes the wall clock and
 nothing else.
 
-| threads | reads/s | peak RSS |
-|---|---|---|
-| 1 | 152,822 | 139 MB |
-| 8 | 917,339 | 204 MB |
-| 16 | **1,178,648** | 295 MB |
+| threads | reads/s | matching reads/s | peak RSS |
+|---|---|---|---|
+| 1 | 193,002 | 206,803 | 52 MB |
+| 8 | 903,599 | 1,309,576 | 131 MB |
+| 16 | **1,055,543** | **1,655,889** | 220 MB |
 
-2 M single-end 115 nt reads, four barcode patterns, M-series laptop. Two things had to be true for
-that to scale. zlib compresses random DNA at **7 MB/s** at its default level 6, so compression runs
-on the workers (concatenated gzip members are a valid gzip stream) at level 1 — 137 MB/s for 13%
-more bytes. And the log-likelihood score tabulates into 1.2 kB, because the `log2` in the inner loop
-was 90% of runtime.
+2 M single-end 129 nt reads, four barcode patterns, 4 reads per molecule, M-series laptop. Two
+things had to be true for the matching to scale. zlib compresses random DNA at **7 MB/s** at its
+default level 6, so compression runs on the workers (concatenated gzip members are a valid gzip
+stream) at level 1 — 137 MB/s for 13% more bytes. And the log-likelihood score tabulates into
+1.2 kB, because the `log2` in the inner loop was 90% of runtime.
+
+Both columns are reported, because they scale with different things and only one of them threads:
+matching scales with reads, the UMI statistics with *distinct* UMIs at ~1.5–2 µs each, on one
+thread. That serial tail is why the end-to-end column flattens at 16 while matching is still
+climbing.
 
 The UMI counters are a sorted `(key, count)` array rather than a hash map: **~22 bytes per distinct
 UMI against ~48**, which at the 4·10⁸ distinct UMIs of an ordinary NovaSeq run is 8.8 GB against

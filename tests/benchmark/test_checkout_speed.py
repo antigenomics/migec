@@ -67,10 +67,11 @@ def test_single_thread_throughput(corpus):
     d, path = corpus
     s = run(path, d / "barcodes.txt", d / "out1", threads=1)
     rate = s["reads_per_second"]
-    print(f"\n  1 thread: {rate:,.0f} reads/s")
-    # Measured ~157k reads/s on an M-series laptop for 115 nt reads over four patterns. A tenth of
-    # that means something structural broke -- a transcendental back in the scoring loop, or
-    # compression back on the serial path.
+    print(f"\n  1 thread: {rate:,.0f} reads/s end to end, "
+          f"{s['total'] / s['match_seconds']:,.0f} matching")
+    # Measured ~193k reads/s end to end on an M-series laptop for 129 nt reads over four patterns.
+    # A tenth of that means something structural broke -- a transcendental back in the scoring
+    # loop, or compression back on the serial path.
     assert rate > 20_000, f"single-thread throughput collapsed to {rate:,.0f} reads/s"
 
 
@@ -78,13 +79,31 @@ def test_threads_actually_help(corpus):
     from migec.checkout import run
 
     d, path = corpus
-    one = run(path, d / "barcodes.txt", d / "out_a", threads=1)["reads_per_second"]
-    many = run(path, d / "barcodes.txt", d / "out_b", threads=4)["reads_per_second"]
-    speedup = many / one
-    print(f"\n  4 threads: {speedup:.2f}x")
+    # On `match_seconds`, not the end-to-end clock: the per-sample statistics are serial by
+    # construction, so including them measures Amdahl's law rather than whether the workers work.
+    one = run(path, d / "barcodes.txt", d / "out_a", threads=1)
+    many = run(path, d / "barcodes.txt", d / "out_b", threads=4)
+    speedup = one["match_seconds"] / many["match_seconds"]
+    print(f"\n  4 threads: {speedup:.2f}x on matching, "
+          f"{one['wall_seconds'] / many['wall_seconds']:.2f}x end to end")
     # Matching and compression both run on the workers, so the serial part is fread plus fwrite.
     # Anything below 2x on four cores means work migrated back onto the serial path.
-    assert speedup > 2.0, f"4 threads gave only {speedup:.2f}x"
+    assert speedup > 2.0, f"4 threads gave only {speedup:.2f}x on matching"
+
+
+def test_the_reported_clock_covers_the_whole_run(corpus):
+    """`reads_per_second` must describe checkout, not the part of it that threads.
+
+    The per-sample statistics -- histogram, composition, count correction -- are a serial pass over
+    every distinct UMI, and on a shallow library they are most of the wall clock. A stopwatch that
+    stopped at the demultiplexing driver would report several times the throughput a user sees.
+    """
+    from migec.checkout import run
+
+    d, path = corpus
+    s = run(path, d / "barcodes.txt", d / "out_clock", threads=4)
+    assert s["match_seconds"] < s["wall_seconds"], "the stats stage is outside the clock again"
+    assert s["reads_per_second"] == pytest.approx(s["total"] / s["wall_seconds"], rel=1e-6)
 
 
 def test_output_is_independent_of_thread_count(corpus):

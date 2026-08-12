@@ -6,6 +6,55 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### Audit fixes
+
+A read of the checkout path start to finish, each finding reproduced before it was fixed.
+
+⛔ **Two barcode rows declaring the same sample destroyed the output.** A MIGEC barcode table
+writes a sample sequenced with more than one tag as several rows sharing the id — which
+`sheet.py` documents — and checkout opened one file per *row*, so both rows `fopen`ed the same
+path and interleaved two `FILE*` into it. The result was not a truncated FASTQ but a file that is
+not a gzip stream at all, while the summary reported a clean run. Rows are now grouped by id: one
+output file, one UMI counter, one summary row, and rows disagreeing about the UMI length are an
+error rather than a counter holding two lengths at once.
+
+⛔ **An exception on a worker thread aborted the process.** It propagated out of the thread
+function and hit `std::terminate` — SIGABRT with no message and no output flushed. Reachable
+today: `BarcodePattern::compile` accepted a pattern capturing more than 32 UMI bases, which threw
+from `pack_barcode` on a worker. Workers now capture and the driver rethrows on the caller's
+thread, and the length is checked where the pattern is compiled, so the error names the row that
+caused it.
+
+⚠ **The offset prune defeated the placement margin.** An offset was abandoned once it could no
+longer reach the incumbent best — but a runner-up only has to reach `best − min_margin` to make
+the placement ambiguous. Those offsets were dropped silently and the margin came back as the full
+score, so a read with two placements 2.6 bits apart was reported as an unambiguous match at
+whichever came first. The bar now leaves the margin's worth of room.
+
+⚠ **The UMI error-rate estimator assumed a uniform base composition.** The distance-1 shell is
+`P_coll · Σ_j (1−m_j)/m_j`; the code used `3L · P_coll`, its `m_j = ¼` special case. On a skewed
+UMI that overstates the independent term and so *underestimates* the error rate — the direction
+that leaves errors uncorrected, and the same mistake as reaching for Shannon over Rényi.
+
+Also: a sample present in few chunks no longer accumulates one empty gzip member per chunk (but a
+sample with no reads at all still gets exactly one, because a zero-byte file is not a gzip stream
+and `gzip -t` rejects it); the acceptance threshold is derived per pattern rather than from the
+first row's length; `estimate_umi_error` no longer holds a reference into the entry array across a
+call that may flush it; and `TrimMode::kPatternOnly`, which was a second name for `kPattern`, is
+gone.
+
+### The reported throughput was the matcher's, not checkout's
+
+`wall_seconds` stopped at the demultiplexing driver, leaving the per-sample statistics — coverage
+histogram, composition, count correction — outside the clock. They are serial and cost ~1.5–2 µs
+per *distinct* UMI, so on 400 k reads at one read per molecule the reported figure was
+2,192,882 reads/s against 438,456 actually elapsed.
+
+`wall_seconds` now covers the whole call and `match_seconds` reports the driver separately, because
+the two scale with different things and only one of them threads. Every published number has been
+re-measured; the table in `docs/performance.rst` gains a matching column, and the benchmark asserts
+that the stats stage stays inside the clock.
+
 ### Paired input, and strand normalisation
 
 `migec checkout R1.fq.gz R2.fq.gz` looks for the tag in R1 first and, only if R1 came up empty, in

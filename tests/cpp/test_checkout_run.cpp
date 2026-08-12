@@ -242,3 +242,60 @@ TEST_CASE("truncated R2 is an error, not a silent half-run") {
     std::remove(r1.c_str());
     std::remove(r2.c_str());
 }
+
+TEST_CASE("two rows with one sample id are one sample, not two handles on one file") {
+    // A MIGEC barcode table declares a sample sequenced with more than one tag as several rows
+    // sharing the id. Opening a file per row means two FILE* on one path, whose interleaved
+    // writes are not even a valid gzip stream -- and the summary would still report success.
+    const std::string in = write_reads(2000, 11);
+    PatternSet set;
+    set.add("S1", kS1);
+    set.add("S1", kS2);  // same sample, second tag
+
+    CheckoutRequest req;
+    req.r1 = in;
+    req.out_prefix = temp_path(".");
+    req.chunk_reads = 64;
+    CheckoutStats st = run_checkout(set, CheckoutParams{}, req);
+
+    REQUIRE(st.sample_ids.size() == 1);
+    CHECK(st.sample_ids[0] == "S1");
+    CHECK(st.sample_reads[0] == 2000);
+    // Both tags' reads land in one file, readable, with none lost.
+    size_t n = 0;
+    FastqReader r(req.out_prefix + "S1.fq.gz");
+    FastqRecord rec;
+    while (r.next(rec)) ++n;
+    CHECK(n == 2000);
+    // ...and in one UMI counter, so the collision statistics describe the sample rather than a tag.
+    CHECK(st.umi_counts.size() == 1);
+    CHECK(st.umi_counts[0].total() == 2000);
+    std::remove(in.c_str());
+}
+
+TEST_CASE("a sample that got no reads is still a readable empty file") {
+    // Zero bytes is not a gzip stream: `gzip -t` and `zcat` reject it. Skipping the per-chunk
+    // empty members is right, but the file still needs one.
+    const std::string in = write_reads(200, 12);
+    PatternSet set;
+    set.add("S1", kS1);
+    set.add("S3", "aaTTTcagtggtatcaacgcagagtNNNNtNNNNtNNNN");  // a tag no read carries
+
+    CheckoutRequest req;
+    req.r1 = in;
+    req.out_prefix = temp_path(".");
+    CheckoutStats st = run_checkout(set, CheckoutParams{}, req);
+    CHECK(st.sample_reads[1] == 0);
+
+    FastqReader r(req.out_prefix + "S3.fq.gz");  // throws if the file is not a gzip stream
+    FastqRecord rec;
+    CHECK_FALSE(r.next(rec));
+    std::remove(in.c_str());
+}
+
+TEST_CASE("a UMI longer than the packed representation is rejected at the pattern, not the read") {
+    // Otherwise it throws inside pack_barcode on a worker thread, where an escaping exception
+    // calls std::terminate: an abort with no message rather than an error naming the bad row.
+    CHECK_THROWS_AS(BarcodePattern::compile(std::string(33, 'N') + "ACGT"), MigecError);
+    CHECK_NOTHROW(BarcodePattern::compile(std::string(32, 'N') + "ACGT"));
+}

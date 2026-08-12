@@ -109,9 +109,16 @@ def format_report(summary: dict) -> str:
             f"-- tag found on the other mate/strand, reads normalised"
         )
     lines.append("")
+    # Two clocks, because they scale differently and only one of them threads: matching is the
+    # part `-t` speeds up, the UMI statistics are a serial pass over every distinct barcode.
+    total, match = c.get("wall_seconds", 0.0), c.get("match_seconds", 0.0)
     lines.append(
-        f"{_dur(c.get('wall_seconds', 0.0))} "
-        f"({c.get('reads_per_second', 0.0):,.0f} reads/s on {c.get('threads', 1)} threads), "
+        f"{_dur(total)} "
+        f"({c.get('reads_per_second', 0.0):,.0f} reads/s) = "
+        f"{_dur(match)} matching on {c.get('threads', 1)} threads "
+        f"+ {_dur(max(0.0, total - match))} UMI statistics, serial"
+    )
+    lines.append(
         f"peak RSS {_bytes(c.get('peak_rss_bytes', 0))} "
         f"of which UMI counters {_bytes(c.get('umi_memory_bytes', 0))}"
     )
@@ -140,12 +147,18 @@ def format_report(summary: dict) -> str:
             "less than half of reads matched a pattern -- run `migec suggest` to check where the "
             "barcode actually is"
         )
+    # One line however many samples are under-sequenced: on a 96-plex sheet the per-sample form
+    # buries every other warning.
+    thin = [s for s in summary["samples"] if not s["over_sequenced"]]
+    if thin:
+        worst = min(thin, key=lambda s: s["mean_reads_per_umi"])
+        which = thin[0]["sample_id"] if len(thin) == 1 else f"{len(thin)} samples"
+        warnings.append(
+            f"{which} under-sequenced (as low as {worst['mean_reads_per_umi']:.1f} reads/UMI in "
+            f"{worst['sample_id']}). Consensus assembly needs over-sequencing; below ~5 most "
+            f"molecules are seen once"
+        )
     for s in summary["samples"]:
-        if not s["over_sequenced"]:
-            warnings.append(
-                f"{s['sample_id']}: {s['mean_reads_per_umi']:.1f} reads/UMI. Consensus assembly "
-                f"needs over-sequencing; below ~5 most molecules are seen once"
-            )
         if s["umi_length"] and s["effective_length"] < 0.8 * s["umi_length"]:
             warnings.append(
                 f"{s['sample_id']}: UMI is {s['umi_length']} nt but only "
@@ -168,12 +181,12 @@ def _pct(n: int, total: int) -> str:
     return f"{100.0 * n / total:.1f}%" if total else "n/a"
 
 
-def _bytes(n: int) -> str:
-    for unit in ("B", "kB", "MB", "GB"):
-        if n < 1024 or unit == "GB":
+def _bytes(n: float) -> str:
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024.0
-    return f"{n:.1f} GB"
+    return f"{n:.1f} TB"
 
 
 def _dur(s: float) -> str:

@@ -67,6 +67,18 @@ correction is written up in `project/review-algorithms.md`.
 - ⛔ **`-t` must never change the output.** Chunks are matched in parallel and written in input
   order. A demultiplexer whose output depends on its thread count produces results that cannot be
   compared between runs, and the failure is invisible.
+- ⛔ **One output file per *sample id*, never per barcode-table row.** Rows sharing an id are a
+  sample sequenced with more than one tag — the format's own idiom. A file per row opens the same
+  path twice and interleaves two `FILE*` into it, which is not a valid gzip stream, and the summary
+  still reports success. Anything else keyed by sample (UMI counters, summary rows) groups the same
+  way.
+- ⛔ **Nothing may throw out of a worker thread.** An escaping exception is `std::terminate`:
+  SIGABRT, no message, no flush. Workers capture, the driver rethrows. Validate at the boundary
+  where the error is attributable — a bad pattern is caught when the pattern is compiled, on the
+  caller's thread, not when a read is packed on a worker.
+- ⛔ **A reported clock covers the whole operation.** `wall_seconds` stopping at the parallel driver
+  hid a serial stats pass worth 4/5 of the run and published a throughput 5× what a user sees. If a
+  stage is serial, time it and report it separately — that is the number that says what to fix next.
 - ⚠ **No `log2`/`exp`/`pow` in a per-base loop.** The score depends only on the reported Phred and
   the IUPAC set size, both small integers; it tabulates into 1.2 kB. The transcendental was 90% of
   checkout's runtime before it did.
@@ -98,6 +110,11 @@ correction is written up in `project/review-algorithms.md`.
 - ⚠ **The UMI counters are not partitioned yet.** ~22 B per distinct UMI is 8.8 GB at NovaSeq
   scale, held in one piece. The fix is the range partition (M2, with `.mig` bucket output), not a
   smaller struct. Until then checkout warns past 1 GB.
+- ⚠ **The per-sample statistics are the serial tail.** Histogram, composition and `correct_umis`
+  run once at the end on one thread, ~1.5–2 µs per distinct UMI, so at 16 threads they are a larger
+  wall than the gzip reader. `correct_umis` in particular is O(n · 3L · log n) and arguably belongs
+  in `refine` (M3) rather than in checkout at all — decide that when `refine` lands, and until then
+  it is why `match_seconds` is reported next to `wall_seconds`.
 - Grouping accuracy vs Calib is wired up (`scripts/compare_calib.py`, `docs/grouping.rst`) and the
   migec column is asserted in CI. Running the Calib column needs Calib built locally.
 - Next, in order: **X1** (read-start dispersion on 10x — decides whether fragmented mode is

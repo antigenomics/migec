@@ -1,6 +1,6 @@
 """The migec command line.
 
-Five commands, and that is the whole surface:
+Five pipeline commands, and that is the whole surface:
 
     checkout    extract sample/cell/UMI barcodes, trim, write per-sample FASTQ + QC tables
     suggest     infer where the UMI/primer/cell barcode actually is in the reads
@@ -8,7 +8,9 @@ Five commands, and that is the whole surface:
     assemble    build consensus sequences per molecule, write FASTQ
     subsample   take N whole UMIs (with all their reads) to make an example fixture
 
-Adding a sixth requires a benchmark the existing five cannot pass. See CLAUDE.md.
+plus `info` and `sheet`, which read no data and produce no pipeline output.
+
+Adding a sixth pipeline command requires a benchmark the existing five cannot pass. See CLAUDE.md.
 """
 
 from __future__ import annotations

@@ -93,6 +93,14 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
         throw MigecError("pattern: \"" + std::string(spec) +
                          "\" has no scored position, so it matches everywhere");
     }
+    // Checked here rather than where the barcode is packed: pack_barcode runs on a worker thread
+    // per read, and a pattern is compiled once, on the caller's thread, where the error is
+    // attributable to the row of the barcode table that caused it.
+    if (p.umi_length_ > kMaxBarcodeLen) {
+        throw MigecError("pattern: \"" + std::string(spec) + "\" captures a " +
+                         std::to_string(p.umi_length_) + " nt UMI; the packed representation holds " +
+                         std::to_string(kMaxBarcodeLen));
+    }
     return p;
 }
 
@@ -139,12 +147,18 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
     // margin, so it can be abandoned the moment it is out of reach -- which is every wrong offset,
     // within a handful of positions.
     const double prune_floor = min_score - params.min_margin;
+    // ...but the bar has to leave room for the runner-up. An offset that cannot reach the incumbent
+    // best can still land within min_margin of it, which makes the placement ambiguous; pruning at
+    // `best` drops it silently and the margin then comes back as `best - (-inf)`, so a read with
+    // two near-equal placements is reported as an unambiguous match at whichever came first.
+    const double margin_slack = params.min_margin > 0.0 ? params.min_margin : 0.0;
 
     // ponytail: plain O(offsets x pattern) scan, made cheap by the table above and the early exit
     // below rather than by a smarter algorithm. Upgrade path if a long read ever makes it matter:
     // shift-or over the longest uppercase run to generate candidate offsets, then score only those.
     for (size_t off = 0; off <= last_offset; ++off) {
-        const double bar = best > prune_floor ? best : prune_floor;
+        const double reachable = best - margin_slack;
+        const double bar = reachable > prune_floor ? reachable : prune_floor;
         double s = 0.0;
         bool pruned = false;
         for (size_t i = 0; i < plen; ++i) {
@@ -212,12 +226,14 @@ PatternSet::Assignment PatternSet::assign(std::string_view seq, std::string_view
     // samples -- otherwise two samples whose tags differ by one base reject each other's reads.
     MatchParams per_pattern = params;
     per_pattern.min_margin = 0.0;
-    if (per_pattern.min_score < 0.0 && !patterns_.empty()) {
-        per_pattern.min_score = patterns_[0].default_min_score(seq.size(), patterns_.size());
-    }
 
     double best = -1e300, second = -1e300;
     for (size_t i = 0; i < patterns_.size(); ++i) {
+        // Per pattern, because the Bonferroni bound counts the offsets *this* pattern is scanned
+        // over, and patterns in one sheet need not be the same length.
+        if (params.min_score < 0.0) {
+            per_pattern.min_score = patterns_[i].default_min_score(seq.size(), patterns_.size());
+        }
         PatternMatch m = patterns_[i].match(seq, qual, per_pattern);
         if (!m.found) continue;
         if (m.score > best) {

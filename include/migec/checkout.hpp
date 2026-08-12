@@ -19,9 +19,6 @@ enum class TrimMode {
     // Drop everything up to and including the matched pattern -- adapter, sample tag and UMI.
     // This is what you want before alignment: the tag is synthetic sequence and will not map.
     kPattern,
-    // Drop the pattern but keep whatever preceded it. Rarely what you want; provided because some
-    // chemistries put real sequence 5' of the tag.
-    kPatternOnly,
 };
 
 struct CheckoutParams {
@@ -139,8 +136,14 @@ struct CheckoutRequest {
 };
 
 struct CheckoutStats {
-    CheckoutCounters counters;
-    std::vector<UmiCounts> umi_counts;  // one per sample, in pattern order
+    CheckoutCounters counters;  // per_sample is per pattern *row*, so a sample with two tags has two
+    // Distinct sample ids, in first-appearance order. Several rows may carry the same id -- that is
+    // how a sample sequenced with more than one tag is declared -- and they are one sample here:
+    // one output file, one UMI counter. Opening a file per row instead means two handles on one
+    // path, whose interleaved writes are not even a valid gzip stream.
+    std::vector<std::string> sample_ids;
+    std::vector<uint64_t> sample_reads;  // parallel to sample_ids
+    std::vector<UmiCounts> umi_counts;   // parallel to sample_ids
     double wall_seconds = 0.0;
     double reads_per_second = 0.0;
     size_t peak_rss_bytes = 0;

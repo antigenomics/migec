@@ -234,9 +234,17 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
     const int L = counts.length();
     if (L <= 0 || counts.distinct() < 2) return 0.0;
 
+    const std::vector<UmiCounts::Entry>& m = counts.entries();
+    // Binary search over the entry array we already hold. Not UmiCounts::find, which flushes the
+    // append buffer and could reallocate the very array `m` refers to.
+    auto present = [&m](uint64_t key) {
+        auto it = std::lower_bound(m.begin(), m.end(), key,
+                                   [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
+        return it != m.end() && it->key == key;
+    };
+
     // Observed distinct-barcode pairs at Hamming distance 1, counted once each.
     uint64_t d1_obs = 0;
-    const std::vector<UmiCounts::Entry>& m = counts.entries();
     for (const UmiCounts::Entry& e : m) {
         for (int j = 0; j < L; ++j) {
             const int shift = 62 - 2 * j;
@@ -244,7 +252,7 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
             for (uint64_t b = 0; b < 4; ++b) {
                 if (b == cur) continue;
                 const uint64_t nb = (e.key & ~(uint64_t{3} << shift)) | (b << shift);
-                if (nb > e.key && counts.find(nb)) ++d1_obs;  // count each pair once
+                if (nb > e.key && present(nb)) ++d1_obs;  // count each pair once
             }
         }
     }
@@ -252,11 +260,19 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
     const double n = static_cast<double>(counts.distinct());
     double p_coll = 1.0;
     for (int j = 0; j < L; ++j) p_coll *= comp.collision(j);
-    // Independent pairs that happen to sit at distance 1. Per position there are 3 alternatives,
-    // so the distance-1 shell has probability ~ P_coll * 3L / (the per-position collision), which
-    // for a near-uniform composition is 3L/4^L; use that form, guarded for the uniform case.
-    const double p_d1 = p_coll * 3.0 * L;
-    const double d1_ind = 0.5 * n * (n - 1.0) * p_d1;
+    // Independent pairs that happen to sit at distance 1: agree everywhere but position j, and
+    // differ there. Summing over j,
+    //     P_d1 = sum_j (prod_{k != j} m_k) * (1 - m_j) = P_coll * sum_j (1 - m_j)/m_j
+    // which is 3L * P_coll only for a uniform composition. Since m_j > 1/4 whenever the
+    // composition is skewed, the uniform form overstates the independent term, understates the
+    // excess, and so *underestimates* the error rate -- the direction that leaves errors
+    // uncorrected.
+    double shell = 0.0;
+    for (int j = 0; j < L; ++j) {
+        const double mj = comp.collision(j);
+        if (mj > 0.0) shell += (1.0 - mj) / mj;
+    }
+    const double d1_ind = 0.5 * n * (n - 1.0) * p_coll * shell;
 
     const double excess = static_cast<double>(d1_obs) - d1_ind;
     if (excess <= 0.0) return 0.0;
@@ -325,10 +341,10 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
     const double space = comp.effective_space();
     res.saturated = space > 0.0 && n > 0.05 * space;
 
-    // Prior that a substitution at one specific position-and-base is polymerase-derived. Per base
-    // per cycle it is eps_pol, over the cycles that matter, spread over the 3 alternative bases.
-    const double rho_pol = std::min(
-        0.9, params.polymerase_error * std::max(1, params.pcr_cycles) / 3.0 * 3.0 * L);
+    // Prior that a neighbour one substitution away is polymerase-derived rather than a miscall:
+    // eps_pol per base per cycle, over the cycles that matter, over the L barcode positions.
+    const double rho_pol =
+        std::min(0.9, params.polymerase_error * std::max(1, params.pcr_cycles) * L);
 
     // The independent hypothesis: some *other real molecule* happens to occupy this exact
     // neighbouring barcode. Its probability is (number of molecules) x (probability a molecule

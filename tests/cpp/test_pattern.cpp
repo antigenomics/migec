@@ -185,3 +185,26 @@ TEST_CASE("the quality calibration table overrides nominal phred") {
     const double s_cal = p.match(bad, q, calibrated).score;
     CHECK(s_cal > s_nom);
 }
+
+TEST_CASE("a near-tie placement is ambiguous, not silently resolved by the prune") {
+    // The offset scan abandons an offset once it cannot reach the bar. Setting that bar at the
+    // incumbent best drops any runner-up that lands *within* min_margin of it -- exactly the
+    // offsets the margin exists to detect. The margin then comes back as best-minus-nothing and
+    // the read is reported as an unambiguous match at whichever placement came first.
+    const BarcodePattern p = BarcodePattern::compile("ACGTACGTAC");
+    MatchParams mp;
+    mp.min_margin = 5.0;
+
+    // The tag, then the tag again with one mismatch on a Q2 base: worth -0.60 bits instead of
+    // +2.00, so the placements are 2.6 bits apart -- inside the 5-bit margin.
+    std::string qual(20, 'I');
+    qual[15] = '#';  // Q2
+    const PatternMatch tie = p.match("ACGTACGTAC" "ACGTAAGTAC", qual, mp);
+    CHECK_FALSE(tie.found);
+
+    // A single placement still matches, and still reports the full score as its margin.
+    const PatternMatch clear = p.match("ACGTACGTAC" "TTTTTTTTTT", std::string(20, 'I'), mp);
+    CHECK(clear.found);
+    CHECK(clear.offset == 0);
+    CHECK(clear.margin > 5.0);
+}

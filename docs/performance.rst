@@ -7,10 +7,24 @@ asking.
 
 .. code-block:: text
 
-   2.2 s (917,339 reads/s on 8 threads), peak RSS 204.0 MB of which UMI counters 44.4 MB
+   2.2 s (903,599 reads/s) = 1.5 s matching on 8 threads + 0.7 s UMI statistics, serial
+   peak RSS 131.0 MB of which UMI counters 21.2 MB
 
-The same fields are in ``checkout.json`` as ``wall_seconds``, ``reads_per_second``, ``threads``,
-``peak_rss_bytes`` and ``umi_memory_bytes``.
+The same fields are in ``checkout.json`` as ``wall_seconds``, ``match_seconds``,
+``reads_per_second``, ``threads``, ``peak_rss_bytes`` and ``umi_memory_bytes``.
+
+Two clocks, because they scale differently
+------------------------------------------
+
+``match_seconds`` is the demultiplexing driver: read a chunk, match it, compress it, append it.
+That is the part ``--threads`` speeds up, and it scales with the number of *reads*.
+
+``wall_seconds`` also covers the per-sample statistics — the coverage histogram, the composition,
+and the count correction — which run once at the end, on one thread, and scale with the number of
+*distinct UMIs* at roughly 1.5–2 µs each. On a shallow library that is most of the run.
+
+They are reported separately because a single number would hide which one to attack, and because a
+throughput figure that stopped at the driver would be measuring the matcher rather than checkout.
 
 Threads
 -------
@@ -20,38 +34,55 @@ Reads are matched in fixed-size chunks and the chunks are written back in input 
 changes the wall clock and nothing else — a demultiplexer whose output depended on its thread count
 would produce results that could not be compared between runs.
 
-Measured on 2 M single-end 115 nt reads over four barcode patterns, on an M-series laptop:
+Measured on 2 M single-end 129 nt reads over four barcode patterns at 4 reads per molecule — the
+corpus ``tests/benchmark/`` builds — on an M-series laptop:
 
 .. list-table::
    :header-rows: 1
-   :widths: 15 25 30 30
+   :widths: 10 15 18 15 20 22
 
    * - threads
      - wall clock
      - reads/s
+     - matching
+     - matching reads/s
      - peak RSS
    * - 1
-     - 13.1 s
-     - 152,822
-     - 139 MB
+     - 10.4 s
+     - 193,002
+     - 9.7 s
+     - 206,803
+     - 52 MB
    * - 2
-     - 6.7 s
-     - 298,581
-     - 119 MB
+     - 5.7 s
+     - 353,012
+     - 5.0 s
+     - 400,886
+     - 70 MB
    * - 4
-     - 3.7 s
-     - 545,211
-     - 151 MB
+     - 3.4 s
+     - 590,076
+     - 2.7 s
+     - 740,494
+     - 89 MB
    * - 8
      - 2.2 s
-     - 917,339
-     - 204 MB
+     - 903,599
+     - 1.5 s
+     - 1,309,576
+     - 131 MB
    * - 16
-     - 1.7 s
-     - 1,178,648
-     - 295 MB
+     - 1.9 s
+     - 1,055,543
+     - 1.2 s
+     - 1,655,889
+     - 220 MB
 
-Two things had to be true for that to scale, and neither is obvious:
+The serial 0.7 s of statistics is why the end-to-end column flattens at 16 threads while the
+matching column is still scaling. Amdahl, and it is the next thing to fix rather than the thread
+count.
+
+Two things had to be true for the matching to scale, and neither is obvious:
 
 **Compression runs on the workers, not on the writer.** zlib at its default level 6 compresses
 random DNA at about **7 MB/s**. Read payload is close to incompressible, so leaving compression on
@@ -70,8 +101,9 @@ tabulates into 1.2 kB. It was 90% of runtime before it did.
 
 .. note::
 
-   Non-scaling parts are the gzip *read* of the input, which is one thread by construction, and the
-   ``fwrite`` of already-compressed blocks. At 16 threads on this machine the reader is the wall.
+   Non-scaling parts are the gzip *read* of the input, which is one thread by construction, the
+   ``fwrite`` of already-compressed blocks, and the per-sample statistics. At 16 threads on this
+   machine the statistics are the larger of the two walls.
 
 Memory
 ------

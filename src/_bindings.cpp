@@ -106,6 +106,10 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     req.write_unmatched = write_unmatched;
     req.threads = threads;
 
+    // The clock covers the per-sample statistics below as well as the driver. They are serial,
+    // single-threaded, and on a 12 nt UMI cost about 2 us per read -- four times the matching. A
+    // reads/s figure that stopped at the driver would be measuring the matcher, not checkout.
+    Stopwatch clock;
     CheckoutStats stats;
     {
         py::gil_scoped_release release;
@@ -123,19 +127,19 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     out["normalised"] = c.normalised;
     out["paired"] = !in_path2.empty();
     out["threads"] = stats.threads;
-    out["wall_seconds"] = stats.wall_seconds;
-    out["reads_per_second"] = stats.reads_per_second;
+    out["match_seconds"] = stats.wall_seconds;
     out["peak_rss_bytes"] = stats.peak_rss_bytes;
     out["umi_memory_bytes"] = stats.umi_memory_bytes;
 
     const std::vector<UmiCounts>& umi_counts = stats.umi_counts;
     py::list per_sample;
-    for (size_t i = 0; i < sample_ids.size(); ++i) {
+    // Distinct sample ids, not input rows: two rows may declare the same sample.
+    for (size_t i = 0; i < stats.sample_ids.size(); ++i) {
         const CoverageHistogram h = umi_counts[i].histogram();
         const UmiComposition comp = umi_counts[i].composition(false);
         py::dict s;
-        s["sample_id"] = sample_ids[i];
-        s["reads"] = c.per_sample[i];
+        s["sample_id"] = stats.sample_ids[i];
+        s["reads"] = stats.sample_reads[i];
         s["umis"] = umi_counts[i].distinct();
         s["mean_reads_per_umi"] = h.mean_reads_per_umi();
         s["reads_in_migs_ge5"] = h.reads_in_migs_at_least(5);
@@ -172,6 +176,9 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         per_sample.append(s);
     }
     out["samples"] = per_sample;
+    out["wall_seconds"] = clock.seconds();
+    out["reads_per_second"] =
+        clock.seconds() > 0.0 ? static_cast<double>(c.total) / clock.seconds() : 0.0;
     return out;
 }
 
