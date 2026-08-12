@@ -26,6 +26,9 @@ add_library(migec_core STATIC
   src/types.cpp
   src/fastq.cpp
   src/mig_record.cpp
+  src/pattern.cpp
+  src/umi_stats.cpp
+  src/checkout.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)
 target_link_libraries(migec_core PUBLIC Threads::Threads ZLIB::ZLIB)
@@ -44,6 +47,9 @@ if(MIGEC_TESTS)
     tests/cpp/test_types.cpp
     tests/cpp/test_fastq.cpp
     tests/cpp/test_mig_record.cpp
+    tests/cpp/test_pattern.cpp
+    tests/cpp/test_umi_stats.cpp
+    tests/cpp/test_checkout.cpp
   )
   target_link_libraries(migec_tests PRIVATE migec_core)
   target_include_directories(migec_tests PRIVATE tests/cpp)

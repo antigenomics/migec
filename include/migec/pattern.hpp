@@ -1,0 +1,118 @@
+// Barcode patterns: a degenerate adapter/sample tag with UMI positions, matched against a read.
+//
+// The grammar is MIGEC's, because the published barcode tables are written in it and we want them
+// to keep working verbatim:
+//
+//     S1<TAB>aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN
+//
+//   UPPERCASE   a scored position, matched exactly. IUPAC letters allowed (R = A|G, and so on),
+//               which is what makes the tag "degenerate".
+//   lowercase   a scored position with half weight -- the adapter region, where a mismatch is
+//               expected and should not by itself reject the read.
+//   N or n      a UMI position. Captured, never scored. Non-contiguous runs concatenate, so
+//               NNNNtNNNNtNNNN yields one 12 nt UMI.
+//   .           a wildcard: neither scored nor captured.
+//
+// Acceptance is a quality-aware log-likelihood ratio, not a mismatch count. For a scored position
+// with IUPAC set S of size m, observed base b and error probability e:
+//
+//     b in S:   log2( 4 * [ (1-e)/m + (m-1)e/(3m) ] )
+//     b not in: w * log2( 4e/3 )                          w = 1.0 upper, 0.5 lower
+//
+// which is log2 P(base | the tag is here) / P(base | random sequence). At m=1 a match is worth
+// +2.00 bits, a mismatch -9.55 bits at Q30 and -0.60 bits at Q2. So a mismatch on a bad base is
+// nearly free and one on a good base is fatal -- which is what MIGEC's good/bad mismatch counting
+// was reaching for, done continuously and without its two bugs (it indexed quality from the start
+// of the read rather than the match offset, and a dangling `else` meant low-quality mismatches
+// were never counted at all).
+
+#ifndef MIGEC_PATTERN_HPP
+#define MIGEC_PATTERN_HPP
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace migec {
+
+struct MatchParams {
+    // Minimum score to accept, in bits. Default from the Bonferroni bound over the offsets
+    // actually scanned; see default_min_score(). A negative value means "use the default".
+    double min_score = -1.0;
+    // The best offset must beat the runner-up by this much, else the placement is ambiguous.
+    double min_margin = 5.0;
+    // Search window. -1 searches the whole read; 0 anchors at position 0 (positional chemistries
+    // like 10x); k allows the tag to start anywhere in [0, k].
+    int max_offset = -1;
+    // Nominal Phred is not the error rate on 2-colour instruments. If non-empty, this is indexed
+    // by reported Phred and gives the measured error probability.
+    std::vector<double> quality_calibration;
+};
+
+struct PatternMatch {
+    bool found = false;
+    int offset = -1;         // where the pattern starts in the read
+    double score = 0.0;      // bits
+    double margin = 0.0;     // bits over the runner-up offset
+    int payload_begin = 0;   // first base after the matched pattern -- where trimming leaves you
+    std::string umi;
+    std::string umi_qual;
+};
+
+class BarcodePattern {
+public:
+    // Throws MigecError on an empty pattern or one with no scored position.
+    static BarcodePattern compile(std::string_view spec);
+
+    PatternMatch match(std::string_view seq, std::string_view qual,
+                       const MatchParams& params = MatchParams()) const;
+
+    size_t size() const { return mask_.size(); }
+    int umi_length() const { return umi_length_; }
+    int scored_positions() const { return scored_; }
+    const std::string& spec() const { return spec_; }
+
+    // Bonferroni over the offsets actually scanned, for a per-read false-match rate alpha:
+    //     min_score = log2( n_offsets * n_patterns / alpha )
+    // This is a starting point, not gospel -- reads are not i.i.d. uniform ACGT (shared primers,
+    // composition bias), so calibrate against shuffled decoy patterns on real data.
+    double default_min_score(size_t read_length, size_t n_patterns = 1, double alpha = 0.01) const;
+
+private:
+    std::string spec_;
+    std::vector<uint8_t> mask_;    // IUPAC mask per position, 0 for UMI/wildcard
+    std::vector<float> weight_;    // 1.0 upper, 0.5 lower, 0 for unscored
+    std::vector<uint8_t> is_umi_;
+    int umi_length_ = 0;
+    int scored_ = 0;
+};
+
+// One pattern per sample, as read from a barcode metadata table. Assignment picks the best-scoring
+// sample and requires it to beat the runner-up sample by min_margin -- otherwise the read is
+// ambiguous and is counted rather than arbitrarily assigned.
+class PatternSet {
+public:
+    void add(std::string sample_id, std::string_view spec);
+
+    struct Assignment {
+        int sample = -1;  // index into samples(); -1 = unassigned
+        PatternMatch match;
+        bool ambiguous = false;
+    };
+
+    Assignment assign(std::string_view seq, std::string_view qual,
+                      const MatchParams& params = MatchParams()) const;
+
+    size_t size() const { return patterns_.size(); }
+    const std::vector<std::string>& samples() const { return samples_; }
+    const BarcodePattern& pattern(size_t i) const { return patterns_[i]; }
+
+private:
+    std::vector<std::string> samples_;
+    std::vector<BarcodePattern> patterns_;
+};
+
+}  // namespace migec
+
+#endif  // MIGEC_PATTERN_HPP

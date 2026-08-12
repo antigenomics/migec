@@ -2,7 +2,7 @@
 
 Five commands, and that is the whole surface:
 
-    checkout    extract sample/cell/UMI barcodes, write .mig buckets
+    checkout    extract sample/cell/UMI barcodes, trim, write per-sample FASTQ + QC tables
     suggest     infer where the UMI/primer/cell barcode actually is in the reads
     refine      estimate error rates, correct barcodes, write QC tables and plots
     assemble    build consensus sequences per molecule, write FASTQ
@@ -12,6 +12,9 @@ Adding a sixth requires a benchmark the existing five cannot pass. See CLAUDE.md
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -35,13 +38,50 @@ def info() -> None:
 
 
 @app.command()
-def checkout() -> None:
-    """Extract barcodes from FASTQ into .mig buckets. (M2)"""
-    raise typer.Exit(_not_yet("checkout", "M2"))
+def checkout(
+    reads: Path = typer.Argument(..., help="Input FASTQ, optionally gzipped."),
+    barcodes: Path = typer.Option(..., "--barcodes", "-b", help="MIGEC-style barcode table."),
+    out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
+    trim: str = typer.Option(
+        "pattern",
+        "--trim",
+        help="'pattern' drops the adapter, sample tag and UMI, leaving the payload; "
+        "'none' keeps the read whole and puts the UMI in the header only.",
+    ),
+    min_umi_quality: int = typer.Option(
+        0,
+        "--min-umi-quality",
+        help="Drop reads whose worst UMI base is below this Phred. 0 (default) keeps everything: "
+        "a low-quality UMI base is a reason to be less certain, not to discard the molecule.",
+    ),
+    write_unmatched: bool = typer.Option(
+        False, "--write-unmatched", help="Also write reads that matched no pattern."
+    ),
+) -> None:
+    """Demultiplex by barcode pattern, extract and trim UMIs, write QC tables."""
+    from migec.checkout import format_report, run
+
+    if trim not in ("pattern", "none"):
+        raise typer.BadParameter("--trim must be 'pattern' or 'none'")
+    summary = run(reads, barcodes, out_dir, trim, min_umi_quality, write_unmatched)
+    typer.echo(format_report(summary))
+    typer.echo(f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition}}.tsv")
 
 
 @app.command()
-def suggest() -> None:
+def sheet(
+    barcodes: Path = typer.Argument(..., help="MIGEC-style barcode table to inspect."),
+) -> None:
+    """Show what each row of a barcode table will extract, without running anything."""
+    from migec.sheet import describe, read_barcodes
+
+    typer.echo(describe(read_barcodes(barcodes)))
+
+
+@app.command()
+def suggest(
+    reads: Optional[Path] = typer.Argument(None),
+) -> None:
     """Infer UMI/primer/cell-barcode placement from the reads. (M4)"""
     raise typer.Exit(_not_yet("suggest", "M4"))
 
@@ -66,8 +106,7 @@ def subsample() -> None:
 
 def _not_yet(name: str, milestone: str) -> int:
     typer.echo(
-        f"`migec {name}` is not implemented yet (planned for {milestone}).\n"
-        f"This build ships the .mig format and FASTQ IO; see ROADMAP.md.",
+        f"`migec {name}` is not implemented yet (planned for {milestone}). See ROADMAP.md.",
         err=True,
     )
     return 2

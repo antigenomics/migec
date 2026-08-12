@@ -1,0 +1,284 @@
+#include "doctest.h"
+
+#include <random>
+#include <string>
+
+#include "migec/types.hpp"
+#include "migec/umi_stats.hpp"
+
+using namespace migec;
+
+namespace {
+
+uint64_t umi(const std::string& s) { return pack_barcode(s); }
+
+}  // namespace
+
+TEST_CASE("coverage histogram bins by powers of two") {
+    UmiCounts c(4);
+    c.add(umi("AAAA"), 1);
+    c.add(umi("AAAC"), 1);
+    c.add(umi("AAAG"), 3);   // bin 1: [2,4)
+    c.add(umi("AAAT"), 8);   // bin 3: [8,16)
+    c.add(umi("AACA"), 100); // bin 6: [64,128)
+
+    CoverageHistogram h = c.histogram();
+    CHECK(h.units[0] == 2);
+    CHECK(h.reads[0] == 2);
+    CHECK(h.units[1] == 1);
+    CHECK(h.reads[1] == 3);
+    CHECK(h.units[3] == 1);
+    CHECK(h.units[6] == 1);
+    CHECK(h.total_reads() == 113);
+    CHECK(h.total_units() == 5);
+    CHECK(h.mean_reads_per_umi() == doctest::Approx(113.0 / 5.0));
+
+    // 108 of 113 reads sit in MIGs of >= 5 reads.
+    CHECK(h.reads_in_migs_at_least(5) == doctest::Approx(108.0 / 113.0));
+    CHECK(h.over_sequenced());
+}
+
+TEST_CASE("a uniform UMI has full entropy and its real length") {
+    // Every 4^3 = 64 barcode of length 3, once each: perfectly uniform by construction.
+    UmiCounts c(3);
+    const char* B = "ACGT";
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            for (int k = 0; k < 4; ++k) {
+                std::string s = {B[i], B[j], B[k]};
+                c.add(umi(s), 1);
+            }
+
+    UmiComposition comp = c.composition(false);
+    CHECK(comp.length == 3);
+    for (int j = 0; j < 3; ++j) {
+        CHECK(comp.entropy(j) == doctest::Approx(2.0));
+        CHECK(comp.information(j) == doctest::Approx(0.0));
+        CHECK(comp.collision(j) == doctest::Approx(0.25));
+    }
+    CHECK(comp.total_entropy() == doctest::Approx(6.0));
+    CHECK(comp.total_information() == doctest::Approx(0.0));
+    CHECK(comp.effective_length() == doctest::Approx(3.0));
+    CHECK(comp.effective_space() == doctest::Approx(64.0));
+}
+
+TEST_CASE("a skewed UMI loses effective length, and Shannon overstates the space") {
+    // Position 0 is fixed to A, the rest uniform: one base of the barcode is dead.
+    UmiCounts c(3);
+    const char* B = "ACGT";
+    for (int j = 0; j < 4; ++j)
+        for (int k = 0; k < 4; ++k) {
+            std::string s = {'A', B[j], B[k]};
+            c.add(umi(s), 1);
+        }
+    UmiComposition comp = c.composition(false);
+    CHECK(comp.entropy(0) == doctest::Approx(0.0));
+    CHECK(comp.collision(0) == doctest::Approx(1.0));
+    CHECK(comp.effective_length() == doctest::Approx(2.0));   // 3 nominal, 2 usable
+    CHECK(comp.effective_space() == doctest::Approx(16.0));
+
+    // Now a mildly skewed position: Shannon-derived space (2^H) must EXCEED the collision-derived
+    // space, which is the whole reason the collision form is the one used for decisions.
+    UmiCounts s(1);
+    s.add(umi("A"), 70);
+    s.add(umi("C"), 10);
+    s.add(umi("G"), 10);
+    s.add(umi("T"), 10);
+    UmiComposition sc = s.composition(true);
+    const double shannon_space = std::pow(2.0, sc.total_entropy());
+    CHECK(shannon_space > sc.effective_space());
+}
+
+TEST_CASE("expected collisions follows the birthday bound") {
+    UmiCounts c(6);
+    const char* B = "ACGT";
+    // Uniform-ish sample over 6 positions.
+    std::mt19937 rng(7);
+    for (int i = 0; i < 4000; ++i) {
+        std::string s;
+        for (int j = 0; j < 6; ++j) s.push_back(B[rng() % 4]);
+        c.add(umi(s), 1);
+    }
+    UmiComposition comp = c.composition(false);
+    // 4^6 = 4096 barcodes; with 100 molecules E[colliding pairs] = 100^2/2 / 4096 ~ 1.22
+    CHECK(comp.expected_collisions(100.0) == doctest::Approx(1.22).epsilon(0.15));
+}
+
+namespace {
+
+// A realistic background library: a decision about one barcode depends on how many other
+// molecules there are and how their sizes are distributed, so testing correction on three
+// barcodes tests nothing.
+UmiCounts background_library(int n_umis, int umi_len, uint32_t seed) {
+    UmiCounts c(umi_len);
+    std::mt19937 rng(seed);
+    std::lognormal_distribution<double> size(2.0, 0.8);  // median ~7 reads, long tail
+    const char* B = "ACGT";
+    for (int i = 0; i < n_umis; ++i) {
+        std::string s;
+        for (int j = 0; j < umi_len; ++j) s.push_back(B[rng() % 4]);
+        c.add(umi(s), static_cast<uint32_t>(std::max(1.0, size(rng))));
+    }
+    return c;
+}
+
+}  // namespace
+
+TEST_CASE("a small child of a large parent is merged") {
+    // The unambiguous case: a barcode with a couple of reads sitting one substitution from a
+    // deeply covered molecule is what a UMI sequencing error looks like.
+    UmiCounts c = background_library(2000, 12, 5);
+    c.add(umi("ACGTACGTACGT"), 10000);
+    c.add(umi("ACGTACGTACGA"), 2);
+
+    CorrectionParams p;
+    p.sequencing_error = 1e-3;
+    CorrectionResult r = correct_umis(c, p);
+
+    REQUIRE(r.parent.count(umi("ACGTACGTACGA")) == 1);
+    CHECK(r.parent.at(umi("ACGTACGTACGA")) == umi("ACGTACGTACGT"));
+    CHECK(r.corrected.at(umi("ACGTACGTACGT")) == 10002);
+    CHECK(r.corrected.count(umi("ACGTACGTACGA")) == 0);
+}
+
+TEST_CASE("a neighbour of comparable size is not merged") {
+    // Two molecules of similar abundance one substitution apart are far more likely to be two real
+    // molecules than a parent and its error child -- no error turns 10000 reads into 9000.
+    UmiCounts c = background_library(2000, 12, 6);
+    c.add(umi("ACGTACGTACGT"), 10000);
+    c.add(umi("ACGTACGTACGA"), 9000);
+
+    CorrectionParams p;
+    p.sequencing_error = 1e-3;
+    CorrectionResult r = correct_umis(c, p);
+    CHECK(r.parent.count(umi("ACGTACGTACGA")) == 0);
+}
+
+TEST_CASE("an isolated low-coverage UMI keeps its reads") {
+    // The explicit requirement: a molecule seen 3-5 times with NO plausible parent is information,
+    // not noise. It must survive correction untouched.
+    UmiCounts c = background_library(2000, 12, 7);
+    c.add(umi("TTTTTTTTTTTT"), 4);  // 12 substitutions from anything else, by construction
+
+    CorrectionResult r = correct_umis(c);
+    CHECK(r.parent.count(umi("TTTTTTTTTTTT")) == 0);
+    CHECK(r.corrected.at(umi("TTTTTTTTTTTT")) == 4);
+}
+
+TEST_CASE("a child is never merged into a smaller or equal barcode") {
+    UmiCounts c = background_library(500, 12, 8);
+    c.add(umi("ACGTACGTACGT"), 50);
+    c.add(umi("ACGTACGTACGA"), 50);
+    CorrectionResult r = correct_umis(c);
+    CHECK(r.parent.count(umi("ACGTACGTACGT")) == 0);
+    CHECK(r.parent.count(umi("ACGTACGTACGA")) == 0);
+}
+
+TEST_CASE("chains resolve to a root, never to a cycle") {
+    UmiCounts c(8);
+    c.add(umi("ACGTACGT"), 100000);
+    c.add(umi("ACGTACGA"), 300);   // child of the above
+    c.add(umi("ACGTACAA"), 5);     // child of the child
+
+    CorrectionParams p;
+    p.sequencing_error = 1e-2;
+    CorrectionResult r = correct_umis(c, p);
+
+    // Whatever merges, every surviving barcode must be a root and the reads must be conserved.
+    uint64_t total = 0;
+    for (const auto& kv : r.corrected) {
+        CHECK(r.parent.count(kv.first) == 0);
+        total += kv.second;
+    }
+    CHECK(total == 100305);
+}
+
+TEST_CASE("reads are conserved by correction, always") {
+    std::mt19937 rng(11);
+    UmiCounts c(6);
+    const char* B = "ACGT";
+    uint64_t expected = 0;
+    for (int i = 0; i < 2000; ++i) {
+        std::string s;
+        for (int j = 0; j < 6; ++j) s.push_back(B[rng() % 4]);
+        const uint32_t n = 1 + rng() % 50;
+        c.add(umi(s), n);
+        expected += n;
+    }
+    CorrectionResult r = correct_umis(c);
+    uint64_t total = 0;
+    for (const auto& kv : r.corrected) total += kv.second;
+    CHECK(total == c.total());
+    CHECK(c.total() <= expected);  // duplicate draws merged at add() time
+}
+
+TEST_CASE("the error rate estimate recovers an injected rate") {
+    // Build parents, then add a 1-substitution child to a known fraction of them.
+    std::mt19937 rng(3);
+    UmiCounts c(10);
+    const char* B = "ACGT";
+    const int n_parents = 3000;
+    const double eps = 2e-3;
+    const int parent_size = 200;  // expected children per parent = 3L(1-e^{-c eps}) ~ 9.9
+
+    std::vector<std::string> parents;
+    for (int i = 0; i < n_parents; ++i) {
+        std::string s;
+        for (int j = 0; j < 10; ++j) s.push_back(B[rng() % 4]);
+        parents.push_back(s);
+        c.add(umi(s), parent_size);
+    }
+    std::binomial_distribution<int> nchild(30, 1.0 - std::exp(-parent_size * eps));
+    for (const auto& s : parents) {
+        const int k = nchild(rng);
+        for (int t = 0; t < k; ++t) {
+            std::string ch = s;
+            const int pos = static_cast<int>(rng() % 10);
+            char nb = B[rng() % 4];
+            while (nb == ch[static_cast<size_t>(pos)]) nb = B[rng() % 4];
+            ch[static_cast<size_t>(pos)] = nb;
+            c.add(umi(ch), 1);
+        }
+    }
+
+    UmiComposition comp = c.composition(false);
+    const double est = estimate_umi_error(c, comp);
+    INFO("estimated " << est << " vs injected " << eps);
+    CHECK(est > eps / 3.0);
+    CHECK(est < eps * 3.0);
+}
+
+TEST_CASE("a half-full barcode space is flagged and collision-corrected") {
+    // 128 distinct barcodes drawn at random from the 256 of length 4. MIGEC disabled correction
+    // outright in this regime; here it keeps running -- the collision prior makes it
+    // self-limiting -- and the molecule count is corrected upward for the collisions that no
+    // method can see.
+    UmiCounts c(4);
+    const char* B = "ACGT";
+    std::mt19937 rng(21);
+    while (c.distinct() < 128) {
+        std::string s;
+        for (int j = 0; j < 4; ++j) s.push_back(B[rng() % 4]);
+        c.add(umi(s), 10);
+    }
+    CorrectionResult r = correct_umis(c);
+    CHECK(r.saturated);
+    CHECK(r.merged == 0);  // every barcode sits at equal depth; nothing looks like a child
+    // 256 * -ln(1 - 128/256) = 177
+    CHECK(r.molecules_corrected > static_cast<double>(r.molecules_observed));
+    CHECK(r.molecules_corrected == doctest::Approx(177.0).epsilon(0.15));
+}
+
+TEST_CASE("an over-full barcode space declines to estimate rather than reporting zero collisions") {
+    // Occupancy above 90% makes the space estimate collapse onto the observed count, which would
+    // report "no collisions" for the most collided library possible. Refuse instead.
+    UmiCounts c(4);
+    const char* B = "ACGT";
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            for (int k = 0; k < 4; ++k)
+                for (int l = 0; l < 4; ++l) c.add(umi({B[i], B[j], B[k], B[l]}), 10);
+    CorrectionResult r = correct_umis(c);
+    CHECK(r.saturated);
+    CHECK(r.molecules_corrected == doctest::Approx(static_cast<double>(r.molecules_observed)));
+}
