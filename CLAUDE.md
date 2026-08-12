@@ -117,8 +117,12 @@ correction is written up in `project/review-algorithms.md`.
   it is why `match_seconds` is reported next to `wall_seconds`.
 - Grouping accuracy vs Calib is wired up (`scripts/compare_calib.py`, `docs/grouping.rst`) and the
   migec column is asserted in CI. Running the Calib column needs Calib built locally.
-- Next, in order: **X1** (read-start dispersion on 10x — decides whether fragmented mode is
-  mandatory), then M1 (`assemble` + the quality model, validated on a clonal control).
+- **X1 is done (2026-08-13) and it answered yes: fragmented mode is mandatory.** Reads sharing a
+  `(CB,UMI)` are not co-terminal (7.8% overall, 0.3% at ≥6 reads), but 72.7% still form one
+  overlap component, so `assemble` partitions by overlap and then runs the ordinary ungapped
+  consensus per component. Never extend a component across a gap. `docs/fragmented.rst`.
+- Next: **X2** (emitted-quality calibration on the clonal control — the RT floor is currently a
+  guess spanning 10× in both directions and it sets every quality above ~Q40), then M1.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.

@@ -49,6 +49,7 @@ SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
    umi_statistics
    performance
    grouping
+   fragmented
    validation
    formats
    roadmap

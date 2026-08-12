@@ -70,6 +70,17 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Reference calls | the published `filtered_feature_bc_matrix` — used as a comparator, not re-run |
 | Provenance | experimental (10x), reference calls derived |
 
+**X1 (read-start dispersion) used `pbmc_1k_v3`**, Cell Ranger 3.0.0, GRCh38-3.0.0:
+
+| Item | Value |
+|---|---|
+| BAM | `https://cf.10xgenomics.com/samples/cell-exp/3.0.0/pbmc_1k_v3/pbmc_1k_v3_possorted_genome_bam.bam` (4.79 GB) + `.bai` (4.6 MB) |
+| Fetch | not fetched — the server serves HTTP range requests (verified 206, 2026-08-13), so `pysam.AlignmentFile(url)` reads only the regions asked for |
+| Regions | `11:65497688-65508073` (MALAT1), `7:5527151-5530601` (ACTB), `15:44711477-44718877` (B2M) — chosen for expression, since an unexpressed locus has no UMI with more than one read |
+| Contig names | plain `1`, `2`, … `X` — **not** `chr1`. Cell Ranger's GRCh38-3.0.0 reference is Ensembl-styled |
+| Regenerate | `python scripts/read_start_dispersion.py --bam <url> --region … ` |
+| Provenance | experimental (10x); the dispersion statistics are derived |
+
 ### Calib (github.com/vpc-ccg/calib)
 
 | Item | Value |

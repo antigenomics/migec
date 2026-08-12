@@ -35,10 +35,17 @@ scientific claim and is validated before any throughput work.
 
 ## X — experiments that must precede the milestones they inform
 
-- [ ] **X1 — read-start dispersion within `(CB,UMI)` on one 10x run.** Falsifies the assumption
-      that reads sharing a UMI are co-terminal. If dispersion is high — and for 3' GEX it will be
-      — then a single ungapped consensus per UMI is meaningless for 10x and the overlap-component
-      path is mandatory, not optional. One pass, ~40 lines. **Blocks M1's design.**
+- [x] **X1 — read-start dispersion within `(CB,UMI)` on one 10x run.** Done, 2026-08-13, on
+      `pbmc_1k_v3` at MALAT1/ACTB/B2M — 8,326 multi-read groups. **The co-terminal assumption is
+      false**: 7.8% of groups overall, and 0.3% of those with ≥6 reads, so what co-terminality
+      there is is a small-group coincidence rather than a property of the chemistry. 92% of groups
+      are wider than one 91 nt read. But **72.7% still form a single overlap component** (rising
+      to 81.3% at ≥6 reads), so partitioning by overlap first reduces three quarters of the work
+      to the ungapped problem MIGEC already solves — and the remaining **27.3%** is why the
+      partition is mandatory: a single consensus over them asserts sequence across a gap no read
+      covers. Also: only 1.5% of groups hold more than one read at this depth, so for shallow 3'
+      GEX the UMI buys counting, not error correction. Written up in `docs/fragmented.rst`,
+      script in `scripts/read_start_dispersion.py`.
 - [ ] **X2 — emitted-quality calibration on a clonal control, stratified by MIG size.** Fit
       `e_out(c) = p_floor + a/c`; the intercept is the RT/PCR floor. Settles empirically what is
       currently a guess spanning 10× in both directions. **Blocks M1's quality cap.**
