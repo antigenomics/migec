@@ -171,6 +171,18 @@ comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
 | Storage | Never: do not store simulated reads — record the exact command and seed here instead |
 | Provenance | derived (simulated) |
 
+### Example QC figures in `assets/`
+
+| Item | Value |
+|---|---|
+| Use | the four panels the README embeds: barcode rank, MIG size spectrum, rank/Zipf, consensus quality |
+| Regenerate | `python scripts/example_figures.py` -- simulates, runs all three stages, copies the tables, redraws |
+| Tables | `assets/PBMC.cell_rank.tsv`, `PBMC.sizes.tsv`, `assemble.quality_by_depth.tsv`, `assemble.coverage.tsv` |
+| Shape | 120 cells x 40-200 molecules, Pareto(1.1) depth, plus 4,000 ambient barcodes with 1-3 molecules each; 0.2% barcode and 1% payload error, seed 3 |
+| Why that shape | a uniform simulator draws all four panels as straight lines. The ambient population is what makes the knee; the Pareto tail is what gives the rank curve slope; the per-base error is what gives emitted quality a spread to draw quartiles over |
+| Provenance | **derived (simulated)** -- never presented as a measurement. `assets/SRR1763769.mig.tsv` beside it is experimental; see the Primer ID entry |
+| Storage | the TSVs are committed, the FASTQ is not (`--keep` writes it locally) |
+
 ### minibwa (github.com/lh3/minibwa)
 
 | Item | Value |

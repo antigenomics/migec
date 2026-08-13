@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <functional>
 #include <filesystem>
+#include <map>
 #include <unordered_map>
 
 #include "migec/fastq.hpp"
@@ -538,6 +539,39 @@ RefineStats refine(const RefineRequest& request) {
                          kv.second, kv.second >= stats.cell_threshold ? 1 : 0);
         }
         std::fclose(fh);
+
+        // Cell Ranger's barcode-rank plot, which is the figure everyone already knows how to
+        // read: cells sorted by how many DISTINCT UMIs they carry, on log-log, with the knee
+        // where real cells stop and ambient starts. Never reads -- an over-amplified molecule
+        // would put an empty droplet high up the curve, which is exactly the artefact the plot
+        // exists to make visible.
+        //
+        // Log-spaced ranks, because one row per barcode is hundreds of millions of rows for a
+        // figure that is read on a log axis anyway. The first and last rank are always emitted so
+        // the curve's ends are exact.
+        if (!sizes.empty()) {
+            std::FILE* rf =
+                std::fopen((out_dir / (stats.sample_id + ".cell_rank.tsv")).string().c_str(), "w");
+            if (!rf) throw MigecError("refine: cannot write the cell rank table");
+            std::fprintf(rf, "rank\tumis\tcalled\tcumulative_umis\tcumulative_fraction\n");
+            uint64_t total = 0;
+            for (uint32_t v : sizes) total += v;
+            uint64_t cum = 0;
+            size_t next = 0;
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                cum += sizes[i];
+                if (i == next || i + 1 == sizes.size()) {
+                    std::fprintf(rf, "%zu\t%u\t%d\t%llu\t%.6f\n", i + 1, sizes[i],
+                                 sizes[i] >= stats.cell_threshold ? 1 : 0,
+                                 static_cast<unsigned long long>(cum),
+                                 total ? static_cast<double>(cum) / static_cast<double>(total)
+                                       : 0.0);
+                    next = std::max(next + 1,
+                                    static_cast<size_t>(static_cast<double>(next) * 1.05));
+                }
+            }
+            std::fclose(rf);
+        }
     }
 
     // ---------------------------------------------------------------- diagnostics
@@ -573,6 +607,37 @@ RefineStats refine(const RefineRequest& request) {
             }
         }
         std::fclose(fh);
+    }
+    {
+        // The EXACT MIG size spectrum: one row per distinct size, not a power-of-two bin. Two
+        // things need it and neither can be had from the binned table:
+        //
+        //   * the size histogram with BOTH series -- how many molecules were seen n times, and how
+        //     many reads those molecules account for. The two peak in different places whenever
+        //     the library is over-sequenced, and a bin four wide hides that;
+        //   * the rank/Zipf curve, which is the cumulative count of this table. Power-of-two bins
+        //     turn it into four steps.
+        //
+        // It costs one row per distinct depth, which is bounded by the deepest molecule and is a
+        // few thousand rows on any real library -- not one row per molecule.
+        std::map<uint32_t, std::pair<uint64_t, uint64_t>> spectrum;  // size -> (molecules, reads)
+        for (uint32_t c : correction.corrected) {
+            if (c == 0) continue;
+            auto& e = spectrum[c];
+            ++e.first;
+            e.second += c;
+        }
+        std::FILE* sf =
+            std::fopen((out_dir / (stats.sample_id + ".sizes.tsv")).string().c_str(), "w");
+        if (!sf) throw MigecError("refine: cannot write the size spectrum");
+        std::fprintf(sf, "size\tlog1p_size\tmolecules\treads\n");
+        for (const auto& [size, counts] : spectrum) {
+            std::fprintf(sf, "%u\t%.6f\t%llu\t%llu\n", size,
+                         std::log1p(static_cast<double>(size)),
+                         static_cast<unsigned long long>(counts.first),
+                         static_cast<unsigned long long>(counts.second));
+        }
+        std::fclose(sf);
     }
     {
         // Per MIG-size bin: how much of it was error, and how diverse the sequence is there.

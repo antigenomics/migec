@@ -4,6 +4,51 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.1.0 — 2026-08-13
+
+First non-alpha of the rewrite. The three stages, the eight commands and the on-disk formats have
+been stable across a3 and a4; what this release adds is the QC layer catching up with them.
+
+**Four figures you already know how to read.** They come off new tables rather than out of a new
+computation, so each is still redrawable from a committed TSV:
+
+- **The barcode rank plot**, on [Cell Ranger's](https://www.10xgenomics.com/support/software/cell-ranger/latest/advanced/cr-ab-barcode-rank-plot)
+  axes, because it is the figure every user of a droplet protocol has seen: barcodes sorted by
+  content, log-log, knee where cells stop. Never: the y axis is **unique UMIs, never reads** — one
+  over-amplified molecule would otherwise put an empty droplet high on the curve, which is the
+  exact artefact the plot exists to show. The call is drawn on the curve, not described in a
+  caption. New table `<sample>.cell_rank.tsv`.
+- **The MIG size spectrum**, molecules *and* the reads they account for, against `log(1 + size)`.
+  Both series, because they peak in different places the moment a library is over-sequenced: most
+  molecules are shallow, most reads are in the deep ones, and a figure with only one of them says
+  the opposite of a figure with only the other. `log1p`, so a molecule seen once has a place on
+  the axis.
+- **The rank/Zipf curve**, molecule size against rank on log-log. Never: this is why the new
+  `<sample>.sizes.tsv` is written at **exact** sizes and not power-of-two bins — four bins make
+  four steps, and a straight line cannot be told from a bent one. It costs one row per distinct
+  depth, a few thousand on a real library, not one row per molecule.
+- **Unique UMIs and reads per sample barcode**, off `checkout.summary.tsv`. The multiplexed
+  analogue of the same question.
+
+**Consensus quality is a box, not a thinned scatter.** Emitted quality is discrete and capped at
+the RT floor, so at any real depth every molecule sits on one or two integers: a cloud of dots
+draws that as a flat line whether the bin holds ten molecules or ten million, and the `every 17`
+that kept the SVG small threw away the tails that were the only thing the cloud could have shown.
+`assemble` now accumulates the exact joint distribution of (depth bin, rounded Phred) — both are
+small integers, so it is 61 counters per bin per bucket — and `assemble.quality_by_depth.tsv`
+carries real order statistics over every molecule.
+
+**Publication defaults on every panel.** Transparent background, so one SVG serves a light README,
+a dark README and print. One ink colour (`#808080`), which reads on both. **The legend is inside
+the plot box**: a key in the margin makes every figure wider than its data and is the first thing a
+journal asks you to move. Frame is 760x520 rather than 900x560 wide.
+
+**The pipeline figure is page-shaped.** `rankdir = TB` and three `rank = same` groups pinning each
+side tool level with the data it reads; it was a 5:1 strip that filled the README column with air.
+Transparent, and `minibwa` is in the downstream box.
+
+Twenty panels now, from sixteen. `docs/formats.rst` documents every QC table and its columns.
+
 ## 2.0.0a4 — 2026-08-13
 
 **The partition threads, and the memory estimate behind it was wrong.** With the consensus already

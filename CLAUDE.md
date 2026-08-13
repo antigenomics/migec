@@ -311,7 +311,24 @@ correction is written up in `project/review-algorithms.md`.
   moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
   missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
   sourced from the pipeline, not fitted to the data. In `SOURCES.md`.
-- **`migec plot` works (2026-08-13, 2.0.0a3)**: sixteen gnuplot panels over the TSVs the stages
+- **The four familiar QC figures are in (2.1.0)**: Cell Ranger's barcode rank plot
+  (`<sample>.cell_rank.tsv`), the MIG size spectrum on log1p with molecules AND reads, the
+  rank/Zipf curve, and unique UMIs per sample barcode. Never: the knee plot's y axis is **unique
+  UMIs, never reads** -- one over-amplified molecule otherwise puts an empty droplet high on the
+  curve, which is the artefact the plot exists to show. Never: `<sample>.sizes.tsv` is at EXACT
+  sizes, never power-of-two bins -- the Zipf curve is its cumulative count and four bins make four
+  steps.
+- **Never: a thinned scatter is not a distribution.** `consensus_quality` drew `every 17` molecules
+  as grey dots. Emitted quality is DISCRETE and capped at the floor, so at any real depth every
+  molecule sits on one or two integers: the cloud drew a flat line whether the bin held ten
+  molecules or ten million, and the thinning threw away the tails that were the only thing it could
+  have shown the line did not. `assemble` accumulates the exact (depth bin, rounded Phred) grid --
+  61 counters per bin -- and the panel is a candlestick over real order statistics.
+- **Publication defaults on every panel (2.1.0)**: transparent background so one SVG serves a light
+  README, a dark README and print; one ink colour `#808080` that reads on both; **the key inside the
+  plot box**, because a legend gutter makes every figure wider than its data. Frame 760x520. The
+  pipeline figure is `rankdir = TB` with three `rank = same` groups, not a 5:1 strip.
+- **`migec plot` works (2026-08-13, 2.0.0a3)**: twenty gnuplot panels over the TSVs the stages
   already write, ColorBrewer Dark2, A/C/G/T always the same four colours. Never: it computes nothing
   — a figure that cannot be redrawn from a committed table is a figure that will disagree with the
   report. gnuplot is **not** a Python dependency; without it the `.gp` scripts are still written,

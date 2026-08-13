@@ -95,6 +95,42 @@ Runnable notebooks
    * - ``notebooks/refine_diagnostics.py``
      - the coverage curve, the barcode-rank plot, and where the errors are
 
+Looking at the run
+------------------
+
+.. code-block:: bash
+
+   migec plot co/ -o figs/          # every panel whose table is in co/
+   migec plot ref/ -o figs/
+   migec plot asm/ -o figs/ --format pdf
+
+Four of the twenty panels are figures you have already read somewhere else, and they are the ones
+to look at first:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 34 42
+
+   * - panel
+     - the question
+     - the failure it shows
+   * - ``cell_rank``
+     - is my cell calling right?
+     - Cell Ranger's barcode rank plot, on unique UMIs. No knee means no cells.
+   * - ``mig_size_spectrum``
+     - is the library over-sequenced?
+     - most molecules shallow while most reads sit in the deep ones
+   * - ``mig_size_zipf``
+     - is amplification even?
+     - a bent rank curve where Zipf would be straight
+   * - ``consensus_quality``
+     - what quality am I allowed to claim?
+     - the boxes flatten at the RT floor, not at the instrument
+
+Every panel is a gnuplot script over a TSV the stage already wrote, so a figure can be redrawn
+without the FASTQ. Without gnuplot installed the ``.gp`` scripts are still written. See
+:doc:`plot <plots>`.
+
 Then what
 ---------
 

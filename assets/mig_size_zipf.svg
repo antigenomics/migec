@@ -131,47 +131,40 @@
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb(128, 128, 128)'  d='M115.70,447.85 L115.70,457.60  '/>	<g transform="translate(115.70,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
-		<text><tspan font-family="Helvetica" > 0.1</tspan></text>
-	</g>
-</g>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M146.66,447.85 L146.66,452.72 M164.76,447.85 L164.76,452.72 M177.61,447.85 L177.61,452.72 M187.58,447.85 L187.58,452.72
-		M195.72,447.85 L195.72,452.72 M202.60,447.85 L202.60,452.72 M208.57,447.85 L208.57,452.72 M213.83,447.85 L213.83,452.72
-		M218.53,447.85 L218.53,457.60  '/>	<g transform="translate(218.53,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 1</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M249.49,447.85 L249.49,452.72 M267.59,447.85 L267.59,452.72 M280.44,447.85 L280.44,452.72 M290.41,447.85 L290.41,452.72
-		M298.55,447.85 L298.55,452.72 M305.43,447.85 L305.43,452.72 M311.40,447.85 L311.40,452.72 M316.66,447.85 L316.66,452.72
-		M321.36,447.85 L321.36,457.60  '/>	<g transform="translate(321.36,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
+	<path stroke='rgb(128, 128, 128)'  d='M152.85,447.85 L152.85,452.72 M174.58,447.85 L174.58,452.72 M189.99,447.85 L189.99,452.72 M201.95,447.85 L201.95,452.72
+		M211.72,447.85 L211.72,452.72 M219.98,447.85 L219.98,452.72 M227.14,447.85 L227.14,452.72 M233.45,447.85 L233.45,452.72
+		M239.10,447.85 L239.10,457.60  '/>	<g transform="translate(239.10,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 10</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M352.32,447.85 L352.32,452.72 M370.43,447.85 L370.43,452.72 M383.27,447.85 L383.27,452.72 M393.24,447.85 L393.24,452.72
-		M401.38,447.85 L401.38,452.72 M408.27,447.85 L408.27,452.72 M414.23,447.85 L414.23,452.72 M419.49,447.85 L419.49,452.72
-		M424.20,447.85 L424.20,457.60  '/>	<g transform="translate(424.20,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
+	<path stroke='rgb(128, 128, 128)'  d='M276.24,447.85 L276.24,452.72 M297.97,447.85 L297.97,452.72 M313.39,447.85 L313.39,452.72 M325.35,447.85 L325.35,452.72
+		M335.12,447.85 L335.12,452.72 M343.38,447.85 L343.38,452.72 M350.54,447.85 L350.54,452.72 M356.85,447.85 L356.85,452.72
+		M362.50,447.85 L362.50,457.60  '/>	<g transform="translate(362.50,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 100</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M455.15,447.85 L455.15,452.72 M473.26,447.85 L473.26,452.72 M486.11,447.85 L486.11,452.72 M496.07,447.85 L496.07,452.72
-		M504.21,447.85 L504.21,452.72 M511.10,447.85 L511.10,452.72 M517.06,447.85 L517.06,452.72 M522.32,447.85 L522.32,452.72
-		M527.03,447.85 L527.03,457.60  '/>	<g transform="translate(527.03,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
+	<path stroke='rgb(128, 128, 128)'  d='M399.64,447.85 L399.64,452.72 M421.37,447.85 L421.37,452.72 M436.79,447.85 L436.79,452.72 M448.75,447.85 L448.75,452.72
+		M458.52,447.85 L458.52,452.72 M466.78,447.85 L466.78,452.72 M473.94,447.85 L473.94,452.72 M480.25,447.85 L480.25,452.72
+		M485.89,447.85 L485.89,457.60  '/>	<g transform="translate(485.89,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 1000</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M557.98,447.85 L557.98,452.72 M576.09,447.85 L576.09,452.72 M588.94,447.85 L588.94,452.72 M598.90,447.85 L598.90,452.72
-		M607.05,447.85 L607.05,452.72 M613.93,447.85 L613.93,452.72 M619.89,447.85 L619.89,452.72 M625.15,447.85 L625.15,452.72
-		M629.86,447.85 L629.86,457.60  '/>	<g transform="translate(629.86,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
+	<path stroke='rgb(128, 128, 128)'  d='M523.04,447.85 L523.04,452.72 M544.77,447.85 L544.77,452.72 M560.19,447.85 L560.19,452.72 M572.15,447.85 L572.15,452.72
+		M581.92,447.85 L581.92,452.72 M590.18,447.85 L590.18,452.72 M597.33,447.85 L597.33,452.72 M603.65,447.85 L603.65,452.72
+		M609.29,447.85 L609.29,457.60  '/>	<g transform="translate(609.29,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 10000</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<path stroke='rgb(128, 128, 128)'  d='M660.81,447.85 L660.81,452.72 M678.92,447.85 L678.92,452.72 M691.77,447.85 L691.77,452.72 M701.73,447.85 L701.73,452.72
-		M709.88,447.85 L709.88,452.72 M716.76,447.85 L716.76,452.72 M722.72,447.85 L722.72,452.72 M727.98,447.85 L727.98,452.72
+	<path stroke='rgb(128, 128, 128)'  d='M646.44,447.85 L646.44,452.72 M668.17,447.85 L668.17,452.72 M683.58,447.85 L683.58,452.72 M695.54,447.85 L695.54,452.72
+		M705.31,447.85 L705.31,452.72 M713.58,447.85 L713.58,452.72 M720.73,447.85 L720.73,452.72 M727.04,447.85 L727.04,452.72
 		M732.69,447.85 L732.69,457.60  '/>	<g transform="translate(732.69,481.33)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
 		<text><tspan font-family="Helvetica" > 100000</tspan></text>
 	</g>
@@ -182,25 +175,42 @@
 	<path stroke='rgb(128, 128, 128)'  d='M115.70,58.51 L115.70,447.85 L732.69,447.85 M732.69,58.51 M115.70,58.51  '/></g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
-	<g id="gnuplot_plot_1" ><title>"/Users/mikesh/vcs/code/migec/assets/assemble.coverage.tsv" using 2:4</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-	<g stroke='none' shape-rendering='crispEdges'>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '195.72,447.85 233.57,447.85 233.57,121.85 195.72,121.85 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '239.52,447.85 264.52,447.85 264.52,172.98 239.52,172.98 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '270.48,447.85 295.48,447.85 295.48,200.21 270.48,200.21 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '301.43,447.85 326.43,447.85 326.43,225.53 301.43,225.53 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '332.39,447.85 357.39,447.85 357.39,249.07 332.39,249.07 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '363.34,447.85 388.35,447.85 388.35,275.17 363.34,275.17 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '394.30,447.85 419.30,447.85 419.30,300.08 394.30,300.08 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '425.25,447.85 450.26,447.85 450.26,332.82 425.25,332.82 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '456.21,447.85 481.21,447.85 481.21,361.10 456.21,361.10 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '487.16,447.85 512.17,447.85 512.17,377.52 487.16,377.52 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '518.12,447.85 543.12,447.85 543.12,400.96 518.12,400.96 '/>
-		<polygon fill = 'rgb( 61, 172, 139)' points = '549.08,447.85 574.08,447.85 574.08,424.40 549.08,424.40 '/>
+<g fill="none" color="black" stroke="rgb(128, 128, 128)" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="0.50" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(128, 128, 128)'  d='M124.80,438.10 L124.80,416.65 L462.15,416.65 L462.15,438.10 L124.80,438.10 Z  '/></g>
+	<g id="gnuplot_plot_1" ><title>molecules of at least this depth</title>
+<g fill="none" color="white" stroke="rgb(128, 128, 128)" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
+</g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
+	<g transform="translate(416.00,431.61)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="end">
+		<text><tspan font-family="Helvetica" >molecules of at least this depth</tspan></text>
 	</g>
 </g>
+<g fill="none" color="black" stroke="currentColor" stroke-width="2.50" stroke-linecap="butt" stroke-linejoin="miter">
+	<path stroke='rgb(117, 112, 179)'  d='M425.10,427.38 L453.05,427.38 M115.70,114.08 L152.85,178.29 L174.58,189.54 L189.99,199.03 L201.95,205.11 L211.72,205.22
+		L219.98,211.89 L227.14,216.59 L233.45,218.19 L239.10,223.35 L244.21,229.82 L248.87,230.36 L253.16,233.91 L257.13,234.34
+		L260.83,235.46 L264.29,237.62 L267.53,238.03 L270.60,239.78 L273.50,240.80 L278.86,242.09 L281.35,243.26 L283.73,245.15
+		L286.02,248.89 L288.20,250.63 L290.30,250.93 L292.33,251.94 L294.28,255.07 L296.16,260.99 L297.97,261.26 L299.73,262.23
+		L301.43,265.45 L303.08,265.76 L304.68,266.86 L306.23,267.35 L307.74,267.84 L309.21,268.00 L310.64,268.84 L312.03,270.41
+		L313.39,270.95 L314.71,273.38 L317.27,273.97 L318.50,274.37 L319.70,274.77 L322.03,275.80 L323.16,276.64 L324.27,277.08
+		L325.35,279.55 L326.41,280.02 L327.45,280.26 L328.47,281.47 L329.47,281.97 L331.42,282.98 L332.37,283.24 L333.30,283.50
+		L334.22,284.03 L335.12,285.11 L336.88,285.39 L337.74,286.23 L338.58,286.52 L340.23,287.39 L341.03,287.98 L342.61,288.28
+		L343.38,288.89 L344.14,289.51 L344.89,289.83 L345.63,290.14 L347.79,290.46 L348.49,290.79 L349.18,291.44 L350.54,291.78
+		L351.86,293.14 L352.51,293.49 L353.15,293.85 L354.41,294.21 L356.25,294.93 L358.61,295.30 L359.18,296.05 L360.86,296.82
+		L361.41,297.21 L362.50,297.61 L363.03,298.01 L364.60,298.42 L365.11,298.83 L366.62,299.24 L367.11,299.66 L368.57,300.95
+		L370.45,301.39 L370.91,301.84 L371.82,302.30 L373.59,302.76 L374.02,303.22 L375.73,303.70 L376.56,304.66 L377.37,305.66
+		L377.78,306.17 L378.18,306.68 L379.37,307.21 L380.14,307.74 L380.91,308.28 L381.29,308.83 L382.78,309.39 L384.58,309.96
+		L385.64,310.54 L387.68,311.12 L388.35,311.72 L389.01,312.33 L390.30,312.95 L391.56,313.58 L393.10,314.23 L395.17,314.88
+		L396.04,315.55 L397.17,316.94 L398.01,317.65 L399.37,318.37 L400.18,319.12 L402.00,319.88 L403.52,320.66 L405.24,321.45
+		L406.66,322.27 L408.51,323.10 L410.74,323.96 L412.87,324.84 L414.32,325.74 L415.53,326.66 L416.51,327.62 L418.43,328.60
+		L420.29,329.61 L421.73,330.65 L423.30,331.72 L425.99,332.83 L428.71,333.98 L430.54,335.16 L432.17,336.39 L435.16,337.67
+		L437.19,339.00 L438.63,340.38 L440.91,341.81 L443.46,343.32 L446.67,344.89 L449.07,346.54 L451.46,348.28 L454.92,350.10
+		L459.05,352.04 L463.54,354.09 L467.31,356.27 L471.19,358.60 L474.40,361.11 L479.65,363.82 L484.26,366.76 L490.07,369.98
+		L496.37,373.55 L502.96,377.53 L509.45,382.04 L518.75,387.26 L530.04,393.42 L542.75,400.97 L559.74,410.70 L584.33,424.41
+		L650.65,447.85  '/></g>
 	</g>
-<g fill="none" color="white" stroke="rgb( 27, 158, 119)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+<g fill="none" color="white" stroke="rgb(117, 112, 179)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -208,19 +218,19 @@
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<path stroke='rgb(128, 128, 128)'  d='M115.70,58.51 L115.70,447.85 L732.69,447.85 M732.69,58.51 M115.70,58.51  '/>	<g transform="translate(20.79,253.18) rotate(270.00)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
-		<text><tspan font-family="Helvetica" >groups</tspan></text>
+		<text><tspan font-family="Helvetica" >reads per molecule</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<g transform="translate(424.19,510.58)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
-		<text><tspan font-family="Helvetica" >reads per group (bin start)</tspan></text>
+		<text><tspan font-family="Helvetica" >rank (molecules at least this deep)</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 	<g transform="translate(424.19,33.49)" stroke="none" fill="rgb(128,128,128)" font-family="Helvetica" font-size="13.00"  text-anchor="middle">
-		<text><tspan font-family="Helvetica" >Groups per MIG size, as assembled</tspan></text>
+		<text><tspan font-family="Helvetica" >Molecule size against rank -- a straight line here is Zipf</tspan></text>
 	</g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">

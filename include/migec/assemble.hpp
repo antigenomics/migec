@@ -17,6 +17,7 @@
 #ifndef MIGEC_ASSEMBLE_HPP
 #define MIGEC_ASSEMBLE_HPP
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -64,6 +65,13 @@ inline constexpr size_t kMaxBlockBytes = 4u << 20;   // the writer's own default
 // count is the other half of what this pipeline produces and capping it would silently flatten
 // the abundance of exactly the most-amplified molecules.
 inline constexpr size_t kMaxReadsPerGroup = 10000;
+
+// Q0..Q60 inclusive. The emitted quality is capped at the RT floor (Q40 by default), so nothing
+// reaches the top of this range -- it is sized to hold a hand-set `--rt-error` of 1e-6 without
+// clamping, and it exists so the joint (depth, quality) distribution can be counted exactly
+// rather than sampled. Never thin a scatter and call it a distribution: both axes here are small
+// integers, so the whole grid is 61 counters per power-of-two depth bin.
+inline constexpr size_t kQualityLevels = 61;
 
 struct AssembleRequest {
     std::string input;       // a per-sample FASTQ written by checkout
@@ -114,6 +122,9 @@ struct AssembleStats {
     std::string sample_id;
     // MIG size histogram, power-of-two bins: [0] is 1 read, [1] is 2-3, [2] is 4-7, ...
     std::vector<uint64_t> size_histogram;
+    // Molecules per (power-of-two depth bin, rounded mean Phred). Row b covers depths
+    // [2^b, 2^(b+1)); column q is Q=q. The quantiles the figure draws come off this exactly.
+    std::vector<std::array<uint64_t, kQualityLevels>> quality_grid;
     // Mean emitted Phred, and the mean posterior error the consensus itself achieved before the
     // RT floor was added. The gap between them is what the chemistry costs.
     double mean_quality = 0.0;

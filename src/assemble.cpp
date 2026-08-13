@@ -289,6 +289,12 @@ AssembleStats assemble(const AssembleRequest& request) {
         uint64_t groups = 0, molecules = 0, groups_split = 0, groups_fragmented = 0, contigs = 0;
         uint64_t reads_dropped = 0, groups_capped = 0, reads_over_cap = 0;
         std::vector<uint64_t> size_histogram;
+        // Molecules per (depth bin, rounded Phred). Both axes are DISCRETE and small -- a depth
+        // bin is a power of two and a Phred is an integer capped at the RT floor -- so the whole
+        // joint distribution fits in a fixed grid and there is no reason to thin a scatter plot
+        // and hope. `kQualityLevels` covers Q0..Q60; anything above is clamped, and the cap means
+        // nothing lands there anyway.
+        std::vector<std::array<uint64_t, kQualityLevels>> quality_grid;
         double qual_sum = 0.0, err_sum = 0.0;
         uint64_t qual_bases = 0, support_reads = 0, support_of_reads = 0;
         // Per-position base usage over DISTINCT barcodes, which is what the birthday arithmetic
@@ -300,6 +306,7 @@ AssembleStats assemble(const AssembleRequest& request) {
     // Merged after the loop, in bucket order.
     double qual_sum = 0.0, err_sum = 0.0;
     uint64_t qual_bases = 0, support_reads = 0, support_of_reads = 0;
+    std::vector<std::array<uint64_t, kQualityLevels>> quality_grid;
     std::vector<std::array<uint64_t, 4>> usage;
 
     auto consense_bucket = [&](size_t bucket, BucketOut& out) {
@@ -354,6 +361,17 @@ AssembleStats assemble(const AssembleRequest& request) {
             out.qual_sum += q;
             out.qual_bases += c.qual.size();
             out.err_sum += c.mean_error;
+            if (!c.qual.empty()) {
+                size_t depth_bin = 0;
+                while ((reported_reads >> depth_bin) > 1) ++depth_bin;
+                if (out.quality_grid.size() <= depth_bin) {
+                    out.quality_grid.resize(depth_bin + 1, {});
+                }
+                const double mean_q = q / static_cast<double>(c.qual.size());
+                size_t level = static_cast<size_t>(mean_q + 0.5);
+                if (level >= kQualityLevels) level = kQualityLevels - 1;
+                ++out.quality_grid[depth_bin][level];
+            }
             // The name carries everything a downstream tool needs even when it drops the comment
             // -- dnaio does, so arda only ever sees the name.
             std::string name = stats.sample_id + "." +
@@ -469,6 +487,14 @@ AssembleStats assemble(const AssembleRequest& request) {
                 if (stats.size_histogram.size() <= b) stats.size_histogram.resize(b + 1, 0);
                 stats.size_histogram[b] += o.size_histogram[b];
             }
+            if (quality_grid.size() < o.quality_grid.size()) {
+                quality_grid.resize(o.quality_grid.size(), {});
+            }
+            for (size_t b = 0; b < o.quality_grid.size(); ++b) {
+                for (size_t l = 0; l < kQualityLevels; ++l) {
+                    quality_grid[b][l] += o.quality_grid[b][l];
+                }
+            }
             if (usage.size() < o.usage.size()) usage.resize(o.usage.size(), {});
             for (size_t j = 0; j < o.usage.size(); ++j) {
                 for (int c = 0; c < 4; ++c) usage[j][static_cast<size_t>(c)] += o.usage[j][static_cast<size_t>(c)];
@@ -503,6 +529,7 @@ AssembleStats assemble(const AssembleRequest& request) {
     const double lam = stats.space.saturated ? -std::log1p(-occupancy) : stats.space.lambda;
     stats.expected_molecules_per_group = lam > 0.0 ? lam / (1.0 - std::exp(-lam)) : 1.0;
 
+    stats.quality_grid = std::move(quality_grid);
     stats.mean_quality = qual_bases ? qual_sum / static_cast<double>(qual_bases) : 0.0;
     stats.mean_consensus_error =
         stats.molecules ? err_sum / static_cast<double>(stats.molecules) : 0.0;

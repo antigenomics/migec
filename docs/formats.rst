@@ -108,3 +108,74 @@ malformed. The UMI comes last in the read name because that is the convention ``
    ``dnaio`` — used by arda's rnaseq module — **drops the comment entirely**. Anything a
    downstream Python tool must see has to be in the read *name*, which is why the name is
    self-sufficient rather than a bare integer.
+
+QC tables
+---------
+
+Every stage writes plain TSV beside its output. These are the contract with :doc:`plot <plots>` and
+with any script of your own -- a figure is never computed from the FASTQ, only from one of these,
+which is what stops a figure and a report disagreeing.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 16 52
+
+   * - file
+     - written by
+     - columns
+   * - ``checkout.summary.tsv``
+     - ``checkout``
+     - one row per **sample**: ``reads``, ``umis``, effective length, effective space, error rate,
+       saturation. The per-sample UMI count the ``sample_umis`` panel draws.
+   * - ``checkout.coverage.tsv``
+     - ``checkout``
+     - ``sample_id``, ``mig_size`` (power-of-two bin start), ``reads``, ``units``
+   * - ``<sample>.sizes.tsv``
+     - ``refine``
+     - ``size``, ``log1p_size``, ``molecules``, ``reads`` -- the **exact** MIG size spectrum, one
+       row per distinct depth
+   * - ``<sample>.rank.tsv``
+     - ``refine``
+     - ``rank``, ``reads``, ``cumulative_reads``, ``cumulative_fraction``; molecules, log-spaced
+   * - ``<sample>.cell_rank.tsv``
+     - ``refine``
+     - ``rank``, ``umis``, ``called``, ``cumulative_umis``, ``cumulative_fraction``; cell barcodes
+       sorted by **distinct UMIs**, log-spaced. Written only when the reads carry a cell barcode.
+   * - ``<sample>.cells.tsv``
+     - ``refine``
+     - ``cell``, ``molecules``, ``called`` -- one row per cell barcode, unsorted
+   * - ``<sample>.bins.tsv``
+     - ``refine``
+     - per size bin: barcodes, reads, merged, erroneous fraction, molecules, residual FDR, payload
+       entropy
+   * - ``<sample>.barcodes.tsv``
+     - ``refine``
+     - ``cell``, ``umi``, ``reads``, ``corrected_reads``, ``parent`` -- the whole barcode table
+   * - ``assemble.coverage.tsv``
+     - ``assemble``
+     - ``sample_id``, ``min_reads``, ``max_reads``, ``groups``
+   * - ``assemble.quality_by_depth.tsv``
+     - ``assemble``
+     - per power-of-two depth bin: ``molecules``, ``q_min``, ``q_p25``, ``q_median``, ``q_p75``,
+       ``q_max``, ``q_mean``
+   * - ``<sample>.mig.tsv``
+     - ``assemble``
+     - one row per molecule: barcode, contigs, reads, support, length, quality, error, linkage
+
+.. note::
+
+   ``<sample>.sizes.tsv`` is at **exact** sizes, not power-of-two bins, and that is deliberate: the
+   rank/Zipf curve is its cumulative count, and four bins make four steps. It costs one row per
+   distinct depth -- a few thousand on a real library -- rather than one row per molecule.
+
+.. note::
+
+   ``<sample>.cell_rank.tsv`` and ``<sample>.rank.tsv`` are both **log-spaced**: consecutive rows
+   step by about 5% of the rank, with the first and last always emitted so the ends of the curve
+   are exact. One row per barcode would be hundreds of millions of rows for a figure that is read
+   on a log axis anyway.
+
+``assemble.quality_by_depth.tsv`` holds order statistics rather than a sample. ``assemble``
+accumulates the exact joint distribution of (depth bin, rounded Phred) -- both are small integers,
+so it is 61 counters per bin -- and the quantiles are read off that. Nothing is thinned, which is
+why the quality panel can be a box instead of a scatter.

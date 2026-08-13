@@ -42,7 +42,7 @@ possible. The difficulty is entirely in the details:
 
 ## Pipeline
 
-<p align="center"><img alt="the migec pipeline" src="assets/pipeline.svg" width="100%"></p>
+<p align="center"><img alt="the migec pipeline" src="assets/pipeline.svg" width="42%"></p>
 
 Three stages, plus three tools that read no reads: `suggest` says where the barcode is,
 `subsample` cuts a fixture that is still a library, and `plot` draws every QC panel with gnuplot
@@ -261,10 +261,8 @@ independently (1.54e-4 on SRR1763769), and the polymerase classes come from
 2.6e-6, Pwo 2.4e-6 per bp per duplication) — with the first cycle worth ~5x an ordinary one
 ([Shagin *et al.* 2017](https://doi.org/10.1038/s41598-017-02727-8)).
 
-Which is exactly what comes out, on a real HIV-1 Primer ID library: one read gives Q30, and the
-curve flattens at the floor rather than at the instrument.
-
-<p align="center"><img alt="consensus quality against depth" src="assets/consensus_quality.svg" width="80%"></p>
+Which is exactly what comes out: one read carries the payload's own error and the curve flattens
+at the floor rather than at the instrument — drawn as a box per depth bin, [further down](#it-draws-its-own-qc).
 
 Very deep barcodes are capped at **10,000 reads into the consensus** — past that the column
 posterior has long since saturated while the group still costs time and memory, which is 10x's
@@ -305,13 +303,47 @@ migec plot out/                       # every panel whose table is in out/
 migec plot cons/ -o figs/ --format pdf
 ```
 
-Sixteen panels — UMI PWM and information content, barcode quality and its calibration, MIG size
-coverage, trimming, barcode space, the `suggest` cycle trace, overrepresented k-mers, the cell
-rank curve, consensus quality, error, layout, and thread scaling. Every one is a gnuplot script
-over a TSV a stage already wrote, so a figure can be redrawn from the table next to it long after
-the FASTQ is gone, and a figure can never disagree with the number in the report. gnuplot is not a
-Python dependency: without it the `.gp` scripts are still written. See
-[docs/plots.rst](docs/plots.rst).
+Twenty panels. Every one is a gnuplot script over a TSV a stage already wrote, so a figure can be
+redrawn from the table next to it long after the FASTQ is gone, and a figure can never disagree
+with the number in the report. gnuplot is not a Python dependency: without it the `.gp` scripts are
+still written. Every SVG is **transparent and mid-grey**, so one file serves a light README, a dark
+README and a printed page — and the legend sits inside the plot box, not in a gutter that makes
+every figure wider than its data. See [docs/plots.rst](docs/plots.rst).
+
+Four of them are the ones you already know how to read.
+
+**The barcode rank plot**, on Cell Ranger's axes, because that is the figure every user of a
+droplet protocol has seen. Barcodes sorted by how many **distinct UMIs** they carry — never by
+reads, since one over-amplified molecule would otherwise put an empty droplet high on the curve,
+which is the artefact the plot exists to show. The call is drawn *on* the curve.
+
+<p align="center"><img alt="barcode rank plot" src="assets/cell_rank.svg" width="72%"></p>
+
+**The MIG size spectrum**, molecules and the reads they account for, on `log(1 + size)`. Both
+series, on their own axes, because they peak in different places the moment a library is
+over-sequenced: most *molecules* are shallow, most *reads* are in the deep ones. A figure with only
+the first says the library is fine; a figure with only the second says it is saturated. `log1p`, so
+a molecule seen once still has a place on the axis.
+
+<p align="center"><img alt="MIG size spectrum" src="assets/mig_size_spectrum.svg" width="72%"></p>
+
+**The rank/Zipf curve** — molecule size against rank, log-log. A straight line is Zipf, and
+amplification bias bends it. This is why `refine` writes the size spectrum at *exact* sizes rather
+than in power-of-two bins: four bins make four steps, and a straight line cannot be told from a
+bent one.
+
+<p align="center"><img alt="molecule size against rank" src="assets/mig_size_zipf.svg" width="72%"></p>
+
+**Consensus quality against depth**, as a box, never a thinned scatter. Emitted quality is discrete
+and capped at the floor, so at any real depth every molecule sits on one or two integers: a cloud
+of dots draws that as a flat line whether the bin holds ten molecules or ten million, and thinning
+it throws away the tails that were the only thing the cloud could have shown. These are exact order
+statistics over every molecule, read off a (depth, quality) count grid.
+
+<p align="center"><img alt="consensus quality against depth" src="assets/consensus_quality.svg" width="72%"></p>
+
+`checkout.summary.tsv` carries unique UMIs and reads per **sample** barcode, drawn the same way by
+the `sample_umis` panel — the multiplexed analogue of the same question.
 
 ### It finds what the trim left behind
 
@@ -490,7 +522,7 @@ few buckets, and pass 2 holds sixteen of them at once.
 | 8 | 910,500 | 1,335,791 | 136 MB |
 | 16 | **1,056,472** | **1,684,654** | 217 MB |
 
-<p align="center"><img alt="checkout thread scaling" src="assets/benchmark_threads.svg" width="80%"></p>
+<p align="center"><img alt="checkout thread scaling" src="assets/benchmark_threads.svg" width="72%"></p>
 
 2 M single-end 129 nt reads, four barcode patterns, 4 reads per molecule, M-series laptop.
 `python scripts/benchmark_threads.py --reads 2000000 -o assets/` writes that table, and the figure

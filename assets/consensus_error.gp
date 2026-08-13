@@ -1,10 +1,16 @@
-set terminal svg size 900,560 font "Helvetica,13" background rgb "white"
+set terminal svg size 760,520 font "Helvetica,13" enhanced
 set output "/Users/mikesh/vcs/code/migec/assets/consensus_error.svg"
-set border 3 lw 1 lc rgb "#666666"
-set tics nomirror out
-set key outside right top box lw 0.5 lc rgb "#cccccc"
-set style fill solid 0.85 border lc rgb "#ffffff"
-set grid ytics lw 0.5 lc rgb "#e5e5e5"
+set border 3 lw 1 lc rgb "#808080"
+set tics nomirror out textcolor rgb "#808080"
+set title textcolor rgb "#808080"
+set xlabel textcolor rgb "#808080"
+set ylabel textcolor rgb "#808080"
+set y2label textcolor rgb "#808080"
+# Inside, bottom right, opaque-bordered but unfilled -- a legend in the margin makes every figure
+# wider than its data and is the first thing a journal asks you to move.
+set key inside bottom right box lw 0.5 lc rgb "#808080" textcolor rgb "#808080" samplen 2 spacing 1.1
+set style fill solid 0.85 noborder
+set grid ytics lw 0.5 lc rgb "#808080" dt 3
 set datafile separator "\t"
 set datafile missing "NA"
 
@@ -13,5 +19,6 @@ set xlabel "reads in the molecule"
 set ylabel "mean posterior error"
 set logscale xy
 set format y "10^{{%%T}}"
-plot "/Users/mikesh/vcs/code/migec/assets/SRR1763769.mig.tsv" using 6:($10 > 0 ? $10 : 1/0) every 17 with points pt 7 ps 0.3      lc rgb "#bbbbbb" title "molecules",      "" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7      lc rgb "#d95f02" title "mean per depth"
+set key inside top right
+plot "/Users/mikesh/vcs/code/migec/assets/SRR1763769.mig.tsv" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7      lc rgb "#d95f02" title "mean per depth"
 

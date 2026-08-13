@@ -19,19 +19,32 @@ from pathlib import Path
 # ColorBrewer Dark2. The first four are A, C, G, T wherever bases are drawn.
 DARK2 = ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"]
 
+# Mid grey. The one colour that reads on a white page and on a dark one, which is what lets a
+# single SVG serve a light README, a dark README and a printed figure without three renders.
+INK = "#808080"
+# 4:3-ish and not wide. The key lives INSIDE the plot box (see _PREAMBLE), so no horizontal space
+# is spent on a legend gutter and the axes get the whole frame.
 TERMINALS = {
-    "svg": 'set terminal svg size 900,560 font "Helvetica,13" background rgb "white"',
-    "png": 'set terminal pngcairo size 1100,680 font "Helvetica,13"',
-    "pdf": 'set terminal pdfcairo size 7in,4.4in font "Helvetica,11"',
+    # No `background` at all: an SVG with no background rect is transparent, so GitHub's dark mode
+    # shows the page behind it rather than a white slab.
+    "svg": 'set terminal svg size 760,520 font "Helvetica,13" enhanced',
+    "png": 'set terminal pngcairo size 1000,680 font "Helvetica,13" transparent',
+    "pdf": 'set terminal pdfcairo size 6.4in,4.4in font "Helvetica,11"',
 }
 
-_PREAMBLE = """
-set output "{out}"
-set border 3 lw 1 lc rgb "#666666"
-set tics nomirror out
-set key outside right top box lw 0.5 lc rgb "#cccccc"
-set style fill solid 0.85 border lc rgb "#ffffff"
-set grid ytics lw 0.5 lc rgb "#e5e5e5"
+_PREAMBLE = f"""
+set output "{{out}}"
+set border 3 lw 1 lc rgb "{INK}"
+set tics nomirror out textcolor rgb "{INK}"
+set title textcolor rgb "{INK}"
+set xlabel textcolor rgb "{INK}"
+set ylabel textcolor rgb "{INK}"
+set y2label textcolor rgb "{INK}"
+# Inside, bottom right, opaque-bordered but unfilled -- a legend in the margin makes every figure
+# wider than its data and is the first thing a journal asks you to move.
+set key inside bottom right box lw 0.5 lc rgb "{INK}" textcolor rgb "{INK}" samplen 2 spacing 1.1
+set style fill solid 0.85 noborder
+set grid ytics lw 0.5 lc rgb "{INK}" dt 3
 set datafile separator "\\t"
 set datafile missing "NA"
 """
@@ -180,15 +193,90 @@ plot "< head -21 '{src}'" using 0:4:xtic(1) with boxes lc rgb "#d95f02"
     ),
     # --------------------------------------------------------------------- refine
     Panel(
-        name="cell_rank",
+        name="molecule_rank",
         source="*.rank.tsv",
         script="""
-set title "Barcode rank -- the knee is where cells stop and ambient starts"
-set xlabel "barcode rank"
+set title "Molecule rank -- reads per molecule, largest first"
+set xlabel "molecule rank"
 set ylabel "reads"
 set logscale xy
-set key off
-plot "{src}" using 1:2 with lines lw 2.5 lc rgb "#1b9e77"
+set key inside bottom left
+plot "{src}" using 1:2 with lines lw 2.5 lc rgb "#1b9e77" title "reads in the molecule"
+""",
+    ),
+    Panel(
+        name="cell_rank",
+        source="*.cell_rank.tsv",
+        script="""
+set title "Barcode rank -- unique UMIs per barcode, the knee is where cells stop"
+set xlabel "barcode rank"
+set ylabel "unique UMIs (molecules)"
+set logscale xy
+set key inside bottom left
+# Cell Ranger's plot, and deliberately the same axes, because it is the figure every user of a
+# droplet protocol already knows how to read. UMIs, never reads: one over-amplified molecule would
+# otherwise put an empty droplet high on the curve, which is the artefact the plot exists to show.
+# The two colours are the call, drawn on the curve rather than described in the caption.
+plot "{src}" using 1:($3 == 1 ? $2 : 1/0) with lines lw 3 lc rgb "#1b9e77" title "called cells", \
+     "" using 1:($3 == 0 ? $2 : 1/0) with lines lw 2 lc rgb "#999999" title "background", \
+     "" using 1:2 with lines lw 0.8 dt 3 lc rgb "{INK}" notitle
+""",
+    ),
+    Panel(
+        name="mig_size_spectrum",
+        source="*.sizes.tsv",
+        script="""
+set title "MIG size spectrum -- molecules and the reads they account for"
+set xlabel "log(1 + reads per molecule)"
+set ylabel "molecules"
+set y2label "reads"
+set y2tics textcolor rgb "{INK}"
+set logscale y
+set logscale y2
+set boxwidth 0.9 relative
+set key inside top right
+# Both series, on their own axes, because they peak in different places the moment a library is
+# over-sequenced: most MOLECULES are shallow, and most READS are in the deep ones. A figure with
+# only the first says the library is fine and a figure with only the second says it is saturated.
+# log1p on x so a molecule seen once has a place on the axis; a plain log drops it.
+plot "{src}" using 2:3 with boxes lc rgb "#1b9e77" title "molecules", \
+     "" using 2:4 axes x1y2 with lines lw 2.5 lc rgb "#d95f02" title "reads in them"
+""",
+    ),
+    Panel(
+        name="mig_size_zipf",
+        source="*.sizes.tsv",
+        script="""
+set title "Molecule size against rank -- a straight line here is Zipf"
+set xlabel "rank (molecules at least this deep)"
+set ylabel "reads per molecule"
+set logscale xy
+set key inside bottom left
+# The rank curve is the cumulative count of the size spectrum, read from the deep end down, which
+# is why the spectrum is emitted at EXACT sizes and not in power-of-two bins: four bins make four
+# steps and a straight line cannot be told from a bent one.
+zipf = 0
+plot "< sort -t'\t' -k1,1nr '{src}' | grep -v size" \
+     using (zipf = zipf + $3, zipf):1 with lines lw 2.5 lc rgb "#7570b3" \
+     title "molecules of at least this depth"
+""",
+    ),
+    Panel(
+        name="sample_umis",
+        source="checkout.summary.tsv",
+        script="""
+set title "Unique UMIs and reads per sample barcode"
+set ylabel "unique UMIs"
+set y2label "reads"
+set y2tics textcolor rgb "{INK}"
+set logscale y
+set logscale y2
+set style data histograms
+set style histogram clustered gap 2
+set xtics rotate by -30
+set key inside top right
+plot "{src}" using 3:xtic(1) lc rgb "#1b9e77" title "unique UMIs", \
+     "" using 2 axes x1y2 lc rgb "#d95f02" title "reads"
 """,
     ),
     Panel(
@@ -207,17 +295,23 @@ plot "{src}" using 2:4 with boxes lc rgb "#7570b3"
     # --------------------------------------------------------------------- assemble
     Panel(
         name="consensus_quality",
-        source="*.mig.tsv",
+        source="assemble.quality_by_depth.tsv",
         script="""
 set title "Consensus quality against depth -- the cap is the RT floor, not the instrument"
-set xlabel "reads in the molecule"
-set ylabel "mean emitted Phred"
-set logscale x
-# `every 17` on the points: a molecule table has millions of rows and an SVG with a million
-# circles in it is not a figure. The mean per depth is the claim; the thinned cloud is the spread.
-plot "{src}" using 6:9 every 17 with points pt 7 ps 0.3 lc rgb "#bbbbbb" title "molecules", \
-     "" using 6:9 smooth unique with linespoints lw 2.5 pt 7 ps 0.7 lc rgb "#1b9e77" \
-     title "mean per depth"
+set xlabel "reads in the molecule (power-of-two bin)"
+set ylabel "emitted Phred"
+set logscale x 2
+set boxwidth 0.6 relative
+set key inside bottom right
+# A BOX, never a thinned scatter. Emitted quality is discrete and capped at the floor, so at any
+# real depth every molecule sits on one or two integers: a cloud of dots draws that as a flat line
+# whether the bin holds ten molecules or ten million, and `every 17` then throws away the tails
+# that were the only thing the cloud could have shown. These are exact order statistics over every
+# molecule, read off the (depth, quality) count grid.
+plot "{src}" using 2:6:5:9:8 with candlesticks whiskerbars 0.5 lw 1.5 lc rgb "#1b9e77" \
+     title "quartiles and range", \
+     "" using 2:7:7:7:7 with candlesticks lw 3 lc rgb "#d95f02" title "median", \
+     "" using 2:10 with lines lw 1.5 dt 2 lc rgb "#7570b3" title "mean"
 """,
     ),
     Panel(
@@ -229,9 +323,8 @@ set xlabel "reads in the molecule"
 set ylabel "mean posterior error"
 set logscale xy
 set format y "10^{{%%T}}"
-plot "{src}" using 6:($10 > 0 ? $10 : 1/0) every 17 with points pt 7 ps 0.3 \
-     lc rgb "#bbbbbb" title "molecules", \
-     "" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7 \
+set key inside top right
+plot "{src}" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7 \
      lc rgb "#d95f02" title "mean per depth"
 """,
     ),
@@ -339,7 +432,9 @@ def run(
                 script = (
                     TERMINALS[fmt]
                     + _PREAMBLE.format(out=figure)
-                    + panel.script.replace("{src}", str(src)).replace("{sample}", sample)
+                    + panel.script.replace("{src}", str(src))
+                    .replace("{sample}", sample)
+                    .replace("{INK}", INK)
                 )
                 gp = out / f"{name}.gp"
                 gp.write_text(script.lstrip() + "\n")

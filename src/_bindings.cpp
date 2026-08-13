@@ -710,6 +710,21 @@ PYBIND11_MODULE(_core, m) {
                 e["groups"] = st.size_histogram[b];
                 hist.append(e);
             }
+            d["quality_grid"] = [&] {
+                py::list rows;
+                for (size_t b = 0; b < st.quality_grid.size(); ++b) {
+                    for (size_t q = 0; q < kQualityLevels; ++q) {
+                        if (!st.quality_grid[b][q]) continue;
+                        py::dict e;
+                        e["min_reads"] = static_cast<uint64_t>(1) << b;
+                        e["max_reads"] = (static_cast<uint64_t>(1) << (b + 1)) - 1;
+                        e["quality"] = static_cast<uint64_t>(q);
+                        e["molecules"] = st.quality_grid[b][q];
+                        rows.append(e);
+                    }
+                }
+                return rows;
+            }();
             d["coverage"] = hist;
             return d;
         },

@@ -1,5 +1,5 @@
-plot -- sixteen QC figures
-==========================
+plot -- twenty QC figures
+=========================
 
 .. code-block:: bash
 
@@ -59,14 +59,31 @@ What gets drawn
      - ``suggest.kmers.tsv``
      - Overrepresented k-mers -- synthetic sequence still in the reads.
    * - ``cell_rank``
+     - ``<sample>.cell_rank.tsv``
+     - **Cell Ranger's barcode rank plot**: barcodes sorted by the number of distinct UMIs they
+       carry, log-log, with the called cells and the ambient background drawn in different
+       colours. Never reads -- see below.
+   * - ``molecule_rank``
      - ``<sample>.rank.tsv``
-     - The barcode rank curve, with the knee where cells stop and ambient begins.
+     - The same curve one level down: reads per molecule, largest first.
+   * - ``mig_size_spectrum``
+     - ``<sample>.sizes.tsv``
+     - Molecules and the reads they account for, against :math:`\log(1 + \text{size})`. The two
+       series peak in different places on an over-sequenced library, and that gap is the finding.
+   * - ``mig_size_zipf``
+     - ``<sample>.sizes.tsv``
+     - Molecule size against rank, log-log. A straight line is Zipf; amplification bias bends it.
+   * - ``sample_umis``
+     - ``checkout.summary.tsv``
+     - Unique UMIs and reads per **sample** barcode -- the multiplexed analogue of the barcode
+       rank plot.
    * - ``refine_coverage``
      - ``refine.coverage.tsv``
      - Molecules per MIG size after barcode correction.
    * - ``consensus_quality``
-     - ``<sample>.mig.tsv``
-     - Emitted quality against depth. It flattens at the RT floor, not at the instrument's Q.
+     - ``assemble.quality_by_depth.tsv``
+     - Emitted quality against depth, as a box per depth bin. It flattens at the RT floor, not at
+       the instrument's Q.
    * - ``consensus_error``
      - ``<sample>.mig.tsv``
      - The posterior error the consensus itself achieved, before the floor is added.
@@ -76,6 +93,64 @@ What gets drawn
    * - ``assemble_coverage``
      - ``assemble.coverage.tsv``
      - Groups per MIG size, as assembled.
+
+The four familiar ones
+----------------------
+
+**The barcode rank plot** is deliberately on `Cell Ranger's
+<https://www.10xgenomics.com/support/software/cell-ranger/latest/advanced/cr-ab-barcode-rank-plot>`_
+axes, because it is the figure every user of a droplet protocol already knows how to read: barcodes
+on the x axis sorted by content, that content on the y, both logarithmic, and a knee where real
+cells stop and ambient RNA starts.
+
+.. warning::
+
+   The y axis is **unique UMIs**, never reads. One over-amplified molecule would otherwise put an
+   empty droplet high on the curve -- which is the exact artefact the plot exists to make visible,
+   so drawing reads there hides the thing you are looking for. ``refine`` calls the cells with
+   OrdMag and reports the knee beside it; the panel draws the call on the curve rather than
+   describing it in a caption.
+
+The multiplexed analogue is ``sample_umis``: unique UMIs and reads per sample barcode, off
+``checkout.summary.tsv``. Same question, one compartment up.
+
+**The MIG size spectrum** draws both series -- how many molecules were seen *n* times, and how many
+reads those molecules account for -- because they peak in different places the moment a library is
+over-sequenced. Most molecules are shallow; most reads are in the deep ones. A figure with only the
+first says the library is fine and a figure with only the second says it is saturated. The x axis is
+:math:`\log(1 + \text{size})` rather than :math:`\log(\text{size})` so that a molecule seen once
+still has a place on it.
+
+**The rank/Zipf curve** is the cumulative count of that spectrum, read from the deep end down. This
+is why ``<sample>.sizes.tsv`` is written at **exact** sizes and not in power-of-two bins: four bins
+make four steps, and a straight line cannot be told from a bent one. The table costs one row per
+distinct depth -- a few thousand on any real library -- not one row per molecule.
+
+**Consensus quality against depth** is a box, and this is not a stylistic choice. Emitted quality is
+discrete and capped at the RT floor, so at any real depth every molecule sits on one or two
+integers. A scatter of that draws a flat line whether the bin holds ten molecules or ten million,
+and thinning the scatter to keep the SVG small throws away the tails, which were the only thing the
+cloud could have shown that the line does not. The quartiles come off an exact ``(depth, quality)``
+count grid that ``assemble`` accumulates per bucket -- both axes are small integers, so the whole
+joint distribution is 61 counters per power-of-two depth bin and there is nothing to sample.
+
+Publication defaults
+--------------------
+
+Every figure is drawn to go straight into a paper or a dark-mode README without editing:
+
+* **Transparent background.** The SVG carries no background rectangle, so it sits on a white page,
+  a dark page, or a slide.
+* **One ink colour, mid grey.** ``#808080`` reads on both, which is what lets a single file serve
+  a light README, a dark README and print instead of three renders.
+* **The legend is inside the plot box.** A key in the margin makes every figure wider than its
+  data; ``migec plot`` puts it in the corner with the most space and the frame stays 760x520.
+* Data colours stay ColorBrewer Dark2, which is qualitative and colour-blind safe.
+
+.. code-block:: bash
+
+   migec plot asm/ -o figs/ --format pdf     # pdfcairo, 6.4 x 4.4 in
+   migec plot asm/ -o figs/ --format png     # transparent pngcairo
 
 Checking a trim, and a consensus
 --------------------------------

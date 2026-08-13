@@ -61,6 +61,51 @@ def parse_rt_error(value: str) -> float:
     return floor
 
 
+def _quantiles_by_depth(grid: list[dict]) -> list[tuple]:
+    """Five-number summary of emitted quality, per power-of-two depth bin.
+
+    The grid is the exact joint count of (depth bin, rounded Phred), so these are real order
+    statistics over every molecule -- not a summary of a thinned sample. Quality is discrete and
+    capped at the RT floor, which is why a box is the honest shape here and a scatter is not: at
+    high depth every molecule sits on the same one or two integers, and a cloud of dots draws that
+    as a line whether it holds ten molecules or ten million.
+    """
+    bins: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for row in grid:
+        bins.setdefault((row["min_reads"], row["max_reads"]), []).append(
+            (row["quality"], row["molecules"])
+        )
+
+    def at(counts: list[tuple[int, int]], total: int, fraction: float) -> int:
+        # Nearest-rank. The value returned is always a quality that molecules actually had.
+        target, seen = max(1, math.ceil(fraction * total)), 0
+        for quality, n in counts:
+            seen += n
+            if seen >= target:
+                return quality
+        return counts[-1][0]
+
+    out = []
+    for (lo, hi), counts in sorted(bins.items()):
+        counts.sort()
+        total = sum(n for _, n in counts)
+        mean = sum(q * n for q, n in counts) / total
+        out.append(
+            (
+                lo,
+                hi,
+                total,
+                counts[0][0],
+                at(counts, total, 0.25),
+                at(counts, total, 0.50),
+                at(counts, total, 0.75),
+                counts[-1][0],
+                f"{mean:.3f}",
+            )
+        )
+    return out
+
+
 def run(
     reads: str | Path,
     out_dir: str | Path,
@@ -93,6 +138,14 @@ def run(
             fh.write(
                 f"{summary['sample_id']}\t{b['min_reads']}\t{b['max_reads']}\t{b['groups']}\n"
             )
+
+    with open(out / "assemble.quality_by_depth.tsv", "w") as fh:
+        fh.write(
+            "sample_id\tmin_reads\tmax_reads\tmolecules\tq_min\tq_p25\tq_median\tq_p75\tq_max\t"
+            "q_mean\n"
+        )
+        for row in _quantiles_by_depth(summary["quality_grid"]):
+            fh.write(f"{summary['sample_id']}\t" + "\t".join(str(v) for v in row) + "\n")
     (out / "assemble.json").write_text(json.dumps(summary, indent=2, default=str))
     return summary
 

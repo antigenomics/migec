@@ -9,8 +9,15 @@
 // the data path in grey, tables in purple, the tools that read no reads in orange.
 
 digraph migec {
-    rankdir = LR;
-    bgcolor = "white";
+    // Top to bottom, not left to right. LR made a strip 5x wider than tall: it filled the README
+    // column with 40 px of glyphs and a lot of air, and the stage labels had to be one line each
+    // to fit. TB gives the figure a page-shaped aspect, so a stage can say what it does.
+    rankdir = TB;
+    // Transparent, so GitHub's dark mode shows the page rather than a white slab, and every ink
+    // colour below reads on both.
+    bgcolor = "transparent";
+    ranksep = 0.32;
+    nodesep = 0.22;
     node [fontname = "Helvetica", fontsize = 11, shape = box, style = "rounded,filled",
           penwidth = 0, height = 0.42, margin = "0.16,0.08"];
     edge [fontname = "Helvetica", fontsize = 9, color = "#666666", arrowsize = 0.7,
@@ -40,6 +47,11 @@ digraph migec {
     fastq  -> suggest   [style = dashed, label = "profile"];
     tagged -> subsample [style = dashed];
 
+    // Beside the stage they attach to, so the trunk stays a straight vertical line.
+    { rank = same; fastq;  suggest; }
+    { rank = same; tagged; subsample; }
+    { rank = same; fixed;  plot; }
+
     // Every stage writes plain TSV beside its output; `plot` draws those and nothing else. The
     // tables themselves are listed in docs/plots.rst rather than here -- naming all thirteen in
     // the figure trebles its width and the figure is meant to be read, not audited.
@@ -50,10 +62,10 @@ digraph migec {
     // Downstream: the contract that was measured, not assumed (docs/downstream.rst).
     node [fillcolor = "#ffffff", fontcolor = "#666666", shape = box, style = "rounded,filled",
           penwidth = 1, color = "#cccccc", fontsize = 9.5];
-    down [label = "minimap2 -y · bwa -C\narda · salmon · kallisto"];
+    down [label = "minimap2 -y · bwa -C · minibwa -y\narda · salmon · kallisto"];
     cons -> down [label = "RX CB MI survive"];
 
-    // No rank constraints. Pinning the stages to one rank pulls the QC notes out of line with the
-    // stage that wrote them and the data path ends up reading diagonally, which is worse than
-    // whatever dot does on its own.
+    // The three `rank = same` groups above are the only constraints: they pin each side node level
+    // with the data it reads, which is what keeps the trunk vertical. Pinning the STAGES to a rank
+    // instead pulls the QC notes out of line with the stage that wrote them.
 }
