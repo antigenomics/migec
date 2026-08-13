@@ -42,6 +42,15 @@ worse than no preset, because it looks supported. Two carry warnings that are pa
   space as saturated — on this chemistry that warning is the correct answer, not a threshold to
   raise. Extract and tag here; group position-aware, downstream.
 
+**A run that matches nothing now says so, and says nothing else.** Zero assigned reads was rendered
+indistinguishably from a successful run of an empty file: the table printed, and three warnings
+computed from the reads that never arrived followed it — "base composition costs 100% of the
+barcode space", a barcode error of `0.0e+00`, "under-sequenced at 0.0 reads/UMI" — none of which is
+a fact about the library. It now reports the declaration error and suppresses the rest. Found by
+the `smarter-umi` preset, whose first draft **scored** the template-switch `GGG`: three matching
+bases are 6.0 bits against an anchored acceptance bar of 6.64, so it refused every read. The preset
+skips those bases instead, as the source pipeline does, and the warning names that trap.
+
 **The downstream contract is measured, not asserted** — new `docs/downstream.rst`. Against a real
 `assemble` output on this machine: `minimap2 -ax sr -y` and `bwa mem -C` carry `RX`, `CB` and `MI`
 into a valid sorted BAM on 600/600 records; `arda amplicon` reads it directly and its AIRR

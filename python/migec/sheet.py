@@ -239,10 +239,13 @@ PRESETS: dict[str, tuple[str, str | None, str]] = {
         "the barcode, so it will report the space as saturated -- believe it.",
     ),
     "smarter-umi": (
-        "^NNNNNNNNNNGGG",
+        "^NNNNNNNNNN...",
         None,
         "SMARTer template-switching RNA-seq with a 10 nt inline UMI, then the GGG the template "
-        "switch leaves behind. Source: ncgr/UMI-analysis, `fastq_qual_filter ... 0 10`.",
+        "switch leaves behind. Source: ncgr/UMI-analysis, `fastq_qual_filter ... 0 10` and "
+        "`fastq_umi_clipper <fq> 10 3`. Note: the GGG is skipped, not scored -- three bases are "
+        "6.0 bits against an anchored bar of 6.64, so scoring them refuses every read. The source "
+        "pipeline erases them without checking them either.",
     ),
 }
 

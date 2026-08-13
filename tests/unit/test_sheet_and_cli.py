@@ -368,3 +368,27 @@ def test_sheet_presets_lists_them():
     assert result.exit_code == 0
     for name in PRESETS:
         assert name in result.output
+
+
+def test_nothing_matched_says_so_and_says_nothing_else(tmp_path):
+    """The one outcome a summary table renders like a successful run of an empty file.
+
+    Found by the `smarter-umi` preset: it scored a three-base `GGG` anchor, which is 6.0 bits
+    against an anchored bar of 6.64, so it refused every read -- and reported 0 reads, 100% of the
+    barcode space lost, and a barcode error of 0.0e+00, none of which is a fact about the library.
+    """
+    import gzip
+
+    from migec.checkout import format_report, run
+
+    reads = tmp_path / "r.fq.gz"
+    with gzip.open(reads, "wt") as fh:
+        for i in range(50):
+            fh.write(f"@r{i}\n{'ACGT' * 20}\n+\n{'I' * 80}\n")
+    (tmp_path / "bc.txt").write_text("S\tNNNNNNNNNNGGG\n")
+
+    report = format_report(run(reads, tmp_path / "bc.txt", tmp_path / "out"))
+    assert "NOTHING matched" in report
+    # ...and none of the statistics computed from the reads that did not arrive.
+    assert "base composition costs" not in report
+    assert "under-sequenced" not in report

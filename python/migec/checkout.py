@@ -245,11 +245,29 @@ def format_report(summary: dict) -> str:
             f"about one defect per 200-500 bases. It caps how well any barcode on this primer "
             f"can be read"
         )
-    if c["total"] and c["assigned"] / c["total"] < 0.5:
+    # Zero is not "a low rate", it is a configuration error, and it is the one outcome a summary
+    # table renders indistinguishably from a successful run of an empty file. Say what it means.
+    if c["total"] and c["assigned"] == 0:
+        warnings.append(
+            "NOTHING matched. The pattern was never placed in any read, which is a declaration "
+            "error rather than a data one. Check with `migec suggest`, and note that an anchor "
+            "shorter than four bases cannot be scored: three matching bases are 6.0 bits against "
+            "an anchored acceptance bar of 6.64, so a pattern ending in a short constant run "
+            "refuses every read. Write those bases as `.` (skipped) instead"
+        )
+    elif c["assigned"] / c["total"] < 0.5:
         warnings.append(
             "less than half of reads matched a pattern -- run `migec suggest` to check where the "
             "barcode actually is"
         )
+    # Every warning below is computed from the reads that matched. With none, they are all
+    # divisions by zero dressed as findings -- "base composition costs 100% of the barcode space"
+    # is not a fact about the library, and printing it buries the one line that matters.
+    if c["total"] and c["assigned"] == 0:
+        lines.append("")
+        lines.append(f"warning: {warnings[-1]}")
+        return "\n".join(lines)
+
     # One line however many samples are under-sequenced: on a 96-plex sheet the per-sample form
     # buries every other warning.
     thin = [s for s in summary["samples"] if not s["over_sequenced"]]
