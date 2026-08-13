@@ -48,8 +48,20 @@ FASTQ ──checkout──▶ tagged FASTQ ──refine──▶ corrected ─�
      suggest                       barcode table, QC              per-molecule tables
 ```
 
-Output is ordinary FASTQ with sample, cell barcode and UMI in the read name and in SAM-style tags,
-so `bwa-meme`, `minimap2` and [arda](https://github.com/antigenomics/arda) consume it directly.
+Output is ordinary FASTQ. One record is one molecule, and its identity is carried twice — in the
+read **name** (`<sample>.<cell>.<umi>`, for tools that drop FASTQ comments) and in tab-separated
+**SAM tags** (for tools that keep them), so this works and was measured
+([docs/downstream.rst](docs/downstream.rst)):
+
+```bash
+minimap2 -ax sr -y ref.fa cons/S1.consensus.fq.gz | samtools sort -o S1.bam   # RX, CB, MI in the BAM
+bwa mem -C     ref.fa cons/S1.consensus.fq.gz     | samtools sort -o S1.bam
+arda amplicon --r1 cons/S1.consensus.fq.gz -p S1      # AIRR sequence_id IS the molecule id
+salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads are molecule counts
+```
+
+> **Never** run alevin, bustools or STARsolo on a consensus FASTQ. They read the barcode out of a
+> *raw* barcode read and deduplicate themselves; migec already did, and that read no longer exists.
 
 ## Install
 
@@ -91,7 +103,7 @@ written down):
 | `10x` | `^XXXXXXXXXXXXXXXXNNNNNNNNNNNN` | 10x Chromium 3' v3 |
 | `10x-v2` | `^XXXXXXXXXXXXXXXXNNNNNNNNNN` | 10x Chromium 3' v2 and 5' |
 | `tso500` | `^NNNNN.....` on R1 | Illumina TSO500 ctDNA — read the warning in [docs/layouts.rst](docs/layouts.rst) |
-| `smarter-umi` | `^NNNNNNNNNNGGG` | SMARTer template-switching RNA-seq |
+| `smarter-umi` | `^NNNNNNNNNN...` | SMARTer template-switching RNA-seq |
 
 ```bash
 migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
