@@ -6,6 +6,32 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### `migec refine`: the stage that decides how many molecules there were
+
+Reads checkout's tagged FASTQ, folds error-child barcodes into their parents using all three
+evidence terms, and rewrites the reads with the corrected barcode in `RX` and **the original
+preserved in `OX`** — a correction nobody can audit is a correction nobody can check. Writes
+`<sample>.barcodes.tsv` (umi, reads, corrected reads, parent) and the post-correction coverage
+histogram.
+
+On 20,000 simulated molecules at 6 reads/UMI with 3·10⁻³ barcode error: 23,910 distinct barcodes
+in, **20,055 molecules out**, per-base error estimated at 2.87·10⁻³. The report prints the measured
+clonality next to what it buys, because payload agreement is worth `log(1/clonality)` and that is a
+property of the library rather than of the method.
+
+It holds the **barcode table**, never the reads — `(key, count)` plus the per-position mean error
+and a 32-base payload draft — and streams the reads three times instead. 2.2 MB of table for
+110,349 reads.
+
+⚠ **Correction is not bucketable by a plain range partition.** The top *b* bits of the key decide
+the bucket, so a substitution in the top *b*/2 positions sends a barcode and its neighbour to
+different buckets and the pair can never be found. Two passes with the key rotated fixes it; until
+then the table is held whole and its size is reported, exactly as `checkout` does with its counters.
+
+Also fixed: `merged_reads` double-counted chained merges. When x folds into y and y later folds
+into z, `corrected[y]` already carried x's reads by then. It is now each barcode's own count, since
+a read changes barcode once.
+
 ### UMI correction learns to work at 1–3 reads per UMI
 
 `correct_umis` ran only inside checkout and was unreachable from Python, so its accuracy had never

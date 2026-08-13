@@ -9,8 +9,8 @@ license: GPL-3.0-or-later
 UMI barcode extraction, correction and consensus assembly. C++20 core, Python CLI. Successor to
 MIGEC (Groovy) and MAGERI (Java); the algorithms carry over, the code does not.
 
-**Status.** `checkout`, `suggest` and `assemble` work. `refine` and `subsample` are not implemented
-yet — a call to them exits 2 with a pointer to `ROADMAP.md`.
+**Status.** `checkout`, `suggest`, `refine` and `assemble` work. `subsample` is not implemented yet
+— a call to it exits 2 with a pointer to `ROADMAP.md`.
 
 ## Install and check
 
@@ -54,7 +54,10 @@ migec checkout ... -t 8                                 # threads; output identi
 migec checkout ... --trim none                          # keep the read whole, UMI in header only
 migec checkout ... --min-umi-quality 15                 # MIGEC v1 behaviour; NOT the default
 migec checkout ... --write-unmatched
-migec assemble out/S1.fq.gz -o cons/                    # one consensus per molecule
+migec refine out/S1.fq.gz -o ref/                      # correct barcode errors, rewrite RX
+migec refine out/S1.fq.gz -o ref/ --min-posterior 0.99 # correct less
+migec refine out/S1.fq.gz -o ref/ --no-payload         # what the count ratio alone would do
+migec assemble ref/S1.fq.gz -o cons/                   # one consensus per molecule
 migec assemble out/S1.fq.gz -o cons/ --contig          # random-primed reads tiling a molecule
 migec assemble out/S1.fq.gz -o cons/ --rt-error 3e-5   # a measured floor for THIS chemistry
 migec suggest reads.fq.gz -o out/                      # where is the barcode? read it off the data
@@ -111,6 +114,29 @@ the SAM record, so a space-separated comment produces a malformed BAM.
 
 ⚠ **`dnaio` drops FASTQ comments**, so arda's rnaseq module never sees the tags — anything a
 downstream Python tool needs must be in the read *name*.
+
+## refine
+
+⛔ **Err on precision, never recall.** A wrong merge deletes a molecule and nothing downstream can
+tell; a missed correction only inflates a count. `--min-posterior` (0.95) is the knob.
+
+Three pieces of evidence. The **count ratio** is the whole game on a deep amplicon and worth
+nothing at 1–3 reads/UMI. The barcode's **base quality** at the differing position separates a
+miscall (low Phred there) from an early-PCR child (high Phred in every read). **Payload agreement**
+— an error child is a read of the parent's molecule — is worth `log(1/clonality)`, with the
+clonality measured from random barcode pairs. It lifts the count gates, which is what makes a
+singleton merge possible; disagreement refuses a merge the counts would have made.
+
+⚠ **At ~1 read/UMI, ~80% of barcode errors have no observable parent** and cannot be corrected by
+any method. Report the molecule count next to the coverage histogram, never alone.
+
+⚠ **Merges chain**, so `OX` can differ from `RX` at two positions while every step was one.
+
+| file | content |
+|---|---|
+| `<sample>.fq.gz` | reads with `RX` corrected and `OX:Z:` = the original |
+| `<sample>.barcodes.tsv` | umi, reads, corrected reads, parent |
+| `refine.coverage.tsv` | molecules per power-of-two MIG size, after correction |
 
 ## assemble
 

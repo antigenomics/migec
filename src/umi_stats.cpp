@@ -609,7 +609,11 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
             if (root == child_idx) continue;  // never make a cycle
             res.root[child_idx] = root;
             res.corrected[root] += res.corrected[child_idx];
-            res.merged_reads += res.corrected[child_idx];
+            // This barcode's OWN reads, not its running total. Merges chain -- x folds into y and
+            // y later folds into z -- and by then `corrected[y]` already carries x's reads, which
+            // were counted when x moved. `merged_reads` is reads whose barcode changed, and each
+            // read changes barcode once.
+            res.merged_reads += m[child_idx].count;
             res.corrected[child_idx] = 0;
             ++res.merged;
         }

@@ -32,6 +32,7 @@ add_library(migec_core STATIC
   src/checkout.cpp
   src/suggest.cpp
   src/consensus.cpp
+  src/refine.cpp
   src/assemble.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)

@@ -14,6 +14,7 @@
 #include "migec/fastq.hpp"
 #include "migec/mig_record.hpp"
 #include "migec/pattern.hpp"
+#include "migec/refine.hpp"
 #include "migec/resource.hpp"
 #include "migec/suggest.hpp"
 #include "migec/types.hpp"
@@ -433,6 +434,61 @@ PYBIND11_MODULE(_core, m) {
         "Fold error-child barcodes into their parents. `umis` is one entry per read. Returns the "
         "merge map, the corrected per-barcode counts, the error rate used, and the "
         "collision-corrected molecule count. A barcode with no plausible parent is always kept.");
+
+    m.def(
+        "refine",
+        [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
+           bool use_quality, bool use_payload, int payload_width, double min_posterior,
+           int gzip_level) {
+            RefineRequest req;
+            req.input = input;
+            req.output_dir = out_dir;
+            req.sample_id = sample_id;
+            req.use_quality = use_quality;
+            req.use_payload = use_payload;
+            req.payload_width = payload_width;
+            req.correction.min_posterior = min_posterior;
+            req.gzip_level = gzip_level;
+            RefineStats st;
+            {
+                py::gil_scoped_release release;
+                st = refine(req);
+            }
+            py::dict d;
+            d["sample_id"] = st.sample_id;
+            d["reads"] = st.reads;
+            d["reads_without_umi"] = st.reads_without_umi;
+            d["barcodes"] = st.barcodes;
+            d["merged"] = st.merged;
+            d["merged_reads"] = st.merged_reads;
+            d["merged_by_payload"] = st.merged_by_payload;
+            d["molecules"] = st.molecules;
+            d["molecules_corrected"] = st.molecules_corrected;
+            d["estimated_error"] = st.estimated_error;
+            d["payload_clonality"] = st.payload_clonality;
+            d["saturated"] = st.saturated;
+            d["umi_length"] = st.umi_length;
+            d["table_bytes"] = st.table_bytes;
+            d["wall_seconds"] = st.wall_seconds;
+            d["peak_rss_bytes"] = peak_rss_bytes();
+            py::list hist;
+            for (size_t b = 0; b < st.size_histogram.size(); ++b) {
+                py::dict e;
+                e["min_reads"] = static_cast<uint64_t>(1) << b;
+                e["max_reads"] = (static_cast<uint64_t>(1) << (b + 1)) - 1;
+                e["molecules"] = st.size_histogram[b];
+                hist.append(e);
+            }
+            d["coverage"] = hist;
+            return d;
+        },
+        py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
+        py::arg("use_quality") = true, py::arg("use_payload") = true,
+        py::arg("payload_width") = 32, py::arg("min_posterior") = 0.95,
+        py::arg("gzip_level") = 6,
+        "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
+        "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
+        "correction can be audited.");
 
     m.def(
         "assemble",

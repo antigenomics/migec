@@ -212,8 +212,16 @@ correction is written up in `project/review-algorithms.md`.
 - ⚠ **At ~1 read/UMI, 80% of barcode errors are unfixable in principle** — the parent barcode was
   never sequenced, so there is nothing to merge into. Always report recall against that reachable
   ceiling; against all children it understates by 5x and looks like a bug.
-- Next: **M3** (`refine`), taking X3's permuted distance-1 background; then the M2 remainder
-  (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
+- **`migec refine` works (2026-08-13).** Barcode table, correction with all three evidence terms,
+  read rewrite with `OX:Z:` preserving the original, barcode table TSV. 20,055 molecules recovered
+  from 20,000 simulated, ε at 0.96x of injected. It holds the **table**, never the reads, and
+  streams three times.
+- ⚠ **Correction is not bucketable by a plain range partition.** The top b bits of the key decide
+  the bucket, so a substitution in the top b/2 positions sends a barcode and its neighbour to
+  different buckets and the pair can never be found. Two passes with the key rotated fixes it.
+  Until then the table is whole and its size is reported, as checkout does with its counters.
+- Next: M3's remainder (three error-rate estimators, the FDR number, cell calling), then the M2
+  remainder (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point

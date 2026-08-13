@@ -6,9 +6,8 @@ A complete C++20 rewrite of [MIGEC](https://doi.org/10.1038/nmeth.2960) (Shugay 
 Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shugay et al., *PLoS
 Computational Biology* 2017).
 
-> **Version 2 is under construction.** `checkout` and `assemble` work today — barcode extraction,
-> trimming, header transfer, the UMI statistics, and consensus assembly with a measured quality
-> cap. `refine` lands over the following milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
+> **Version 2 is under construction.** All three stages work today — `checkout`, `refine` and
+> `assemble`. Whitelists, dual-end barcodes and cell calling land over the following milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
 > at tag `v1-final` — Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
 
 ## Why
@@ -32,9 +31,9 @@ possible. The difficulty is entirely in the details:
 ## Pipeline
 
 ```
-FASTQ ──checkout──▶ .mig ──refine──▶ .mig + .pumi ──assemble──▶ consensus FASTQ
-          │                  │                                        │
-     suggest            QC tables, plots                     per-molecule tables
+FASTQ ──checkout──▶ tagged FASTQ ──refine──▶ corrected ──assemble──▶ consensus FASTQ
+          │                                 │                              │
+     suggest                       barcode table, QC              per-molecule tables
 ```
 
 Output is ordinary FASTQ with sample, cell barcode and UMI in the read name and in SAM-style tags,
@@ -93,6 +92,34 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
+
+### It corrects the barcodes, with the evidence that survives at one read
+
+```bash
+migec refine out/S1.fq.gz -o ref/
+```
+
+A barcode one substitution from another is either an error child of it or an independent molecule.
+The count ratio separates them on a deep amplicon and is worth **nothing** at 1–3 reads per UMI, so
+`refine` also uses the barcode's own base quality at the position that differs — `checkout` already
+writes it to `QX` — and **payload agreement**, since an error child is a read of the parent's
+molecule. Agreement is worth `log(1/clonality)`, and the clonality is measured rather than assumed:
+
+```
+barcodes    23,910 distinct
+  merged    3,855 (16.1%) into a parent, 3,889 reads moved
+molecules   20,055 after correction          <- 20,000 were simulated
+
+barcode error   2.87e-03 per base            <- 3.0e-03 injected
+clonality       0.0100 of random barcode pairs carry the same payload anyway
+                -- payload agreement is worth about 100x odds towards the same molecule here
+```
+
+⚠ At ~1 read per UMI **80% of barcode errors cannot be fixed by anyone** — the parent barcode was
+never sequenced. migec corrects a tenth of the rest and destroys no real molecule at any depth
+measured, which is the side to err on: a wrong merge deletes a molecule and nothing downstream can
+tell, while a missed correction only inflates a count. Every corrected read keeps what it was in an
+`OX:Z:` tag. See [docs/refine.rst](docs/refine.rst).
 
 ### It collapses each molecule, and caps what it claims
 

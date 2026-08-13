@@ -1,6 +1,6 @@
 # Roadmap
 
-**Implemented:** the `.mig` intermediate format (reader, writer, range partitioning, CRC-checked
+**`checkout`, `refine` and `assemble` all work.** **Implemented:** the `.mig` intermediate format (reader, writer, range partitioning, CRC-checked
 blocks, provenance and quality-calibration in the header), FASTQ IO for plain and gzipped input
 with strict validation, barcode packing/unpacking and the IUPAC/Phred primitives, the pybind11
 module, the read simulator with ground truth, CI (C++ on ubuntu+macos, Python 3.10/3.12 matrix,
@@ -128,7 +128,7 @@ scientific claim and is validated before any throughput work.
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
   threads ✅; >1 M reads/s at 16 threads ✅
 
-## M3 — `refine`
+## M3 — `refine` (the stage works; cell calling and the FDR threshold are open)
 
 **Measured before building** (`scripts/correction_accuracy.py`, 2026-08-13): the existing
 count-ratio correction works from **3.1 reads/UMI upward** (recall ≥0.8, precision ≥0.9) and
@@ -175,11 +175,20 @@ model has to use the evidence that survives at one read:
   sequenced — and of the rest migec fixes 11% while destroying no real molecule. Precision is the
   side to err on: a wrong merge deletes a molecule and nothing downstream can tell, a missed
   correction only inflates the count.
-- [ ] Barcode table, three error-rate estimators, sequencing vs quality-independent separation
+- [x] **`migec refine` works**: barcode table, correction, read rewrite with `OX:Z:` preserving
+      the original, `<sample>.barcodes.tsv`, coverage histogram after correction. Recovered 20,055
+      molecules from 20,000 simulated with ε at 0.96x of injected. Holds the table, never the
+      reads; three streaming passes
+- [ ] Three error-rate estimators, sequencing vs quality-independent separation
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`
-- [ ] MIG-size model and threshold at a target FDR; keep-orphan retention
+- [ ] MIG-size model and threshold at a target FDR; keep-orphan retention (orphans are already
+      kept unconditionally — nothing is thresholded — but the FDR *number* is not computed yet)
+- [ ] ⚠ **Bucketed correction.** A range partition on the top b bits splits a barcode from its
+      neighbour for the top b/2 positions, so correction cannot be bucketed naively. The fix is two
+      passes with the key rotated, so every pair shares a bucket in at least one. Until then the
+      table is held whole and its size is reported
 - [ ] Cell calling (OrdMag + knee), QC tables and plots
 - Gate: estimated ε within 20% of injected **at 1–3 reads/UMI, not only at 7**; ≥95% of no-parent
   3–5-read MIGs retained (already ≥99% at every depth measured)

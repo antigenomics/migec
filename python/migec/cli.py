@@ -125,9 +125,35 @@ def suggest(
 
 
 @app.command()
-def refine() -> None:
-    """Estimate error rates, correct barcodes, emit QC tables. (M3)"""
-    raise typer.Exit(_not_yet("refine", "M3"))
+def refine(
+    reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
+    out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
+    sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
+    min_posterior: float = typer.Option(
+        0.95,
+        "--min-posterior",
+        help="Posterior above which a barcode is folded into its parent. Raise it to correct "
+        "less: a wrong merge deletes a molecule and nothing downstream can tell, while a missed "
+        "correction only inflates a count.",
+    ),
+    no_quality: bool = typer.Option(
+        False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
+    ),
+    no_payload: bool = typer.Option(
+        False,
+        "--no-payload",
+        help="Ignore payload agreement. Both flags exist to measure what the count ratio alone "
+        "would have done, which is all the first version had.",
+    ),
+) -> None:
+    """Correct barcode errors and rewrite the reads with the corrected barcode."""
+    from migec.refine import format_report, run
+
+    summary = run(
+        reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
+        use_payload=not no_payload, min_posterior=min_posterior,
+    )
+    typer.echo(format_report(summary))
 
 
 @app.command()
