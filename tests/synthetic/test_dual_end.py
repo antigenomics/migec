@@ -84,3 +84,46 @@ def test_a_free_scan_correctly_refuses_a_five_base_handle(tmp_path):
     s = run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
             reads2=tmp_path / "r2.fq.gz")
     assert s["assigned"] == 0
+
+
+# ------------------------------------------------------- positional chemistries (10x)
+
+TENX = "X" * 16 + "N" * 10
+
+
+def test_a_positional_barcode_read_with_no_payload_is_not_dropped(tmp_path):
+    """10x: R1 is 26 nt of cell barcode and UMI and nothing else, R2 is the cDNA. Checking R1's
+    leftover length by itself drops 100% of a perfectly good library as 'too short'."""
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        rng = random.Random(0)
+        for i in range(500):
+            cb = "".join(rng.choice("ACGT") for _ in range(16))
+            umi = "".join(rng.choice("ACGT") for _ in range(10))
+            cdna = "".join(rng.choice("ACGT") for _ in range(90))
+            f1.write(f"@r{i}\n{cb}{umi}\n+\n{'I' * 26}\n")
+            f2.write(f"@r{i}\n{cdna}\n+\n{'I' * 90}\n")
+    (tmp_path / "bc.txt").write_text(f"P\t{TENX}\n")
+
+    s = run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz", max_offset=0)
+    assert s["assigned"] == 500
+    assert s["short_payload"] == 0
+    assert s["samples"][0]["umi_length"] == 10
+
+    # Both mates carry the tags, and the cell barcode is one of them.
+    with gzip.open(tmp_path / "out" / "P_R2.fq.gz", "rt") as fh:
+        header = fh.readline()
+    tags = dict(f.split(":Z:") for f in header.split() if ":Z:" in f)
+    assert len(tags["CB"]) == 16
+    assert len(tags["RX"]) == 10
+
+
+def test_a_positional_pattern_is_refused_by_a_free_scan(tmp_path):
+    """No anchor means nothing to search for. Saying so beats matching everywhere."""
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        f1.write(f"@r0\n{'A' * 26}\n+\n{'I' * 26}\n")
+        f2.write(f"@r0\n{'C' * 90}\n+\n{'I' * 90}\n")
+    (tmp_path / "bc.txt").write_text(f"P\t{TENX}\n")
+    with pytest.raises(RuntimeError, match="max_offset"):
+        run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz")

@@ -270,7 +270,11 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     if (params_.trim == TrimMode::kPattern) begin = static_cast<size_t>(m.payload_begin);
     if (begin > end) begin = end;
 
-    if (static_cast<int>(end - begin) < params_.min_payload) {
+    // The PAIR must carry payload, not this mate alone. On 10x the barcode read is 26 nt of cell
+    // barcode and UMI and nothing else, so trimming leaves R1 empty while R2 holds the whole
+    // cDNA -- checking R1 by itself drops 100% of a perfectly good library as "too short".
+    const size_t payload = (end - begin) + mate_seq.size();
+    if (static_cast<int>(payload) < params_.min_payload) {
         ++counters_.short_payload;
         return out;
     }

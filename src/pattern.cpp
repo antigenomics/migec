@@ -96,10 +96,14 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
         ++p.scored_;
     }
 
-    if (p.scored_ == 0) {
+    if (p.scored_ == 0 && p.umi_length_ == 0 && p.cell_length_ == 0) {
         throw MigecError("pattern: \"" + std::string(spec) +
-                         "\" has no scored position, so it matches everywhere");
+                         "\" scores nothing and captures nothing, so it does nothing");
     }
+    // A pattern with no scored position matches everywhere -- UNLESS the placement is fixed, and
+    // 10x is exactly that: 16 nt of cell barcode then 10 nt of UMI, with no constant sequence
+    // anywhere to anchor on. The chemistry does the placing, so the check belongs at match time
+    // where `max_offset` is known, not here where it is not.
     // Checked here rather than where the barcode is packed: pack_barcode runs on a worker thread
     // per read, and a pattern is compiled once, on the caller's thread, where the error is
     // attributable to the row of the barcode table that caused it.
@@ -140,6 +144,15 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
     size_t last_offset = seq.size() - plen;
     if (params.max_offset >= 0) {
         last_offset = std::min<size_t>(last_offset, static_cast<size_t>(params.max_offset));
+    }
+
+    // Nothing to score means nothing to search for: the pattern has to be placed by the chemistry
+    // or not at all. Refusing it here rather than in compile() is what lets a positional layout
+    // like 10x be expressed while a free scan of the same pattern still says why it cannot work.
+    if (scored_ == 0 && params.max_offset != 0) {
+        throw MigecError(
+            "pattern: \"" + spec_ + "\" has no scored position, so a scan cannot place it -- "
+            "run with max_offset = 0 if the barcode is at a fixed position, as it is on 10x");
     }
 
     const double min_score = params.min_score >= 0.0
@@ -210,9 +223,16 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
         }
     }
 
-    if (best_off < 0 || best < min_score) return out;
+    // A purely positional pattern scores 0 by construction -- there is nothing to score -- so the
+    // bar does not apply to it. The read is long enough and the placement is fixed; that is the
+    // whole of the evidence available, and demanding more would reject every 10x read.
+    const bool positional = scored_ == 0;
+    if (best_off < 0 || (!positional && best < min_score)) return out;
     const double margin = second <= -1e299 ? best : best - second;
-    if (margin < params.min_margin) return out;  // ambiguous placement
+    // The margin is about placement, and a positional pattern has only one place to be. Its score
+    // is 0 by construction, so demanding a margin over a runner-up that does not exist rejects
+    // every read of a chemistry that is never ambiguous.
+    if (!positional && margin < params.min_margin) return out;  // ambiguous placement
 
     out.found = true;
     out.offset = static_cast<int>(best_off);

@@ -26,7 +26,36 @@ TEST_CASE("pattern compiles the MIGEC dialect") {
 
     CHECK_THROWS_AS(BarcodePattern::compile(""), MigecError);
     CHECK_THROWS_AS(BarcodePattern::compile("ACGTZ"), MigecError);
-    CHECK_THROWS_AS(BarcodePattern::compile("NNNN"), MigecError);  // nothing to score
+    // Scores nothing AND captures nothing, so it does nothing.
+    CHECK_THROWS_AS(BarcodePattern::compile("...."), MigecError);
+}
+
+TEST_CASE("a positional pattern is legal, and only where the chemistry places it") {
+    // 10x: 16 nt of cell barcode then 10 nt of UMI, with no constant sequence anywhere. There is
+    // nothing to score, so it compiles -- and a free scan of it must still refuse, because
+    // "matches everywhere" is exactly what a pattern with no anchor does.
+    const BarcodePattern p = BarcodePattern::compile(std::string(16, 'X') + std::string(10, 'N'));
+    CHECK(p.cell_length() == 16);
+    CHECK(p.umi_length() == 10);
+    CHECK(p.scored_positions() == 0);
+
+    const std::string seq = "ACGTACGTACGTACGT" "TTTTTTTTTT" + std::string(80, 'G');
+    const std::string qual(seq.size(), char_from_phred(35));
+
+    MatchParams anchored;
+    anchored.max_offset = 0;
+    const PatternMatch m = p.match(seq, qual, anchored);
+    CHECK(m.found);
+    CHECK(m.cell == "ACGTACGTACGTACGT");
+    CHECK(m.umi == "TTTTTTTTTT");
+    CHECK(m.payload_begin == 26);
+
+    // A UMI-only positional chemistry is the same case with no cell barcode.
+    const BarcodePattern u = BarcodePattern::compile("NNNN");
+    CHECK(u.match("ACGT" + std::string(40, 'T'), "", anchored).umi == "ACGT");
+
+    MatchParams free_scan;
+    CHECK_THROWS_AS(p.match(seq, qual, free_scan), MigecError);
 }
 
 TEST_CASE("pattern extracts a non-contiguous UMI at the right offset") {
