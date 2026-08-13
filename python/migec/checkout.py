@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from migec import _core
-from migec.sheet import SampleRow, read_barcodes
+from migec.sheet import SampleRow, is_positional, read_barcodes
 
 
 def run(
@@ -23,12 +23,22 @@ def run(
     min_umi_quality: int = 0,
     write_unmatched: bool = False,
     threads: int = 0,
-    max_offset: int = -1,
+    max_offset: int | None = None,
 ) -> dict:
-    """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`."""
+    """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`.
+
+    `max_offset=None` picks it: a layout with nothing to score is anchored at the first base,
+    anything with an adapter to place it gets a free scan. Never guess the other way -- a free
+    scan over an unanchored pattern has no evidence to choose an offset with, and `compile()`
+    refuses it rather than picking one.
+    """
     rows: list[SampleRow] = read_barcodes(barcodes)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    if max_offset is None:
+        specs = [r.pattern for r in rows] + [r.slave for r in rows if r.slave]
+        max_offset = 0 if all(is_positional(s) for s in specs) else -1
 
     summary = _core.run_checkout(
         str(reads),

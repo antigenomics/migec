@@ -152,6 +152,28 @@ comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
 | Storage | Never: do not store simulated reads — record the exact command and seed here instead |
 | Provenance | derived (simulated) |
 
+### UMI RNA-seq — Fennell et al. / NCGR (Sci Rep 2018, doi:10.1038/s41598-018-31064-7)
+
+The layout behind the `smarter-umi` preset, and a worked example of why a deposited FASTQ has to be
+checked rather than assumed.
+
+| | |
+|---|---|
+| Pipeline | [`ncgr/UMI-analysis`](https://github.com/ncgr/UMI-analysis) — Perl/C, single-end plant scRNA-seq |
+| Layout | **10 nt inline UMI at the read start**, then the `GGG`/`GGGG` the Clontech SMARTer template switch leaves. Read off `fastq_qual_filter in.fq good.fq bad.fq log 30 0 10` (offset 0, length 10) and `fastq_umi_clipper`, which moves those 10 bases into the read header |
+| Accession | SRP150352, 20 single-end HiSeq 2000 runs, ENA `filereport?accession=SRP150352&result=read_run` |
+| Fetch | `curl -O https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR729/00<n>/<run>/<run>.fastq.gz` |
+| Provenance | experimental |
+
+**Never: the SRA copy cannot be reprocessed — the UMI is gone.** `fastq_umi_clipper` writes the UMI
+into the FASTQ *header*, and SRA rewrites headers to `@<run>.<n> <n>/1`, so it is discarded. The
+reads themselves are 36 nt with a flat base composition from cycle 0 (checked on SRR7295905,
+SRR7295928 and SRR7295906, 2026-08-13): no G enrichment at cycles 11-13, where the template-switch
+`GGG` would be if the 10 nt UMI were still in front of it. `migec suggest` says so unprompted —
+*"the only near-uniform run sits after the last constant sequence, with nothing to anchor it. That
+is what diverse payload looks like"* — which is the intended behaviour and is why the preset is
+documented from the pipeline's own source rather than fitted to this data.
+
 ## HuggingFace — `isalgo/umi_data`
 
 A git + git-lfs mirror at `~/hf/umi_data`, written by committing and pushing **in the mirror**,
@@ -161,17 +183,22 @@ mirror silently stale, and lands one commit per call. Note: The repo is **public
 ```
 umi_data/
   ci/            small slices for CI, subsampled by WHOLE barcodes (all reads of N barcodes)
-  results/       the derived tables behind every number the documentation quotes
+  README.md
   SOURCES.md     a copy of this file, plus a section on what is and is not shipped
 ```
+
+Never: **sequences and metadata only** — `.txt`, `.md`, `.tsv.gz`, `.json`, `.fastq.gz`, `.fa.gz`,
+`.sam`, `.bam`. No reports, figures, logs or pipeline output; a derived results table is *output*,
+not data, even when it is a TSV, and lives in this repo next to the script that made it. A
+`results/` directory was published there once and has been removed.
 
 Still to add: `truth/` (spike-in clonotypes) and `whitelists/` (10x barcode lists with their
 upstream and license), neither of which has been fetched yet.
 
 **Published at [huggingface.co/datasets/isalgo/umi_data](https://huggingface.co/datasets/isalgo/umi_data)**
-(2026-08-13): `ci/SRR1763769_umi0.5pct.fq.gz` (all reads of 0.5% of the barcodes, built with
-`migec subsample`) and `results/` (the derived tables behind every number the docs quote). Written
-through the local git+git-lfs mirror at `~/hf/umi_data`, never the HTTP API.
+(2026-08-13): `ci/SRR1763769_umi0.5pct.fq.gz` and `ci/sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz`, each
+all the reads of a fraction of the *barcodes*, built with `migec subsample`. Written through the
+local git+git-lfs mirror at `~/hf/umi_data`, never the HTTP API.
 
 Never: Not in this dataset: aldan3 Experiment 1 raw reads, and anything regenerable by a one-line
 command (record the command here instead of storing gigabytes in LFS).

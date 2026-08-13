@@ -36,16 +36,23 @@ def _():
         ```
 
         Only `checkout` needs to know anything about the platform, and it needs exactly one thing:
-        **where the barcode is**. There are three ways to say it, and they are equivalent.
+        **where the barcode is**. Four ways to say it, in the order to reach for them.
 
         | | what it looks like | when |
         |---|---|---|
-        | barcode table | `S1<TAB>aaACTcagtgg...NNNNtNNNNtNNNN` | many samples, one file - MIGEC's own format |
-        | `--bc-pattern` | `XXXXXXXXXXXXXXXXNNNNNNNNNN` | one sample, inline |
+        | a position | `^NNNNNNNN` or `0:8` | the primary mode - the barcode is at an offset |
+        | `--preset` | `10x-v2`, `tso500`, `duplex`, ... | a chemistry with a name |
         | `--read-structure` | `5M5S+T` | fgbio / Picard / TSO500 speak this |
+        | barcode table | `S1<TAB>aaACTcagtgg...NNNNtNNNNtNNNN` | many samples in one file |
 
         In a pattern: **`N`** is a UMI base, **`X`** a cell-barcode base, **uppercase** is matched
-        exactly, **lowercase** is the fuzzy adapter, **`.`** is skipped.
+        exactly, **lowercase** is the fuzzy adapter, **`.`** is skipped. Slices are half-open and
+        0-based like Python's, each a UMI slice unless prefixed `cell:`, so `0:8` is eight bases
+        and 10x is `cell:0:16,16:26`.
+
+        A leading `^`, a slice list and a read structure all **anchor the barcode at the first
+        base**. That used to be `--max-offset 0`, typed by hand, and forgetting it made 10x fail
+        with an error about anchoring. It is now automatic and the flag should not be passed.
 
         If you do not know the layout, do not guess:
 
@@ -109,16 +116,18 @@ def _(mo):
         ## 2. Droplet single-cell (10x)
 
         A cell barcode and a UMI, back to back, at the very start of R1 - and **no constant
-        sequence anywhere**. Nothing to search for, so the position is the placement:
+        sequence anywhere**. Nothing to search for, so the position is the placement. Three
+        spellings, all the same run:
 
         ```bash
-        migec checkout R1.fq.gz R2.fq.gz \\
-            --bc-pattern XXXXXXXXXXXXXXXXNNNNNNNNNN \\
-            --max-offset 0 -o co/
+        migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o co/
+        migec checkout R1.fq.gz R2.fq.gz --bc-pattern 'cell:0:16,16:26' -o co/
+        migec checkout R1.fq.gz R2.fq.gz --bc-pattern '^XXXXXXXXXXXXXXXXNNNNNNNNNN' -o co/
         ```
 
-        `--max-offset 0` is required, not a tuning knob. Without it a free scan is asked to place a
-        pattern with no anchor, and it refuses - correctly.
+        No `--max-offset`. A pattern with nothing to score is anchored at the first base for you,
+        because a free scan over it has no evidence to choose an offset with - and refuses,
+        correctly.
 
         Two things that catch people:
 
@@ -157,9 +166,9 @@ def _(mo, show):
         TSO500 carries a UMI on **both** mates, and the two halves are one molecule identifier:
 
         ```bash
+        migec checkout R1.fq.gz R2.fq.gz --preset tso500 -o co/
         migec checkout R1.fq.gz R2.fq.gz \\
-            --read-structure 5M5S+T --read-structure2 5M5S+T \\
-            --max-offset 0 -o co/
+            --read-structure 5M5S+T --read-structure2 5M5S+T -o co/
         ```
 
         That gives a 10 nt UMI, not two 5 nt ones. Accepting only the first mate would emit 5 nt
@@ -208,6 +217,40 @@ def _(mo):
 def _(mo):
     mo.md(
         """
+        ## 5. Bulk RNA-seq with an inline UMI
+
+        A 10 nt UMI at the start of a single-end read, then the `GGG` a SMARTer template switch
+        leaves behind:
+
+        ```bash
+        migec checkout reads.fq.gz --preset smarter-umi -o co/
+        ```
+
+        The `GGG` is scored, so it is a real anchor rather than decoration - if it is missing the
+        read did not template-switch and the barcode is not where it is claimed to be.
+
+        Warning: check the deposited FASTQ before assuming the UMI is in it. The pipeline this
+        layout comes from (`ncgr/UMI-analysis`, SRP150352) moves the UMI **into the read header**,
+        and SRA rewrites headers, so the archived copy has no UMI anywhere. `migec suggest` says so
+        rather than guessing:
+
+        ```
+        warning: the only near-uniform run sits after the last constant sequence, with nothing to
+          anchor it. That is what diverse payload looks like.
+        ```
+
+        ## 6. Duplex sequencing
+
+        A 12 nt UMI and a 5 nt fixed spacer on **both** mates, 24 nt of identifier together:
+
+        ```bash
+        migec checkout R1.fq.gz R2.fq.gz --preset duplex -o co/
+        ```
+
+        Warning: this extracts the tags and emits **single-strand** consensuses. Pairing a
+        molecule's two strands into a duplex consensus is not implemented, so no duplex error rate
+        may be quoted from this output.
+
         ## Run one, end to end
 
         The fixtures below come from
@@ -290,8 +333,28 @@ def _(assemble_run, fixture, mo, refine_run, work):
 def _(mo):
     mo.md(
         """
+        ## Then what?
+
+        The consensus is ordinary FASTQ, and the molecule identity is carried twice: in the read
+        **name** (`<sample>.<cell>.<umi>`, for tools that drop FASTQ comments) and in tab-separated
+        **SAM tags** (`RX QX CB CY BC MI cD`, for tools that keep them).
+
+        ```bash
+        minimap2 -ax sr -y ref.fa cons/S1.consensus.fq.gz | samtools sort -o S1.bam
+        bwa mem -C     ref.fa cons/S1.consensus.fq.gz     | samtools sort -o S1.bam
+        arda amplicon --r1 cons/S1.consensus.fq.gz -p S1  # sequence_id IS the molecule id
+        salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/
+        ```
+
+        Warning: do **not** run alevin, bustools or STARsolo on a consensus FASTQ. They read the
+        barcode out of a raw barcode read and deduplicate themselves - migec already did, and that
+        read no longer exists. One consensus is one molecule, so a plain quantifier's count already
+        is a molecule count. See `docs/downstream.rst`, where each of these was run.
+
         ## Where to look next
 
+        - **[`docs/layouts.rst`](../docs/layouts.rst)** - every way to say where the barcode is
+        - **[`docs/downstream.rst`](../docs/downstream.rst)** - what each aligner and quantifier did
         - **[`docs/checkout.rst`](../docs/checkout.rst)** - the pattern grammar, dual-end barcodes,
           and what the reported Phred is actually worth
         - **[`docs/refine.rst`](../docs/refine.rst)** - what evidence correction uses, and where it

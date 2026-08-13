@@ -152,10 +152,11 @@ def test_describe_rejects_a_pattern_the_grammar_does_not_accept(tmp_path):
     rows = read_barcodes(sheet(tmp_path, "S1\tACGTNNNN\tAGTC?NNN\n"))
     with pytest.raises(ValueError, match="S1:"):
         describe(rows)
-    # A pattern with no scored position matches everywhere and is refused by the compiler.
+    # A pattern with no scored position has nowhere to be scanned for -- but it does not need to
+    # be, because it is positional, so `describe` matches it the way a run would: anchored.
+    # Refusing it here is what used to force `--max-offset 0` into every 10x command line.
     rows = read_barcodes(sheet(tmp_path, "S1\tNNNN\n"))
-    with pytest.raises(ValueError, match="S1:"):
-        describe(rows)
+    assert "umi=4" in describe(rows)
 
 
 # ------------------------------------------------------- inline patterns (umi_tools style)
@@ -257,7 +258,113 @@ def test_tso500_read_structure_end_to_end(tmp_path):
 def test_read_structure_and_bc_pattern_are_exclusive(tmp_path):
     r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure", "5M5S+T",
                             "--bc-pattern", "NNNNN", "-o", str(tmp_path / "o")])
-    assert r.exit_code != 0 and "not both" in clean(r.output)
+    assert r.exit_code != 0 and "exactly one of" in clean(r.output)
     r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure2", "5M5S+T",
                             "-o", str(tmp_path / "o")])
     assert r.exit_code != 0 and "needs --read-structure" in clean(r.output)
+
+
+# ------------------------------------------------------------------ positional layouts
+
+def test_the_two_positional_spellings_agree():
+    """`^NNNN...` and a slice list must compile to the same pattern, or the docs lie."""
+    from migec.sheet import parse_layout
+
+    assert parse_layout("^NNNNNNNN") == ("NNNNNNNN", True)
+    assert parse_layout("0:8") == ("NNNNNNNN", True)
+    assert parse_layout("0:4,5:10") == ("NNNN.NNNNN", True)
+    assert parse_layout("cell:0:16,16:26") == ("X" * 16 + "N" * 10, True)
+
+
+def test_a_pattern_with_an_anchor_is_not_anchored_by_default():
+    """An adapter places the pattern, so the scan stays free -- that is the whole point of it."""
+    from migec.sheet import parse_layout
+
+    assert parse_layout("NNNNcagtggtatcaacgcagagt") == ("NNNNcagtggtatcaacgcagagt", False)
+
+
+def test_half_open_slices_are_rejected_when_empty_or_out_of_order():
+    from migec.sheet import parse_layout
+
+    for bad in ("0:0", "5:2"):
+        with pytest.raises(ValueError, match="half-open"):
+            parse_layout(bad)
+    with pytest.raises(ValueError, match="before the previous slice"):
+        parse_layout("0:8,4:12")
+    with pytest.raises(ValueError, match="not a slice"):
+        parse_layout("0:4,junk")
+
+
+def test_is_positional_only_when_nothing_can_be_scored():
+    from migec.sheet import is_positional
+
+    assert is_positional("NNNNXXXX...")
+    assert not is_positional("NNNNcagt")
+    assert not is_positional("NNNNNGGG")
+
+
+def test_every_preset_compiles_and_is_described():
+    """A preset nobody can run is worse than no preset: it looks supported."""
+    from migec.sheet import PRESETS, SampleRow, describe, parse_layout, preset
+
+    for name in PRESETS:
+        master, slave = preset(name)
+        pattern, _ = parse_layout(master)
+        rows = [SampleRow(name, pattern, parse_layout(slave)[0] if slave else None)]
+        assert describe(rows)          # compiles both halves, or raises
+        assert "N" in pattern          # every layout captures a UMI
+
+
+def test_an_unknown_preset_lists_the_real_ones():
+    from migec.sheet import PRESETS, preset
+
+    with pytest.raises(ValueError) as exc:
+        preset("nope")
+    for name in PRESETS:
+        assert name in str(exc.value)
+
+
+def test_positional_needs_no_max_offset_on_the_command_line(tmp_path):
+    """The regression this exists for: `--preset 10x-v2` used to need `--max-offset 0` spelled out,
+    and without it checkout refused every read with an error about anchoring."""
+    import gzip
+    import random
+
+    rng = random.Random(3)
+    r1, r2 = tmp_path / "r1.fq.gz", tmp_path / "r2.fq.gz"
+    with gzip.open(r1, "wt") as f1, gzip.open(r2, "wt") as f2:
+        for c in range(5):
+            cb = "".join(rng.choice("ACGT") for _ in range(16))
+            for m in range(4):
+                umi = "".join(rng.choice("ACGT") for _ in range(10))
+                pay = "".join(rng.choice("ACGT") for _ in range(50))
+                for r in range(3):
+                    f1.write(f"@c{c}m{m}r{r}\n{cb}{umi}\n+\n{'I' * 26}\n")
+                    f2.write(f"@c{c}m{m}r{r}\n{pay}\n+\n{'I' * 50}\n")
+
+    for spec in (["--preset", "10x-v2"],
+                 ["--bc-pattern", "cell:0:16,16:26"],
+                 ["--bc-pattern", "^" + "X" * 16 + "N" * 10],
+                 ["--read-structure", "16B10M+T"]):
+        out = tmp_path / ("co" + spec[-1][:6].replace(":", "_"))
+        result = runner.invoke(app, ["checkout", str(r1), str(r2), *spec, "-o", str(out)])
+        assert result.exit_code == 0, clean(result.output)
+        # 5 cells x 4 molecules, all of them found -- the number is the point, not that it ran.
+        assert "20" in clean(result.output)
+
+
+def test_giving_two_layouts_at_once_is_refused(tmp_path):
+    result = runner.invoke(
+        app, ["checkout", "x.fq", "--preset", "10x", "--bc-pattern", "0:8", "-o", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "exactly one of" in clean(result.output)
+
+
+def test_sheet_presets_lists_them():
+    from migec.sheet import PRESETS
+
+    result = runner.invoke(app, ["sheet", "--presets"])
+    assert result.exit_code == 0
+    for name in PRESETS:
+        assert name in result.output

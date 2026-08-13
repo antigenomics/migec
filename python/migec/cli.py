@@ -53,11 +53,18 @@ def checkout(
     bc_pattern: Optional[str] = typer.Option(
         None,
         "--bc-pattern",
-        help="One pattern for one sample, inline, instead of a barcode table -- which is what a "
-        "positional chemistry needs and what umi_tools, umitools and mgatk all take. "
-        "`N` is a UMI position, `X` a cell barcode position: 10x 5' is "
-        "XXXXXXXXXXXXXXXXNNNNNNNNNN with --max-offset 0. Note: umi_tools writes the cell barcode as "
-        "`C`, which is cytosine here -- see the error you get if you paste one.",
+        help="Where the barcode is, for one sample, inline. Two spellings: a PATTERN, where `N` is "
+        "a UMI base and `X` a cell barcode base -- `^NNNNNNNN`, `^NNNNXNNN` -- or a half-open "
+        "SLICE list, `0:8` or `0:4,5:10` or `cell:0:16,16:26`. A leading `^`, and any slice list, "
+        "anchors the barcode at the first base and needs no --max-offset. Note: umi_tools writes "
+        "the cell barcode as `C`, which is cytosine here -- see the error you get if you paste one.",
+    ),
+    preset: Optional[str] = typer.Option(
+        None,
+        "--preset",
+        help="A named layout instead of a pattern: umi, migec, primerid, duplex, 10x, 10x-v2, "
+        "tso500, smarter-umi. `migec sheet --presets` prints each one with what it is and where "
+        "the layout is written down.",
     ),
     read_structure: Optional[str] = typer.Option(
         None,
@@ -94,12 +101,13 @@ def checkout(
         help="Drop reads whose worst UMI base is below this Phred. 0 (default) keeps everything: "
         "a low-quality UMI base is a reason to be less certain, not to discard the molecule.",
     ),
-    max_offset: int = typer.Option(
-        -1,
+    max_offset: Optional[int] = typer.Option(
+        None,
         "--max-offset",
-        help="Where the pattern may start. -1 scans the whole read; 0 anchors it at the first "
-        "base. Positional chemistries need 0 -- a short anchor like a 5 nt dual-end handle occurs "
-        "by chance every kilobase, so a free scan cannot place it and correctly refuses to.",
+        help="Where the pattern may start. Default is automatic: a layout with nothing to score "
+        "is anchored at the first base (0), anything with an adapter to place it gets a free scan "
+        "(-1). Set it only to override that. A short anchor like a 5 nt dual-end handle occurs by "
+        "chance every kilobase, so a free scan cannot place it and correctly refuses to.",
     ),
     write_unmatched: bool = typer.Option(
         False, "--write-unmatched", help="Also write reads that matched no pattern."
@@ -110,24 +118,45 @@ def checkout(
 
     if trim not in ("pattern", "none"):
         raise typer.BadParameter("--trim must be 'pattern' or 'none'")
-    from migec.sheet import from_read_structure
+    from migec.sheet import from_read_structure, parse_layout
 
-    if read_structure is not None:
-        if bc_pattern is not None:
-            raise typer.BadParameter("give --bc-pattern or --read-structure, not both")
-        try:
+    # Checked first: the second mate's structure alone is a truncated command, and saying "give
+    # exactly one of four things" to someone who gave one of them is an unhelpful place to land.
+    if read_structure2 is not None and read_structure is None:
+        raise typer.BadParameter("--read-structure2 needs --read-structure")
+    given = [n for n, v in (("--barcodes", barcodes), ("--bc-pattern", bc_pattern),
+                            ("--read-structure", read_structure), ("--preset", preset)) if v]
+    if len(given) != 1:
+        raise typer.BadParameter(
+            "give exactly one of --barcodes, --bc-pattern, --read-structure and --preset"
+            + (f" (got {', '.join(given)})" if given else "")
+        )
+
+    slave, anchored = None, False
+    try:
+        if preset is not None:
+            from migec.sheet import preset as lookup
+
+            bc_pattern, slave_spec = lookup(preset)
+            if slave_spec:
+                slave, anchored = parse_layout(slave_spec)
+        if read_structure is not None:
+            # A read structure is positional by definition -- every count is measured from the
+            # first base -- so it carries its own anchor and never needs --max-offset spelled out.
             bc_pattern = from_read_structure(read_structure)
             slave = from_read_structure(read_structure2) if read_structure2 else None
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-    else:
-        slave = None
-        if read_structure2 is not None:
-            raise typer.BadParameter("--read-structure2 needs --read-structure")
-    if (barcodes is None) == (bc_pattern is None):
-        raise typer.BadParameter(
-            "give exactly one of --barcodes, --bc-pattern and --read-structure"
-        )
+            anchored = True
+        if bc_pattern is not None:
+            bc_pattern, master_anchored = parse_layout(bc_pattern)
+            anchored = anchored or master_anchored
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    # A caret, a slice list or a read structure all say the same thing: the barcode is AT a
+    # position, so there is nothing to scan for. Spelling `--max-offset 0` after that is
+    # boilerplate the user cannot get right without knowing why it exists.
+    if max_offset is None and anchored:
+        max_offset = 0
     if bc_pattern is not None:
         barcodes = _inline_sheet(bc_pattern, sample_id, out_dir, slave)
     summary = run(
@@ -147,11 +176,19 @@ def checkout(
 
 @app.command()
 def sheet(
-    barcodes: Path = typer.Argument(..., help="MIGEC-style barcode table to inspect."),
+    barcodes: Optional[Path] = typer.Argument(None, help="MIGEC-style barcode table to inspect."),
+    presets: bool = typer.Option(
+        False, "--presets", help="List the named layouts instead, and where each one is from."
+    ),
 ) -> None:
     """Show what each row of a barcode table will extract, without running anything."""
-    from migec.sheet import describe, read_barcodes
+    from migec.sheet import describe, format_presets, read_barcodes
 
+    if presets:
+        typer.echo(format_presets())
+        return
+    if barcodes is None:
+        raise typer.BadParameter("give a barcode table, or --presets to list the named layouts")
     typer.echo(describe(read_barcodes(barcodes)))
 
 

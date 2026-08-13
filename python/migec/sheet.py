@@ -22,6 +22,7 @@ how a sample sequenced with more than one tag is declared.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,7 +83,12 @@ def describe(rows: list[SampleRow]) -> str:
         for spec in (r.pattern, r.slave):
             if spec:
                 try:
-                    _core.match_pattern(spec, "A" * (len(spec) + 1))
+                    # A positional pattern has nothing to score, so it must be matched the way it
+                    # will be run -- anchored. Compiling it against a free scan raises the very
+                    # error the anchor exists to avoid.
+                    _core.match_pattern(
+                        spec, "A" * (len(spec) + 1), max_offset=0 if is_positional(spec) else -1
+                    )
                 except RuntimeError as exc:
                     raise ValueError(f"{r.sample_id}: {exc}") from exc
         umi = sum(1 for c in r.pattern if c in "Nn")
@@ -103,8 +109,163 @@ def describe(rows: list[SampleRow]) -> str:
     return "\n".join(out)
 
 
+# --------------------------------------------------------------------------------------------
+# Positional layouts: the primary way to say where a barcode is.
+#
+# Most libraries put the barcode at a fixed offset in one read and have no constant sequence to
+# anchor on. Two spellings, both anchored at the first base by construction:
+#
+#     ^NNNNNNNN          a pattern, pinned to position 0 by the leading caret
+#     ^NNNNXXXXXXXX      N is a UMI base, X a cell barcode base
+#     0:8                a half-open slice, the same 8 nt UMI
+#     0:4,5:10           two slices: a 9 nt UMI split by one skipped base
+#     cell:0:16,16:26    10x -- a 16 nt cell barcode then a 10 nt UMI
+#
+# Slices are half-open like Python's, which is the convention every downstream tool's docs use;
+# `0:8` is eight bases and the next slice may start at 8. Gaps between slices become `.` (skipped,
+# neither scored nor captured), which is exactly what a spacer is.
+
+_SLICE = re.compile(r"^(?:(umi|cell):)?(\d+):(\d+)$")
+
+
+def _from_slices(spec: str) -> str:
+    """Translate `0:4,5:10` (or `cell:0:16,16:26`) into a pattern."""
+    out: list[str] = []
+    pos = 0
+    for part in spec.split(","):
+        m = _SLICE.match(part.strip())
+        if not m:
+            raise ValueError(
+                f"{part.strip()!r} is not a slice -- expected START:STOP, half-open and 0-based, "
+                f"optionally prefixed `umi:` or `cell:` (default umi). A 10 nt UMI at the read "
+                f"start is `0:10`; 10x is `cell:0:16,16:26`."
+            )
+        kind, start, stop = m.group(1) or "umi", int(m.group(2)), int(m.group(3))
+        if stop <= start:
+            raise ValueError(
+                f"{part.strip()!r}: slices are half-open, so STOP must exceed START -- "
+                f"a 4 nt barcode at the read start is `0:4`, not `0:3`."
+            )
+        if start < pos:
+            raise ValueError(
+                f"{part.strip()!r} starts before the previous slice ended ({pos}). Slices must be "
+                f"in increasing order and must not overlap: one base belongs to one barcode."
+            )
+        out.append("." * (start - pos))
+        out.append(("N" if kind == "umi" else "X") * (stop - start))
+        pos = stop
+    return "".join(out)
+
+
+def parse_layout(spec: str) -> tuple[str, bool]:
+    """Translate a layout spec into `(pattern, anchored)`.
+
+    `anchored` is True when the layout fixes the barcode at the first base, which is what
+    `--max-offset 0` means. A caret says so explicitly; a slice list says so by construction,
+    because a position is only a position if it is measured from somewhere.
+    """
+    text = spec.strip()
+    anchored = text.startswith("^")
+    if anchored:
+        text = text[1:].strip()
+    if not text:
+        raise ValueError("empty layout")
+    # A colon is not in the pattern grammar, so its presence is unambiguous.
+    if ":" in text:
+        return _from_slices(text), True
+    return text, anchored
+
+
+def is_positional(pattern: str) -> bool:
+    """True when nothing in the pattern can be scored, so there is nothing to anchor a scan on.
+
+    A free scan over such a pattern has no evidence to choose an offset with and `compile()`
+    refuses it. That refusal is correct, so the offset is settled here instead of asking the user
+    to pair every positional layout with `--max-offset 0` by hand.
+    """
+    return all(c in "NnXx." for c in pattern) and pattern != ""
+
+
+# Layouts that come up often enough to be worth a name. Each is a real, published chemistry; the
+# `source` is where the layout is written down, so a wrong one is falsifiable rather than folklore.
+PRESETS: dict[str, tuple[str, str | None, str]] = {
+    # name:          (master pattern,            slave pattern, description)
+    "umi": (
+        "^NNNNNNNN",
+        None,
+        "generic inline UMI, 8 nt at the start of the read. Change the run length to match yours "
+        "or write the slice, `0:12`.",
+    ),
+    "migec": (
+        "cagtggtatcaacgcagagtNNNNtNNNNtNNNN",
+        None,
+        "MIGEC 5'-RACE RepSeq: the SMART adapter then a 12 nt UMI split by two spacer bases. "
+        "Source: misc/barcodes.txt of MIGEC 1.2.9 (tag v1-final). Prefix a sample tag such as "
+        "`aaACT` per row to demultiplex.",
+    ),
+    "primerid": (
+        "NNNNNNNNNcagtttaacttttgggccatcca",
+        None,
+        "HIV-1 Primer ID amplicon as used by MAGERI: a 9 nt UMI ahead of the gene-specific primer. "
+        "Source: recovered by `migec suggest` from SRR1763769; the primer places it, so the scan "
+        "stays free.",
+    ),
+    "duplex": (
+        "^NNNNNNNNNNNN.....",
+        "^NNNNNNNNNNNN.....",
+        "Duplex sequencing (Schmitt/Kennedy): a 12 nt UMI and a 5 nt fixed spacer on BOTH mates. "
+        "The two halves concatenate into one 24 nt strand-aware identifier. Warning: migec emits "
+        "single-strand consensuses; pairing the two strands into a duplex consensus is not "
+        "implemented, so do not quote a duplex error rate from this.",
+    ),
+    "10x": (
+        "^XXXXXXXXXXXXXXXXNNNNNNNNNNNN",
+        None,
+        "10x Chromium 3' v3/v3.1: 16 nt cell barcode then a 12 nt UMI on R1. Run the later stages "
+        "on R2 -- R1 is barcode and nothing else.",
+    ),
+    "10x-v2": (
+        "^XXXXXXXXXXXXXXXXNNNNNNNNNN",
+        None,
+        "10x Chromium 3' v2 and 5' v1/v2: 16 nt cell barcode then a 10 nt UMI on R1.",
+    ),
+    "tso500": (
+        "^NNNNN.....",
+        "^NNNNN.....",
+        "Illumina TSO500 ctDNA: a 5 nt UMI and a 5 nt spacer on both mates, giving a 10 nt "
+        "identifier. Same as the fgbio read structure `5M5S+T` on each mate.",
+    ),
+    "smarter-umi": (
+        "^NNNNNNNNNNGGG",
+        None,
+        "SMARTer template-switching RNA-seq with a 10 nt inline UMI, then the GGG the template "
+        "switch leaves behind. Source: ncgr/UMI-analysis, `fastq_qual_filter ... 0 10`.",
+    ),
+}
+
+
+def preset(name: str) -> tuple[str, str | None]:
+    """Look up a named layout. Raises ValueError listing every preset when the name is unknown."""
+    key = name.strip().lower()
+    if key not in PRESETS:
+        listed = "\n".join(f"  {n:<12} {PRESETS[n][0]}" for n in PRESETS)
+        raise ValueError(f"unknown preset {name!r}. Available:\n{listed}")
+    master, slave, _ = PRESETS[key]
+    return master, slave
+
+
+def format_presets() -> str:
+    """The preset table, for `migec sheet --presets` and the docs."""
+    out = []
+    for name, (master, slave, description) in PRESETS.items():
+        out.append(f"{name}")
+        out.append(f"    pattern  {master}" + (f"    slave  {slave}" if slave else ""))
+        out.append(f"    {description}")
+    return "\n".join(out)
+
+
 # fgbio/Picard read-structure syntax, which is what TSO500, fgbio and samtools all speak.
-_SEGMENT = __import__("re").compile(r"(\d+|\+)([MBTS])")
+_SEGMENT = re.compile(r"(\d+|\+)([MBTS])")
 
 
 def from_read_structure(structure: str) -> str:

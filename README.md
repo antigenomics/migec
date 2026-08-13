@@ -1,5 +1,14 @@
 # migec
 
+<p align="center">
+  <a href="https://pypi.org/project/migec/"><img alt="PyPI" src="https://img.shields.io/pypi/v/migec"></a>
+  <a href="https://github.com/antigenomics/migec/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/migec/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://docs.isalgo.dev/migec/"><img alt="docs" src="https://github.com/antigenomics/migec/actions/workflows/docs.yml/badge.svg"></a>
+  <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
+  <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-blue">
+  <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
+</p>
+
 **UMI barcode extraction, correction and consensus assembly for barcoded sequencing data.**
 
 A complete C++20 rewrite of [MIGEC](https://doi.org/10.1038/nmeth.2960) (Shugay et al., *Nature
@@ -52,18 +61,60 @@ Wheels for CPython 3.10–3.13 on Linux x86-64 and macOS arm64. From source: `ba
 
 ## Usage
 
-Barcode tables are MIGEC's, read verbatim — uppercase is matched exactly (IUPAC degeneracy
-allowed), lowercase is the fuzzy adapter region, `N` marks a UMI position, and UMI runs need not be
-contiguous:
+There is exactly one thing migec has to be told: **where the barcode is**. Most libraries put it at
+a fixed offset in one read, so that is the primary way to say it — a position, no sheet, no anchor:
+
+```bash
+migec checkout reads.fq.gz --bc-pattern '^NNNNNNNN'  -o out/    # 8 nt UMI at the read start
+migec checkout reads.fq.gz --bc-pattern '0:8'        -o out/    # the same, as a half-open slice
+migec checkout reads.fq.gz --bc-pattern '0:4,5:10'   -o out/    # 9 nt UMI split by one spacer base
+migec checkout R1.fq.gz R2.fq.gz --bc-pattern 'cell:0:16,16:26' -o out/     # 10x
+migec checkout R1.fq.gz R2.fq.gz --bc-pattern '^XXXXXXXXXXXXXXXXNNNNNNNNNN' -o out/   # the same
+```
+
+`N` is a UMI base, `X` a cell-barcode base, and slices are half-open and 0-based like Python's, so
+`0:8` is eight bases and the next slice may start at 8. A leading `^` — and every slice list, since
+a position is only a position if it is measured from somewhere — **anchors the barcode at the first
+base**, which is what `--max-offset 0` used to have to say by hand. Getting that wrong is not a
+tuning mistake: a layout with no constant sequence gives a free scan no evidence to choose an
+offset with, and migec refuses rather than picking one.
+
+Or name the chemistry (`migec sheet --presets` prints all of them, and where each layout is
+written down):
+
+| preset | layout | |
+|---|---|---|
+| `umi` | `^NNNNNNNN` | generic inline UMI |
+| `migec` | `cagtggtatcaacgcagagtNNNNtNNNNtNNNN` | MIGEC 5'-RACE RepSeq |
+| `primerid` | `NNNNNNNNNcagtttaacttttgggccatcca` | HIV-1 Primer ID, as used by MAGERI |
+| `duplex` | `^NNNNNNNNNNNN.....` on both mates | duplex sequencing |
+| `10x` | `^XXXXXXXXXXXXXXXXNNNNNNNNNNNN` | 10x Chromium 3' v3 |
+| `10x-v2` | `^XXXXXXXXXXXXXXXXNNNNNNNNNN` | 10x Chromium 3' v2 and 5' |
+| `tso500` | `^NNNNN.....` on both mates | Illumina TSO500 ctDNA |
+| `smarter-umi` | `^NNNNNNNNNNGGG` | SMARTer template-switching RNA-seq |
+
+```bash
+migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
+```
+
+fgbio, Picard, samtools and TSO500 write the same thing as a *read structure*, taken verbatim:
+
+```bash
+migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T --read-structure2 5M5S+T -o out/
+```
+
+### Many samples in one file
+
+Then it is a barcode table — MIGEC's, read verbatim. Uppercase is matched exactly (IUPAC degeneracy
+allowed), lowercase is the fuzzy adapter region, and UMI runs need not be contiguous:
 
 ```
 S1	aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 S2	aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 ```
 
-`X` is a cell-barcode position, captured separately from the UMI. Column 3 is MIGEC's *slave*
-pattern — a second pattern on the other mate whose captured positions **extend** the UMI, which is
-how a 24 nt dual-end barcode is declared:
+Column 3 is MIGEC's *slave* pattern — a second pattern on the other mate whose captured positions
+**extend** the UMI, which is how a 24 nt dual-end barcode is declared:
 
 ```
 S1	NNNNNNNNNNNNtgact	agtcaNNNNNNNNNNNN
@@ -108,26 +159,12 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
 
-### Positional chemistries, and one pattern instead of a sheet
+Note: `umi_tools` spells a cell barcode `C`, which is **cytosine** here; pasting one is refused with
+the translation rather than compiled into a pattern that matches nothing. And on a barcode-only
+read — 10x R1 is 26 nt of barcode and nothing else — `refine` and `assemble` take **R2**.
 
-10x, dual-end and any other layout where the chemistry fixes the barcode's position needs no
-barcode table and no anchor:
-
-```bash
-migec checkout R1.fq.gz R2.fq.gz --bc-pattern XXXXXXXXXXXXXXXXNNNNNNNNNN --max-offset 0 -o co/
-```
-
-`X` is a cell-barcode position, `N` a UMI position — the interface `umi_tools`, `umitools` and
-`mgatk` all take. Note: `umi_tools` spells a cell barcode `C`, which is **cytosine** here; pasting one
-is refused with the translation rather than compiled into a pattern that matches nothing.
-
-`--max-offset 0` is not a convenience. A 10x barcode has no constant sequence anywhere, so a free
-scan cannot place it and correctly refuses; anchored, the placement is the chemistry's and the bar
-does not apply. On `sc5p_v2_hs_PBMC_1k` VDJ-T: **100% of 3,155,166 reads assigned**, 221,024
-barcodes at 14.28 reads each, 813 cells called.
-
-Note: On such a chemistry `refine` and `assemble` take **R2**: the barcode read is 26 nt and nothing
-else, so R1 has no payload at all.
+On `sc5p_v2_hs_PBMC_1k` VDJ-T: **100% of 3,155,166 reads assigned**, 221,024 barcodes at 14.28
+reads each, 813 cells called.
 
 ### It corrects the barcodes, with the evidence that survives at one read
 

@@ -47,12 +47,18 @@ process MIGEC {
     // nextflow.config was not includeConfig'd -- a bare read emits "Access to undefined
     // parameter" on every one, which is a WARN normally and a hard failure under strict mode.
     def pattern  = meta.bc_pattern ?: params.getOrDefault('migec_bc_pattern', null)
+    def preset   = meta.preset ?: params.getOrDefault('migec_preset', null)
     def rs       = meta.read_structure ?: params.getOrDefault('migec_read_structure', null)
     def rs2      = meta.read_structure2 ?: params.getOrDefault('migec_read_structure2', null)
-    def layout   = rs ? "--read-structure '${rs}'" + (rs2 ? " --read-structure2 '${rs2}'" : '')
-                      : "--bc-pattern '${pattern}'"
-    def offset   = meta.max_offset != null ? meta.max_offset
-                                           : params.getOrDefault('migec_max_offset', -1)
+    def layout   = preset ? "--preset '${preset}'"
+                 : rs     ? "--read-structure '${rs}'" + (rs2 ? " --read-structure2 '${rs2}'" : '')
+                          : "--bc-pattern '${pattern}'"
+    // Passed only when set. The default is automatic -- a caret, a slice list, a read structure or
+    // a pattern with nothing to score all anchor at the first base -- and passing -1 anyway
+    // reinstates the failure the anchor exists to avoid.
+    def maxoff   = meta.max_offset != null ? meta.max_offset
+                                           : params.getOrDefault('migec_max_offset', null)
+    def offset   = maxoff != null ? "--max-offset ${maxoff}" : ''
     def payload  = meta.payload_mate ?: params.getOrDefault('migec_payload_mate', 1)
     def cells    = params.getOrDefault('migec_expect_cells', 3000)
     def rt       = params.getOrDefault('migec_rt_error', 1e-4)
@@ -66,7 +72,7 @@ process MIGEC {
     migec checkout ${r1} ${r2} \\
         ${layout} \\
         --sample ${prefix} \\
-        --max-offset ${offset} \\
+        ${offset} \\
         --threads ${task.cpus} \\
         ${params.getOrDefault('migec_checkout_args', '')} \\
         -o co/

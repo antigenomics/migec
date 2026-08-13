@@ -39,15 +39,29 @@ Pipeline
          suggest              QC tables, plots                    per-molecule tables
 
 The output is ordinary FASTQ with the sample, cell barcode and UMI in the read name and in
-SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
+SAM-style tags, so ``minimap2``, ``bwa``, ``arda``, ``salmon`` and ``kallisto`` consume it
+directly -- see :doc:`downstream`, where each of those was run against it.
+
+The only thing that changes between platforms is **where the barcode is**, and the primary way to
+say that is a position:
+
+.. code-block:: bash
+
+    migec checkout reads.fq.gz --bc-pattern '^NNNNNNNN' -o out/
+    migec checkout reads.fq.gz --bc-pattern '0:8'       -o out/
+    migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2    -o out/
+
+See :doc:`layouts` for the presets, the slice grammar, fgbio read structures and barcode tables.
 
 .. toctree::
    :maxdepth: 2
 
    installation
    examples
+   layouts
    suggest
    checkout
+   downstream
    refine
    assemble
    subsample

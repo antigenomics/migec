@@ -273,6 +273,24 @@ correction is written up in `project/review-algorithms.md`.
   (SRR1763769 = HXB2 2,328-2,595, minus strand, protease/RT), the barcode's own PWM, flowcell
   coordinates and the i7xi5 table when the headers carry them, and the minor-allele spectrum split
   head-vs-tail so read-end decay is not reported as a quasispecies.
+- **Positional is the primary mode (2026-08-13, 2.0.0a2).** `^NNNN` / `^NNNNXNNN`, or half-open
+  slices `0:8` / `0:4,5:10` / `cell:0:16,16:26`, both in `--bc-pattern`. **Never: `--max-offset` is
+  automatic now and must not be passed** — a caret, a slice list, a read structure and a pattern
+  with nothing to score all anchor at 0. Passing `-1` reinstates the old refusal, which is still
+  correct. Presets in `sheet.PRESETS`: umi, migec, primerid, duplex, 10x, 10x-v2, tso500,
+  smarter-umi. Never: every preset carries a citable source and a test that compiles it; a preset
+  nobody can run is worse than none, because it looks supported.
+- **The downstream contract is measured (`docs/downstream.rst`).** minimap2 `-y`, bwa `-C`, arda,
+  salmon, kallisto all run against real `assemble` output; 600/600 records keep `RX`/`CB`/`MI`
+  through a sorted BAM, and arda's AIRR `sequence_id` **is** the molecule id. Note: that is why the
+  name is `<sample>.<cell>.<umi>` — `dnaio` drops FASTQ comments, so the name must stand alone.
+  Never: alevin/bustools/STARsolo must not see a consensus FASTQ; they deduplicate from a raw
+  barcode read that no longer exists. STAR unverified here — the brew arm64 build reads 0 reads
+  from any FASTQ, including a one-record file, so it says nothing about our output.
+- **SRP150352 (UMI RNA-seq, Sci Rep 2018) cannot be reprocessed from SRA** — `ncgr/UMI-analysis`
+  moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
+  missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
+  sourced from the pipeline, not fitted to the data. In `SOURCES.md`.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
   (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

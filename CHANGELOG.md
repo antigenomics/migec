@@ -4,6 +4,56 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.0.0a2 — 2026-08-13
+
+**Positional is the primary mode.** Most libraries fix the barcode at an offset in one read, and
+saying so no longer takes a sample sheet or a flag:
+
+```bash
+migec checkout reads.fq.gz --bc-pattern '^NNNNNNNN' -o out/      # a caret anchors it
+migec checkout reads.fq.gz --bc-pattern '0:8'       -o out/      # or a half-open slice
+migec checkout R1.fq.gz R2.fq.gz --bc-pattern 'cell:0:16,16:26' -o out/
+migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
+```
+
+Slices are half-open and 0-based like Python's, each a UMI slice unless prefixed `cell:`, and gaps
+between them become skipped bases — which is what a spacer is.
+
+**`--max-offset` is now automatic and should not be passed.** A caret, a slice list, a read
+structure and a pattern with nothing to score all anchor at the first base. This was the sharpest
+edge in the interface: 10x and TSO500 needed `--max-offset 0` typed by hand, and without it every
+read was refused with an error about anchoring — correct, but only after the run had failed.
+Passing `--max-offset -1` explicitly still reinstates the refusal, and that is still the right
+answer: a free scan over an unanchored pattern has no evidence to choose an offset with.
+
+**Presets** — `umi`, `migec`, `primerid`, `duplex`, `10x`, `10x-v2`, `tso500`, `smarter-umi`.
+`migec sheet --presets` prints each with what it is and where the layout is written down; a wrong
+name lists all of them. Every preset is a published chemistry with a citable source, so a wrong one
+is falsifiable rather than folklore, and each is compiled by a test — a preset nobody can run is
+worse than no preset, because it looks supported. Never: `duplex` extracts the tags and emits
+**single-strand** consensuses; duplex pairing is not implemented and no duplex error rate may be
+quoted from it.
+
+**The downstream contract is measured, not asserted** — new `docs/downstream.rst`. Against a real
+`assemble` output on this machine: `minimap2 -ax sr -y` and `bwa mem -C` carry `RX`, `CB` and `MI`
+into a valid sorted BAM on 600/600 records; `arda amplicon` reads it directly and its AIRR
+`sequence_id` **is** the molecule id, because `dnaio` drops FASTQ comments and the read name was
+built to be self-sufficient for exactly that reason; `salmon` and `kallisto` quantify it plainly.
+Never: do not run alevin, bustools or STARsolo on a consensus FASTQ — they deduplicate from a raw
+barcode read that no longer exists, and one consensus is already one molecule. STAR could not be
+confirmed here: the Homebrew arm64 build reports zero input reads for any FASTQ, including a
+one-record file, so the failure is the build's.
+
+**`smarter-umi`, and a dataset that cannot be reprocessed.** SRP150352 (Sci Rep 2018,
+doi:10.1038/s41598-018-31064-7) is the reference UMI RNA-seq library for the layout, but its
+pipeline moves the UMI into the FASTQ *header* and SRA rewrites headers, so the archived copy has
+no UMI anywhere — confirmed on three runs by the absence of the template-switch `GGG` where it
+would have to be. `migec suggest` reports it unprompted rather than fitting a barcode to payload.
+The preset is therefore sourced from `ncgr/UMI-analysis` itself, and `SOURCES.md` records both.
+
+Also: README badges; `docs/layouts.rst` collecting all four ways to declare a layout; the Nextflow
+module takes `migec_preset` and no longer forces an offset.
+
 ## 2.0.0a1 — 2026-08-13
 
 First published build of the rewrite. All three stages work and are validated against real data on

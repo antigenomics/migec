@@ -119,11 +119,20 @@ def test_a_positional_barcode_read_with_no_payload_is_not_dropped(tmp_path):
 
 
 def test_a_positional_pattern_is_refused_by_a_free_scan(tmp_path):
-    """No anchor means nothing to search for. Saying so beats matching everywhere."""
+    """No anchor means nothing to search for. Saying so beats matching everywhere.
+
+    The refusal is still there, but you now have to ask for the free scan: a pattern with nothing
+    to score is anchored by default, which is what the caret and the slice syntax say out loud.
+    """
     with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
         f1.write(f"@r0\n{'A' * 26}\n+\n{'I' * 26}\n")
         f2.write(f"@r0\n{'C' * 90}\n+\n{'I' * 90}\n")
     (tmp_path / "bc.txt").write_text(f"P\t{TENX}\n")
     with pytest.raises(RuntimeError, match="max_offset"):
         run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz", max_offset=-1)
+
+    # ...and with the default it simply works, which is the point of the change.
+    s = run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out2",
             reads2=tmp_path / "r2.fq.gz")
+    assert s["assigned"] == 1

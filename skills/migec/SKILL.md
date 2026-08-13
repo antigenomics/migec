@@ -22,6 +22,33 @@ migec info                   # prints package, extension and .mig format version
 From a checkout: `bash setup.sh` (uv venv, editable, asserts the *extension* imports — a failed
 C++ build otherwise looks like a successful install).
 
+## Telling migec where the barcode is
+
+Four ways, in the order to reach for them. **Positional is the primary mode** — most libraries fix
+the barcode at an offset in one read, and that needs no sheet and no anchor flag.
+
+```bash
+migec checkout reads.fq.gz --bc-pattern '^NNNNNNNN' -o out/   # 8 nt UMI at the read start
+migec checkout reads.fq.gz --bc-pattern '0:8'       -o out/   # the same, as a half-open slice
+migec checkout R1.fq.gz R2.fq.gz --bc-pattern 'cell:0:16,16:26' -o out/            # 10x
+migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2                -o out/            # named
+migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T --read-structure2 5M5S+T  # fgbio
+migec checkout reads.fq.gz -b barcodes.txt -o out/                                 # many samples
+```
+
+Slices are half-open and 0-based like Python's: `0:8` is eight bases, the next slice may start at
+8, each is a UMI slice unless prefixed `cell:`, and they must not overlap. Gaps become `.`.
+
+**Never: `--max-offset` is now automatic and should not be passed.** A leading `^`, a slice list
+and a read structure all anchor the barcode at the first base, and a pattern with nothing to score
+is anchored even without them. Passing `--max-offset -1` on such a layout reinstates the old
+failure: a free scan has no evidence to choose an offset with and `compile()` refuses.
+
+Presets (`migec sheet --presets` prints each with its source): `umi`, `migec`, `primerid`,
+`duplex`, `10x`, `10x-v2`, `tso500`, `smarter-umi`. Never: `duplex` extracts the tags and emits
+**single-strand** consensuses; duplex pairing is not implemented, so no duplex error rate may be
+quoted from it.
+
 ## The barcode pattern grammar
 
 MIGEC's, so published barcode tables work verbatim.
@@ -48,9 +75,10 @@ prints what each row extracts without running anything.
 on the other mate, extending the UMI — `S1<TAB>NNNNNNNNNNNNtgact<TAB>agtcaNNNNNNNNNNNN` is a 24 nt
 dual-end UMI. Never: Both halves must match or the read is unmatched.
 
-**Note: A short handle needs `--max-offset 0`.** Five bases are 10 bits; the acceptance bar is
+**Note: Why a short handle must be anchored.** Five bases are 10 bits; the acceptance bar is
 `log2(offsets × patterns / α)`, which is 12.6 bits over a free scan of a 77 nt read and 6.6 when
-anchored. A free scan refusing it is correct — `TGACT` occurs by chance every kilobase.
+anchored. A free scan refusing it is correct — `TGACT` occurs by chance every kilobase. Write the
+handle with a `^` (or leave the pattern purely positional) and the anchor is applied for you.
 
 Note: `N` always means UMI, never IUPAC "any base". Use `.` for an uncaptured wildcard.
 
@@ -122,7 +150,24 @@ Header format: `@<name> RX:Z:<umi>\tQX:Z:<umi qual>\tBC:Z:<sample>`. Both mates 
 the SAM record, so a space-separated comment produces a malformed BAM.
 
 **Note: `dnaio` drops FASTQ comments**, so arda's rnaseq module never sees the tags — anything a
-downstream Python tool needs must be in the read *name*.
+downstream Python tool needs must be in the read *name*. The consensus name is
+`<sample>.<cell>.<umi>` for exactly this reason, and it arrives in arda's AIRR TSV `sequence_id`
+unchanged.
+
+### Downstream (measured, `docs/downstream.rst`)
+
+| tool | command | what arrives |
+|---|---|---|
+| minimap2 | `minimap2 -ax sr -y ref.fa cons.fq.gz` | name + all tags |
+| bwa / bwa-mem2 | `bwa mem -C ref.fa cons.fq.gz` | name + all tags |
+| arda | `arda amplicon --r1 cons.fq.gz -p out` | name only; `sequence_id` is the molecule id |
+| STAR | name truncated at whitespace, comment dropped | name only |
+| salmon / kallisto | plain quant, no UMI mode | sequence only |
+
+**Never: Do not run alevin, bustools or STARsolo on a consensus FASTQ.** They read the barcode out
+of a *raw* barcode read and deduplicate themselves; migec already did, and the barcode read no
+longer exists. One consensus is one molecule, so a plain `salmon`/`kallisto` count already is a
+molecule count.
 
 ## refine
 
