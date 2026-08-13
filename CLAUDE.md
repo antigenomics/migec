@@ -193,6 +193,13 @@ correction is written up in `project/review-algorithms.md`.
   quoted.** X3's split threshold read 9.91, then 9.61, then 11.66 on reruns of ~8,000
   randomisations. At 82,800 it is **8.68, bootstrap 95% CI [8.42, 9.14]**, and that interval is
   what the code uses and the docs quote.
+- ⛔ **The count ratio is not evidence below ~3 reads/UMI**, and that is the common regime.
+  Measured (`scripts/correction_accuracy.py`): recall 0.80 / precision 0.94 at 3.1 reads/UMI,
+  collapsing to 0.02 / 0.25 at 1.1. Molecules are never destroyed (≥0.99 kept), so the failure is
+  missed correction. M3 must add the two pieces of evidence that survive at one read — the
+  barcode's own **base quality** (`QX`, carried and unused) and **payload agreement** with the
+  candidate parent. Do not tune `max_child_fraction` to paper over this; it is the wrong evidence,
+  not the wrong threshold.
 - Next: **M3** (`refine`), taking X3's permuted distance-1 background; then the M2 remainder
   (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

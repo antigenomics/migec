@@ -318,6 +318,68 @@ PYBIND11_MODULE(_core, m) {
           "the output is byte-identical whatever that is set to.");
 
     m.def(
+        "correct_umis",
+        [](const std::vector<std::string>& umis, double sequencing_error,
+           double polymerase_error, int pcr_cycles, double min_posterior,
+           double max_child_fraction) {
+            if (umis.empty()) throw MigecError("correct_umis: no UMIs given");
+            const int len = static_cast<int>(umis.front().size());
+            UmiCounts counts(len);
+            for (const std::string& u : umis) {
+                if (static_cast<int>(u.size()) != len) {
+                    throw MigecError("correct_umis: mixed UMI lengths (" +
+                                     std::to_string(len) + " and " + std::to_string(u.size()) +
+                                     ")");
+                }
+                counts.add(pack_barcode(u));
+            }
+            CorrectionParams params;
+            params.sequencing_error = sequencing_error;
+            params.polymerase_error = polymerase_error;
+            params.pcr_cycles = pcr_cycles;
+            params.min_posterior = min_posterior;
+            params.max_child_fraction = max_child_fraction;
+            CorrectionResult r;
+            {
+                py::gil_scoped_release release;
+                r = correct_umis(counts, params);
+            }
+            py::dict d;
+            d["estimated_error"] = r.estimated_error;
+            d["merged"] = r.merged;
+            d["merged_reads"] = r.merged_reads;
+            d["molecules_observed"] = r.molecules_observed;
+            d["molecules_corrected"] = r.molecules_corrected;
+            d["saturated"] = r.saturated;
+            // The merge map, as barcodes. This is what a caller needs to apply the correction to
+            // reads, and what any evaluation against a known truth has to have.
+            py::list merges;
+            py::dict corrected;
+            const std::vector<UmiCounts::Entry>& entries = counts.entries();
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const std::string umi = unpack_barcode(entries[i].key, len);
+                if (r.root[i] != i) {
+                    py::dict e;
+                    e["from"] = umi;
+                    e["to"] = unpack_barcode(entries[r.root[i]].key, len);
+                    e["reads"] = entries[i].count;
+                    merges.append(e);
+                } else {
+                    corrected[py::str(umi)] = r.corrected[i];
+                }
+            }
+            d["merges"] = merges;
+            d["corrected"] = corrected;
+            return d;
+        },
+        py::arg("umis"), py::arg("sequencing_error") = -1.0,
+        py::arg("polymerase_error") = 1e-5, py::arg("pcr_cycles") = 25,
+        py::arg("min_posterior") = 0.95, py::arg("max_child_fraction") = 0.5,
+        "Fold error-child barcodes into their parents. `umis` is one entry per read. Returns the "
+        "merge map, the corrected per-barcode counts, the error rate used, and the "
+        "collision-corrected molecule count. A barcode with no plausible parent is always kept.");
+
+    m.def(
         "assemble",
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            double rt_floor, double linkage_threshold, bool contig, uint32_t min_reads,

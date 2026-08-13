@@ -130,13 +130,36 @@ scientific claim and is validated before any throughput work.
 
 ## M3 — `refine`
 
+**Measured before building** (`scripts/correction_accuracy.py`, 2026-08-13): the existing
+count-ratio correction works from **3.1 reads/UMI upward** (recall ≥0.8, precision ≥0.9) and
+collapses below it — 0.02 recall / 0.25 precision at 1.1 reads/UMI. `ε` follows: 0.98x of injected
+at 3.1 reads/UMI, 0.20x at 1.1. Molecules are never lost (≥0.99 kept at every depth), so the
+failure is missed correction, not destroyed data. That is the whole shallow regime, so M3's error
+model has to use the evidence that survives at one read:
+
+| reads/UMI | recall | precision | ε / true |
+|---|---|---|---|
+| 1.11 | 0.022 | 0.254 | 0.20 |
+| 1.51 | 0.235 | 0.567 | 0.58 |
+| 2.32 | 0.587 | 0.846 | 0.86 |
+| 3.12 | **0.800** | **0.936** | 0.98 |
+| 7.12 | 0.959 | 0.977 | 0.96 |
+
+- [ ] **Barcode base quality as evidence.** `QX` is already carried through checkout and is not
+      used: a sequencing miscall in the barcode has *low* Phred at the mismatching base, an
+      early-PCR child has high Phred at every read. Works at one read.
+- [ ] **Payload agreement as evidence.** A barcode error child is a read of the parent's molecule,
+      so its payload matches; an independent molecule at distance 1 has an independent payload.
+      This is what Calib uses and it is the gap `docs/grouping.rst` already measures. Works at one
+      read, and it is the only thing that does when both barcodes are singletons.
 - [ ] Barcode table, three error-rate estimators, sequencing vs quality-independent separation
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`
 - [ ] MIG-size model and threshold at a target FDR; keep-orphan retention
 - [ ] Cell calling (OrdMag + knee), QC tables and plots
-- Gate: estimated ε within 20% of injected; ≥95% of no-parent 3–5-read MIGs retained
+- Gate: estimated ε within 20% of injected **at 1–3 reads/UMI, not only at 7**; ≥95% of no-parent
+  3–5-read MIGs retained (already ≥99% at every depth measured)
 
 ## M4 — end to end
 
