@@ -251,6 +251,18 @@ correction is written up in `project/review-algorithms.md`.
   read could hold, so `--max-offset 0` still paid `log2(61/α)` = 12.6 bits and a 5 nt dual-end
   handle (10 bits) was refused on every read. A free scan refusing it is correct -- `TGACT` occurs
   by chance every kilobase -- but an anchored one must not.
+- ⛔ **Never take the first N records of a stage's output.** `assemble` and `refine` write in
+  barcode order, so the first N share their leading bases: sampling the first 4,000 consensuses of
+  SRR1763769 reported a UMI effective length of **6.45 nt against the true 8.97**, with positions
+  0-1 apparently 100% A. Reservoir-sample. This is the same error as subsampling reads instead of
+  whole barcodes, in a third costume.
+- ⛔ **Payload agreement is worth nothing on a clonal library**, and anything using it must
+  discount by the measured clonality. `correct_umis` does; the residual-FDR estimator did not, and
+  reported 97.4% of singletons as error children on an HIV amplicon whose clonality is 0.80.
+- **`scripts/diagnose.py`** answers what a run actually is: places the consensus on a reference
+  (SRR1763769 = HXB2 2,328-2,595, minus strand, protease/RT), the barcode's own PWM, flowcell
+  coordinates and the i7xi5 table when the headers carry them, and the minor-allele spectrum split
+  head-vs-tail so read-end decay is not reported as a quasispecies.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
   (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

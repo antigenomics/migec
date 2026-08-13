@@ -90,6 +90,8 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Layout | 9 nt Primer ID, then `CAGTTTAACTTTTGGGCCAT`; recovered from the data by per-cycle entropy, not from the protocol |
 | Paper | Zhou, Jones, Mieczkowski & Swanstrom, *J Virol* 89(16):8540–8555, 2015, [doi:10.1128/JVI.00522-15](https://doi.org/10.1128/JVI.00522-15) — reports a residual error rate of ~1 in 10,000 |
 | Regenerate | `python scripts/quality_floor.py --reads SRR1763769_2.fastq.gz --out x2/ --window 180` (X2, the quality floor) and `python scripts/permutation_nulls.py --reads SRR1763769_2.fastq.gz --out x3/ --cycles 32 --window 180` (X3, the three permutation nulls) |
+| Identity | **HXB2 2,328-2,595 on the minus strand**, 268 nt, 2 mismatches (0.7% divergence) — covers *pol*: the 3' end of **protease** and the start of **RT**. Placed by `scripts/diagnose.py` against `K03455.1`, fetched from NCBI |
+| ⚠ headers | SRA-normalised to `@SRR1763769.N N/2`, so lane/tile/x/y are **gone**. Optical duplicates and index hopping are unmeasurable on this file — a property of the download, not a clean result |
 | Provenance | experimental (ENA); the floor and its interval are derived |
 | ⚠ | ENA's metadata gives every run in the study the same title, so it does **not** identify which runs are controls. This is HIV plasma — a quasispecies — so the estimator restricts to monomorphic positions rather than assuming clonality. The library is also 49.6% occupied on its 9 nt barcode, which `checkout` flags as saturated; the measured floor is an upper bound. |
 

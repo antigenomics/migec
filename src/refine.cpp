@@ -541,7 +541,13 @@ RefineStats refine(const RefineRequest& request) {
                             looks_like_a_child = true;
                             break;
                         }
-                        if (pw > 0 && correction.corrected[at] >= mine) {
+                        // ...and payload agreement is only evidence when two unrelated barcodes
+                        // do NOT agree anyway. On a clonal library they do -- measured here at
+                        // 0.80 on an HIV amplicon -- and using it would call almost every
+                        // singleton a residual child. `correct_umis` already discounts payload
+                        // agreement by exactly this number; the residual estimate has to as well.
+                        if (pw > 0 && correction.payload_clonality < 0.5 &&
+                            correction.corrected[at] >= mine) {
                             int mism = 0, cmp = 0;
                             for (int k = 0; k < pw; ++k) {
                                 const char x = evidence.payload[i * static_cast<size_t>(pw) +
