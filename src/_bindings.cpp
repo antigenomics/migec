@@ -319,11 +319,18 @@ PYBIND11_MODULE(_core, m) {
 
     m.def(
         "correct_umis",
-        [](const std::vector<std::string>& umis, double sequencing_error,
+        [](const std::vector<std::string>& umis, const std::vector<std::string>& payloads,
+           const std::vector<std::string>& umi_quals, double sequencing_error,
            double polymerase_error, int pcr_cycles, double min_posterior,
            double max_child_fraction) {
             if (umis.empty()) throw MigecError("correct_umis: no UMIs given");
             const int len = static_cast<int>(umis.front().size());
+            if (!payloads.empty() && payloads.size() != umis.size()) {
+                throw MigecError("correct_umis: payloads and umis must be one per read");
+            }
+            if (!umi_quals.empty() && umi_quals.size() != umis.size()) {
+                throw MigecError("correct_umis: umi_quals and umis must be one per read");
+            }
             UmiCounts counts(len);
             for (const std::string& u : umis) {
                 if (static_cast<int>(u.size()) != len) {
@@ -332,6 +339,52 @@ PYBIND11_MODULE(_core, m) {
                                      ")");
                 }
                 counts.add(pack_barcode(u));
+            }
+
+            // Per-barcode evidence, accumulated over that barcode's reads. Built here rather than
+            // asked of the caller: it is derived from the same reads and getting it out of step
+            // with `counts` would silently mis-attribute one barcode's reads to another.
+            const std::vector<UmiCounts::Entry>& entries = counts.entries();
+            BarcodeEvidence evidence;
+            std::vector<uint32_t> seen(entries.size(), 0);
+            auto slot = [&entries](uint64_t key) {
+                auto it = std::lower_bound(
+                    entries.begin(), entries.end(), key,
+                    [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
+                return static_cast<size_t>(it - entries.begin());
+            };
+            if (!umi_quals.empty()) {
+                evidence.position_error.assign(entries.size() * static_cast<size_t>(len), 0.0f);
+                for (size_t r = 0; r < umis.size(); ++r) {
+                    const size_t i = slot(pack_barcode(umis[r]));
+                    for (int j = 0; j < len && j < static_cast<int>(umi_quals[r].size()); ++j) {
+                        evidence.position_error[i * static_cast<size_t>(len) +
+                                                static_cast<size_t>(j)] +=
+                            static_cast<float>(phred_error(phred_from_char(umi_quals[r][j])));
+                    }
+                }
+                for (size_t i = 0; i < entries.size(); ++i) {
+                    for (int j = 0; j < len; ++j) {
+                        evidence.position_error[i * static_cast<size_t>(len) +
+                                                static_cast<size_t>(j)] /=
+                            static_cast<float>(entries[i].count);
+                    }
+                }
+            }
+            if (!payloads.empty()) {
+                size_t width = payloads.front().size();
+                for (const std::string& p : payloads) width = std::min(width, p.size());
+                evidence.payload_width = static_cast<int>(width);
+                // A modal base per column would need a counter per barcode per column; the first
+                // read of each barcode is a draft, and a draft is all the LR needs -- it is
+                // comparing two sequences, not calling variants.
+                evidence.payload.assign(entries.size() * width, 0);
+                for (size_t r = 0; r < umis.size(); ++r) {
+                    const size_t i = slot(pack_barcode(umis[r]));
+                    if (seen[i]++) continue;
+                    std::copy_n(payloads[r].begin(), width, evidence.payload.begin() +
+                                static_cast<std::ptrdiff_t>(i * width));
+                }
             }
             CorrectionParams params;
             params.sequencing_error = sequencing_error;
@@ -342,7 +395,7 @@ PYBIND11_MODULE(_core, m) {
             CorrectionResult r;
             {
                 py::gil_scoped_release release;
-                r = correct_umis(counts, params);
+                r = correct_umis(counts, params, evidence);
             }
             py::dict d;
             d["estimated_error"] = r.estimated_error;
@@ -351,11 +404,12 @@ PYBIND11_MODULE(_core, m) {
             d["molecules_observed"] = r.molecules_observed;
             d["molecules_corrected"] = r.molecules_corrected;
             d["saturated"] = r.saturated;
+            d["payload_clonality"] = r.payload_clonality;
+            d["merged_by_payload"] = r.merged_by_payload;
             // The merge map, as barcodes. This is what a caller needs to apply the correction to
             // reads, and what any evaluation against a known truth has to have.
             py::list merges;
             py::dict corrected;
-            const std::vector<UmiCounts::Entry>& entries = counts.entries();
             for (size_t i = 0; i < entries.size(); ++i) {
                 const std::string umi = unpack_barcode(entries[i].key, len);
                 if (r.root[i] != i) {
@@ -372,7 +426,8 @@ PYBIND11_MODULE(_core, m) {
             d["corrected"] = corrected;
             return d;
         },
-        py::arg("umis"), py::arg("sequencing_error") = -1.0,
+        py::arg("umis"), py::arg("payloads") = std::vector<std::string>(),
+        py::arg("umi_quals") = std::vector<std::string>(), py::arg("sequencing_error") = -1.0,
         py::arg("polymerase_error") = 1e-5, py::arg("pcr_cycles") = 25,
         py::arg("min_posterior") = 0.95, py::arg("max_child_fraction") = 0.5,
         "Fold error-child barcodes into their parents. `umis` is one entry per read. Returns the "

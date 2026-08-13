@@ -6,6 +6,45 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### UMI correction learns to work at 1–3 reads per UMI
+
+`correct_umis` ran only inside checkout and was unreachable from Python, so its accuracy had never
+been scored against a known truth. It is now bound, and `scripts/correction_accuracy.py` scores it
+across depth against the simulator's truth files.
+
+The first score said the count ratio — the only evidence it used — is the whole game on a deeply
+sequenced amplicon and carries **nothing** below ~3 reads/UMI: a parent with 2 reads and a child
+with 1 is not an asymmetry, and two singletons are not one either. Two count gates made a
+singleton-vs-singleton merge impossible by construction. Three changes:
+
+- **The barcode's own base quality** at the position that differs. A sequencing miscall carries a
+  low Phred exactly there; an early-PCR child carries a high one in every read. `QX` was already
+  travelling through checkout unread. Works at one read.
+- **Payload agreement** with the candidate parent, because a barcode error child is a read of the
+  *parent's molecule*. It is worth `log(1/clonality)`, and the clonality is measured by sampling
+  random barcode pairs — decisive in a diverse repertoire, worth nothing in a clonal library, and
+  the reported number says which this one is. Agreement lifts the count gates; disagreement refuses
+  a merge the count ratio would have made.
+- **The error likelihood is a rate, not a conditional.** It was a zero-truncated Poisson weighed
+  against an expected *count*. The truncation divides out `(1 − e^−λ)`, which is precisely the term
+  saying whether an error child should exist — so `ZT-Poisson(1, λ) → 1` for every small λ, and the
+  error rate stopped mattering at exactly the coverage where nothing else was available.
+
+Scored against the achievable ceiling, because a child whose parent barcode was never sequenced has
+nothing to merge into and correctly stays put:
+
+| reads/UMI | reachable | recall of those | precision | molecules kept |
+|---|---|---|---|---|
+| 1.11 | 0.204 | 0.108 | 0.818 | **1.000** |
+| 2.32 | 0.904 | 0.816 | 0.830 | 0.987 |
+| 3.12 | 0.975 | 0.914 | 0.926 | 0.991 |
+| 7.12 | 1.000 | 0.979 | 0.997 | 0.999 |
+| 13.30 | 1.000 | 0.983 | 0.999 | 1.000 |
+
+⚠ At ~1 read/UMI **80% of barcode errors are unfixable in principle**. Of the rest migec fixes 11%
+and destroys no real molecule at any depth — which is the side to err on, because a wrong merge
+deletes a molecule and nothing downstream can tell, while a missed correction only inflates a count.
+
 ### `migec assemble`: one consensus per molecule
 
 **A molecule is sample + cell barcode + UMI.** Never the UMI alone — the same UMI turning up in two

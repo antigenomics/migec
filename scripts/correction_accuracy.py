@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import gzip
 import pathlib
 import sys
 import tempfile
@@ -50,12 +51,34 @@ def evaluate(cov, molecules, umi_error, umi_len, out_dir, seed=5):
             parents[f[4]][f[3]] += 1
             observed[f[4]] += 1
 
+    # The reads themselves, which is where the evidence that survives at one read lives.
+    reads_umi, reads_payload, reads_qual = [], [], []
+    with gzip.open(sim["reads"], "rt") as fh:
+        for i, line in enumerate(fh):
+            if i % 4 == 0:
+                umi = line.split("UMI:")[1].strip()
+            elif i % 4 == 1:
+                seq = line.rstrip("\n")
+            elif i % 4 == 3:
+                qual = line.rstrip("\n")
+                off = len(umi) + len(ADAPTER)
+                reads_umi.append(umi)
+                reads_payload.append(seq[off:off + 80])
+                reads_qual.append(qual[: len(umi)])
+
     # An error child is an observed barcode that is never its own true barcode. Anything else is a
     # real molecule, and merging one away destroys a molecule that was really there.
     children = {u for u, t in parents.items() if u not in t}
     real = [u for u in observed if u not in children]
 
-    result = _core.correct_umis(list(observed.elements()))
+    # A child whose parent barcode was never observed has nothing to merge INTO. At 1 read per
+    # molecule that is common: if the only read of a molecule carries a barcode error, the true
+    # barcode is never seen and the child is indistinguishable from a real molecule -- correctly
+    # so. Recall against all children therefore understates; the achievable set is the children
+    # whose parent is actually present.
+    reachable = {c for c in children if any(t in observed for t in parents[c])}
+
+    result = _core.correct_umis(reads_umi, payloads=reads_payload, umi_quals=reads_qual)
     merged = {m["from"]: m["to"] for m in result["merges"]}
     correct = sum(1 for c, p in merged.items() if c in children and p in parents[c])
     return {
@@ -64,9 +87,13 @@ def evaluate(cov, molecules, umi_error, umi_len, out_dir, seed=5):
         "children": len(children),
         "merged": len(merged),
         "recall": correct / max(len(children), 1),
+        "reachable": len(reachable) / max(len(children), 1),
+        "recall_of_reachable": correct / max(len(reachable), 1),
         "precision": correct / max(len(merged), 1),
         "molecules_kept": sum(1 for u in real if u not in merged) / max(len(real), 1),
         "epsilon": result["estimated_error"],
+        "clonality": result["payload_clonality"],
+        "by_payload": result["merged_by_payload"],
     }
 
 
@@ -86,15 +113,15 @@ def main(argv=None):
     print(f"injected UMI error {a.umi_error:.1e} per base over {a.umi_length} nt, "
           f"{a.molecules:,} molecules\n")
     print(f"{'coverage':>9}{'reads/UMI':>10}{'children':>10}{'merged':>9}{'recall':>8}"
-          f"{'precision':>11}{'molecules kept':>16}{'eps est':>10}{'eps/true':>10}")
+          f"{'reachable':>11}{'of those':>10}{'precision':>11}{'mols kept':>11}{'eps/true':>10}")
     rows = []
     for cov in a.coverage:
         r = evaluate(cov, a.molecules, a.umi_error, a.umi_length, out)
         rows.append(r)
         print(f"{r['coverage']:>9.1f}{r['reads_per_umi']:>10.2f}{r['children']:>10,}"
-              f"{r['merged']:>9,}{r['recall']:>8.3f}{r['precision']:>11.3f}"
-              f"{r['molecules_kept']:>16.3f}{r['epsilon']:>10.2e}"
-              f"{r['epsilon'] / a.umi_error:>10.2f}")
+              f"{r['merged']:>9,}{r['recall']:>8.3f}{r['reachable']:>11.3f}"
+              f"{r['recall_of_reachable']:>10.3f}{r['precision']:>11.3f}"
+              f"{r['molecules_kept']:>11.3f}{r['epsilon'] / a.umi_error:>10.2f}")
 
     with open(out / "correction_accuracy.tsv", "w") as fh:
         fh.write("coverage\treads_per_umi\tchildren\tmerged\trecall\tprecision\t"
@@ -105,15 +132,17 @@ def main(argv=None):
                      f"{r['epsilon']:.6e}\n")
 
     # The one number that decides whether the count-ratio rule is usable on a given library.
-    usable = [r for r in rows if r["recall"] >= 0.8 and r["precision"] >= 0.9]
+    usable = [r for r in rows
+              if r["recall_of_reachable"] >= 0.8 and r["precision"] >= 0.9]
     if usable:
-        print(f"\nrecall >= 0.8 and precision >= 0.9 from {min(r['reads_per_umi'] for r in usable):.1f} "
-              f"reads/UMI upward.")
-    print("Below that the count ratio carries no evidence -- a parent with 2 reads and a child")
-    print("with 1 is not an asymmetry, and two singletons are not one either. What is still")
-    print("available at 1 read is the barcode's own base QUALITY and the read's PAYLOAD: an error")
-    print("child is a read of the parent's molecule, so its payload matches; an independent")
-    print("molecule at distance 1 does not. Neither is used yet.")
+        print(f"\nrecall of reachable children >= 0.8 and precision >= 0.9 from "
+              f"{min(r['reads_per_umi'] for r in usable):.1f} reads/UMI upward.")
+    print("`reachable` is the ceiling, not a result: a child whose parent barcode was never")
+    print("observed has nothing to merge into, and at one read per molecule that is most of them.")
+    print("Recall against ALL children understates by exactly that factor.")
+    print("\nThe count ratio carries no evidence down there -- a parent with 2 reads and a child")
+    print("with 1 is not an asymmetry -- so what does the work is the barcode's own base QUALITY")
+    print("and the read's PAYLOAD, which an error child shares with its parent's molecule.")
     print(f"\nwrote {out / 'correction_accuracy.tsv'}")
     return 0
 

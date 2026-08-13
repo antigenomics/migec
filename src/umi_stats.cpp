@@ -21,16 +21,21 @@ int log2_bin(uint32_t count) {
     return b;
 }
 
-// Zero-truncated Poisson: P(X = k | X >= 1), the right likelihood for an error child, because a
-// child with zero reads is not observed at all and must not carry probability mass.
-double zt_poisson(uint32_t k, double lambda) {
-    if (k == 0) return 0.0;
+// Poisson pmf, UNtruncated, as an expected count rather than a conditional probability.
+//
+// The zero-truncated form -- P(X = k | X >= 1) -- looks like the right likelihood for a child,
+// since a child with zero reads is not observed. It is the wrong one here, because the quantity it
+// is compared against (`a_ind * p_size`) is an expected *number* of neighbouring molecules, not a
+// probability conditioned on one existing. Dividing by (1 - e^-lambda) cancels precisely the term
+// that says whether an error child should exist at all -- and for a singleton child that term is
+// the entire signal: ZT-Poisson(1, lambda) -> 1 for every small lambda, so the error rate, and
+// with it the barcode's own base quality, stops mattering at exactly the coverage where nothing
+// else is available either.
+double poisson_pmf(uint32_t k, double lambda) {
     if (lambda <= 0.0) return 0.0;
     double logp = -lambda + k * std::log(lambda);
     for (uint32_t i = 2; i <= k; ++i) logp -= std::log(static_cast<double>(i));
-    const double denom = 1.0 - std::exp(-lambda);
-    if (denom <= 0.0) return 0.0;
-    return std::exp(logp) / denom;
+    return std::exp(logp);
 }
 
 // Probability mass that a polymerase error child of a parent with `c_par` reads is seen with
@@ -381,7 +386,21 @@ ErrorBudget error_budget(const UmiComposition& comp, const std::array<uint64_t, 
     return b;
 }
 
-CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params) {
+namespace {
+
+// log C(n,k) + the binomial pmf, in logs. d is small and n is a read length, so this is nowhere
+// near a hot path -- it runs once per candidate parent, not per base.
+double log_binom_pmf(int d, int n, double p) {
+    if (n <= 0) return 0.0;
+    p = std::clamp(p, 1e-9, 1.0 - 1e-9);
+    return std::lgamma(n + 1.0) - std::lgamma(d + 1.0) - std::lgamma(n - d + 1.0) +
+           d * std::log(p) + (n - d) * std::log1p(-p);
+}
+
+}  // namespace
+
+CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params,
+                              const BarcodeEvidence& evidence) {
     CorrectionResult res;
     const int L = counts.length();
     const std::vector<UmiCounts::Entry>& m = counts.entries();
@@ -439,6 +458,41 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
     for (auto& kv : size_pmf) kv.second /= n;
     const double size_floor = 1.0 / (n + 1.0);  // never claim a size is impossible
 
+    // How often do two UNRELATED barcodes carry the same payload anyway? That is the library's
+    // clonality, and it is exactly what payload agreement is worth: log(1/clonality). In a diverse
+    // repertoire two random molecules never match and agreement is decisive; in a clonal library
+    // they always match and it says nothing. Measured from the data rather than assumed, so the
+    // evidence self-calibrates to the library it is given.
+    const int pw = evidence.has_payload() ? evidence.payload_width : 0;
+    double clonality = 1.0;
+    if (pw > 0 && n_entries > 2 && params.payload_null_samples > 0) {
+        // Deterministic sampling: a fixed stride over the sorted entries, so the answer does not
+        // depend on an RNG seed and two runs of the pipeline agree.
+        const size_t samples =
+            std::min<size_t>(static_cast<size_t>(params.payload_null_samples), n_entries * 4);
+        size_t same = 0, tried = 0;
+        const size_t stride = std::max<size_t>(1, n_entries / 977 + 1);
+        for (size_t s = 0; s < samples; ++s) {
+            const size_t a = (s * 7919) % n_entries;
+            const size_t b = (a + stride * (1 + s % 97)) % n_entries;
+            if (a == b) continue;
+            int mism = 0, cmp = 0;
+            for (int j = 0; j < pw; ++j) {
+                const char x = evidence.payload[a * static_cast<size_t>(pw) + static_cast<size_t>(j)];
+                const char y = evidence.payload[b * static_cast<size_t>(pw) + static_cast<size_t>(j)];
+                if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
+                ++cmp;
+                mism += x != y;
+            }
+            if (cmp < 8) continue;
+            ++tried;
+            same += static_cast<double>(mism) <= params.payload_same_fraction * cmp;
+        }
+        clonality = tried ? std::max(static_cast<double>(same) / static_cast<double>(tried),
+                                     1.0 / static_cast<double>(tried + 1)) : 1.0;
+    }
+    res.payload_clonality = pw > 0 ? clonality : 0.0;
+
     // Order by count descending, then walk each barcode's 3L neighbourhood from the smallest MIG
     // upwards. Indices, not copies of the entries: 4 bytes each rather than 16.
     std::vector<uint32_t> order(n_entries);
@@ -464,16 +518,69 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
                 const size_t cand_idx = find_idx(cand);
                 if (cand_idx == static_cast<size_t>(-1)) continue;
                 const uint32_t c_par = m[cand_idx].count;
-                if (c_par <= c_child) continue;  // a parent must be strictly larger
-                if (static_cast<double>(c_child) >
-                    params.max_child_fraction * static_cast<double>(c_par)) {
-                    continue;
+
+                // The payload likelihood ratio, before the count gates -- because it is what
+                // decides whether those gates apply at all.
+                double lr_payload = 1.0;
+                bool payload_decisive = false, payload_refutes = false;
+                if (pw > 0) {
+                    int mism = 0, cmp = 0;
+                    for (int q = 0; q < pw; ++q) {
+                        const char x = evidence.payload[child_idx * static_cast<size_t>(pw) +
+                                                        static_cast<size_t>(q)];
+                        const char y = evidence.payload[cand_idx * static_cast<size_t>(pw) +
+                                                        static_cast<size_t>(q)];
+                        if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
+                        ++cmp;
+                        mism += x != y;
+                    }
+                    if (cmp >= 8) {
+                        // Same molecule: two drafts of it disagree at ~2e. Independent molecule:
+                        // the same thing with probability `clonality`, and otherwise a different
+                        // sequence altogether.
+                        const double ll_same = log_binom_pmf(mism, cmp, params.payload_error);
+                        const double ll_diff = log_binom_pmf(mism, cmp, 0.75);
+                        const double ll_ind =
+                            std::log(clonality * std::exp(ll_same) +
+                                     (1.0 - clonality) * std::exp(ll_diff) + 1e-300);
+                        lr_payload = std::exp(std::clamp(ll_same - ll_ind, -60.0, 60.0));
+                        payload_decisive = lr_payload > 10.0;
+                        payload_refutes = lr_payload < 0.1;
+                    }
+                }
+                // A payload that disagrees is not this molecule, whatever the counts say.
+                if (payload_refutes) continue;
+
+                // The count gates exist because a child is smaller than its parent -- true, and
+                // vacuous at 1-3 reads per UMI. They are lifted exactly when the reads themselves
+                // say the two barcodes carry the same molecule.
+                if (!payload_decisive) {
+                    if (c_par <= c_child) continue;
+                    if (static_cast<double>(c_child) >
+                        params.max_child_fraction * static_cast<double>(c_par)) {
+                        continue;
+                    }
+                } else if (c_par < c_child) {
+                    continue;  // still orient the merge into the larger of the two
+                } else if (c_par == c_child && cand > child) {
+                    continue;  // a tie folds into the lexicographically smaller key, once
                 }
 
                 // Two ways to be an error child. Sequencing miscalls land on one specific
                 // alternative base, so the rate per neighbour is eps/3, not eps.
-                const double lam = static_cast<double>(c_par) * eps / 3.0;
-                const double l_seq = zt_poisson(c_child, lam);
+                // The barcode's OWN reported quality at the base that differs, when it is known:
+                // a miscall carries a low Phred there and an early-PCR child carries a high one,
+                // which is the distinction a single global rate has to average away.
+                double eps_j = eps;
+                if (evidence.has_quality()) {
+                    const size_t at = child_idx * static_cast<size_t>(L) + static_cast<size_t>(j);
+                    if (at < evidence.position_error.size()) {
+                        eps_j = std::clamp(static_cast<double>(evidence.position_error[at]),
+                                           1e-6, 0.75);
+                    }
+                }
+                const double lam = static_cast<double>(c_par) * eps_j / 3.0;
+                const double l_seq = poisson_pmf(c_child, lam);
                 const double l_pol = ld_pmf(c_child, c_par, params.max_child_fraction);
                 const double l_err = (1.0 - rho_pol) * l_seq + rho_pol * l_pol;
 
@@ -484,7 +591,9 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
                                                            : std::max(sp->second, size_floor);
                 const double l_ind = std::max(a_ind * p_size, 1e-300);
 
-                const double post = l_err / (l_err + l_ind);
+                // The payload evidence multiplies the error hypothesis, because it is a
+                // likelihood ratio between exactly the two hypotheses already being weighed.
+                const double post = (l_err * lr_payload) / (l_err * lr_payload + l_ind);
                 if (post > best_post) {
                     best_post = post;
                     best_parent = cand_idx;
@@ -493,6 +602,7 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         }
 
         if (best_post >= params.min_posterior && best_parent != static_cast<size_t>(-1)) {
+            if (m[best_parent].count <= c_child) ++res.merged_by_payload;
             // Follow the parent to its current root -- it may itself already have been merged.
             uint32_t root = static_cast<uint32_t>(best_parent);
             for (int guard = 0; guard < 64 && res.root[root] != root; ++guard) root = res.root[root];

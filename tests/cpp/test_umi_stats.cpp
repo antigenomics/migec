@@ -365,3 +365,127 @@ TEST_CASE("the counter costs a small constant per distinct UMI") {
     const double per_umi = static_cast<double>(c.memory_bytes()) / static_cast<double>(c.distinct());
     CHECK(per_umi < 32.0);
 }
+
+namespace {
+
+// A diverse background, because everything in correction is measured against the composition of
+// the library it is in: a background of near-identical barcodes collapses the effective space and
+// the whole library reads as saturated.
+std::vector<std::string> background(size_t n, int len, uint32_t seed) {
+    std::mt19937 rng(seed);
+    std::vector<std::string> out;
+    while (out.size() < n) {
+        std::string s(static_cast<size_t>(len), 'A');
+        for (char& c : s) c = "ACGT"[rng() & 3u];
+        out.push_back(s);
+    }
+    return out;
+}
+
+// Fills `counts` and returns an evidence block whose payloads are per-barcode unique unless the
+// barcode appears in `shared`, which all get the same sequence.
+BarcodeEvidence make_evidence(const UmiCounts& counts, int len, int width,
+                             const std::vector<std::string>& shared) {
+    BarcodeEvidence ev;
+    ev.payload_width = width;
+    ev.payload.assign(counts.entries().size() * static_cast<size_t>(width), 'A');
+    for (size_t i = 0; i < counts.entries().size(); ++i) {
+        const std::string b = unpack_barcode(counts.entries()[i].key, len);
+        const bool is_shared =
+            std::find(shared.begin(), shared.end(), b) != shared.end();
+        // The packed key fills from the HIGH bits, so the low 32 are zero for a 12 nt barcode --
+        // seeding from them would give every payload the same sequence.
+        const uint64_t k = counts.entries()[i].key;
+        std::mt19937 rng(is_shared ? 42u : static_cast<uint32_t>((k >> 32) ^ k));
+        for (int j = 0; j < width; ++j) {
+            ev.payload[i * static_cast<size_t>(width) + static_cast<size_t>(j)] =
+                "ACGT"[rng() & 3u];
+        }
+    }
+    return ev;
+}
+
+}  // namespace
+
+TEST_CASE("payload evidence merges two singletons the count ratio cannot") {
+    // The shallow case: a barcode and its error child, one read each. No count asymmetry exists,
+    // so the count-ratio rule can never fire -- but both reads are reads of the same molecule and
+    // say so.
+    UmiCounts c(12);
+    c.add(umi("ACGTACGTACGT"), 1);
+    c.add(umi("ACGTACGTACGA"), 1);  // distance 1
+    for (const std::string& b : background(3000, 12, 7)) c.add(umi(b), 1);
+
+    CorrectionParams p;
+    CHECK(correct_umis(c, p).merged == 0);  // no evidence without the reads
+
+    const BarcodeEvidence ev =
+        make_evidence(c, 12, 60, {"ACGTACGTACGT", "ACGTACGTACGA"});
+    const CorrectionResult r = correct_umis(c, p, ev);
+    CHECK(r.merged == 1);
+    CHECK(r.merged_by_payload == 1);
+    CHECK(r.payload_clonality < 0.1);
+}
+
+TEST_CASE("a disagreeing payload refuses a merge the counts would have made") {
+    // 100 reads against 1 at distance 1 is exactly what the count ratio calls a child. It is not
+    // one: the reads are of a different molecule, and that has to win.
+    UmiCounts c(12);
+    c.add(umi("ACGTACGTACGT"), 100);
+    c.add(umi("ACGTACGTACGA"), 1);
+    for (const std::string& b : background(3000, 12, 8)) c.add(umi(b), 1);
+
+    CorrectionParams p;
+    CHECK(correct_umis(c, p).merged >= 1);  // counts alone merge it
+
+    const BarcodeEvidence ev = make_evidence(c, 12, 60, {});  // every payload its own
+    const CorrectionResult r = correct_umis(c, p, ev);
+    const size_t child = index_of(c, umi("ACGTACGTACGA"));
+    CHECK(r.root[child] == child);  // not merged into anything
+}
+
+TEST_CASE("a clonal library gets no help from payload agreement, and says so") {
+    // Every molecule carries the same sequence, so agreement is worth nothing -- and the measured
+    // clonality is what says that, rather than the evidence being silently over-trusted.
+    UmiCounts c(12);
+    c.add(umi("ACGTACGTACGT"), 1);
+    c.add(umi("ACGTACGTACGA"), 1);
+    std::vector<std::string> all{"ACGTACGTACGT", "ACGTACGTACGA"};
+    for (const std::string& b : background(3000, 12, 9)) {
+        c.add(umi(b), 1);
+        all.push_back(b);
+    }
+    const BarcodeEvidence ev = make_evidence(c, 12, 60, all);  // one clone, all identical
+    const CorrectionResult r = correct_umis(c, CorrectionParams{}, ev);
+    CHECK(r.payload_clonality > 0.9);
+    CHECK(r.merged_by_payload == 0);
+}
+
+TEST_CASE("barcode base quality sharpens the error prior") {
+    // The same pair, once with a high-quality mismatching base and once with a low-quality one.
+    // Only the second is a plausible miscall, and the posterior has to see the difference.
+    auto merged_with = [](float err_at_last) {
+        UmiCounts c(12);
+        c.add(umi("ACGTACGTACGT"), 20);
+        c.add(umi("ACGTACGTACGA"), 1);
+        for (const std::string& b : background(3000, 12, 10)) c.add(umi(b), 1);
+        BarcodeEvidence ev;
+        ev.position_error.assign(c.entries().size() * 12, 1e-6f);
+        for (size_t i = 0; i < c.entries().size(); ++i) {
+            if (unpack_barcode(c.entries()[i].key, 12) == "ACGTACGTACGA") {
+                ev.position_error[i * 12 + 11] = err_at_last;
+            }
+        }
+        CorrectionParams p;
+        p.sequencing_error = 1e-6;   // fixed, so the only difference is the per-base term
+        // ...and no polymerase component, which is the hypothesis that does NOT depend on the
+        // reported quality: an early-PCR child carries a high Phred in every read, so leaving it
+        // in would merge the pair on count asymmetry alone and hide what is being tested.
+        p.polymerase_error = 0.0;
+        const CorrectionResult r = correct_umis(c, p, ev);
+        const size_t child = index_of(c, umi("ACGTACGTACGA"));
+        return r.root[child] != child;
+    };
+    CHECK_FALSE(merged_with(1e-6f));  // a confident base is not a miscall
+    CHECK(merged_with(0.3f));         // Q5 at exactly the base that differs
+}

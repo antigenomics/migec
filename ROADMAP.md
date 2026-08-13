@@ -145,13 +145,36 @@ model has to use the evidence that survives at one read:
 | 3.12 | **0.800** | **0.936** | 0.98 |
 | 7.12 | 0.959 | 0.977 | 0.96 |
 
-- [ ] **Barcode base quality as evidence.** `QX` is already carried through checkout and is not
-      used: a sequencing miscall in the barcode has *low* Phred at the mismatching base, an
-      early-PCR child has high Phred at every read. Works at one read.
-- [ ] **Payload agreement as evidence.** A barcode error child is a read of the parent's molecule,
-      so its payload matches; an independent molecule at distance 1 has an independent payload.
-      This is what Calib uses and it is the gap `docs/grouping.rst` already measures. Works at one
-      read, and it is the only thing that does when both barcodes are singletons.
+- [x] **Barcode base quality as evidence** (`BarcodeEvidence::position_error`). `QX` was carried
+      through checkout and unread. A sequencing miscall in the barcode has *low* Phred at the base
+      it changed; an early-PCR child has a high one in every read. Works at one read.
+- [x] **Payload agreement as evidence** (`BarcodeEvidence::payload`). A barcode error child is a
+      read of the parent's molecule, so its payload matches. Worth `log(1/clonality)`, and the
+      clonality is **measured from the data** by sampling random barcode pairs — decisive in a
+      diverse repertoire, worth nothing in a clonal library, and the number says which this is. It
+      also lifts the count gates, which is what makes a singleton-vs-singleton merge possible at
+      all, and it *refuses* merges the count ratio would have made on a disagreeing payload.
+- [x] **The error likelihood is a rate, not a conditional.** The zero-truncated Poisson divided out
+      `(1 − e^−λ)` — precisely the term saying whether a child should exist — so for a singleton
+      child it tended to 1 for every λ and the error rate stopped mattering at exactly the coverage
+      where nothing else was available. Untruncated, both sides are expected counts of
+      neighbouring barcodes and the comparison is like for like.
+
+  Measured after (`scripts/correction_accuracy.py`), against the achievable ceiling rather than
+  against all children — a child whose parent barcode was never sequenced has nothing to merge into:
+
+  | reads/UMI | reachable | recall of those | precision | molecules kept |
+  |---|---|---|---|---|
+  | 1.11 | 0.204 | 0.108 | 0.818 | **1.000** |
+  | 2.32 | 0.904 | 0.816 | 0.830 | 0.987 |
+  | 3.12 | 0.975 | 0.914 | 0.926 | 0.991 |
+  | 7.12 | 1.000 | 0.979 | 0.997 | 0.999 |
+  | 13.30 | 1.000 | 0.983 | 0.999 | 1.000 |
+
+  ⚠ At ~1 read/UMI **80% of barcode errors are unfixable in principle** — the parent was never
+  sequenced — and of the rest migec fixes 11% while destroying no real molecule. Precision is the
+  side to err on: a wrong merge deletes a molecule and nothing downstream can tell, a missed
+  correction only inflates the count.
 - [ ] Barcode table, three error-rate estimators, sequencing vs quality-independent separation
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes

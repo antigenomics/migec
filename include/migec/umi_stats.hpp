@@ -237,7 +237,44 @@ struct CorrectionParams {
     // Posterior above which a child is merged into its parent.
     double min_posterior = 0.95;
     // A child can never be larger than this fraction of its parent, whatever the posterior says.
+    // ⚠ This gate is what makes a singleton-vs-singleton merge impossible, so it is lifted when
+    // payload evidence is available: two barcodes whose reads agree on the molecule are one
+    // molecule whatever their counts are.
     double max_child_fraction = 0.5;
+    // Per-base disagreement expected between two draft consensuses of the SAME molecule. Two
+    // reads each carrying error e disagree at ~2e.
+    double payload_error = 2e-3;
+    // A payload pair is "the same sequence" below this mismatch fraction. Used only to measure
+    // how often two *unrelated* barcodes carry the same sequence anyway -- clonality -- which is
+    // what decides how much payload agreement is worth.
+    double payload_same_fraction = 0.05;
+    // Random barcode pairs sampled to measure that. 0 disables payload evidence.
+    int payload_null_samples = 20000;
+};
+
+// What a barcode's own reads say about it, beyond how many there are. Both fields are optional
+// and both exist because the count ratio -- the only evidence the first version used -- carries
+// nothing on a library sequenced at 1-3 reads per UMI, which is the common case rather than the
+// exotic one. Measured in `scripts/correction_accuracy.py`: recall 0.80 at 3.1 reads/UMI, 0.02 at
+// 1.1. A parent with 2 reads and a child with 1 is not an asymmetry, and two singletons are not
+// one either.
+//
+// Both are laid out flat and indexed in parallel with UmiCounts::entries().
+struct BarcodeEvidence {
+    // Mean error probability at each barcode position, over that barcode's reads: entry i,
+    // position j is at [i * length + j]. A sequencing miscall in the barcode carries a LOW Phred
+    // at the base it changed, and an early-PCR child carries a high one in every read -- so this
+    // separates the two mechanisms the global rate has to average over. Works at one read.
+    std::vector<float> position_error;
+    // Draft payload consensus per barcode, `payload_width` bases each, entry i at
+    // [i * payload_width]. A barcode error child is a read of the PARENT'S molecule, so its
+    // payload matches; an independent molecule one substitution away has its own. Works at one
+    // read, and it is the only thing that does when both barcodes are singletons.
+    std::vector<char> payload;
+    int payload_width = 0;
+
+    bool has_quality() const { return !position_error.empty(); }
+    bool has_payload() const { return payload_width > 0 && !payload.empty(); }
 };
 
 struct CorrectionResult {
@@ -259,6 +296,11 @@ struct CorrectionResult {
     size_t molecules_observed = 0;
     double molecules_corrected = 0.0;
     bool saturated = false;  // observed UMIs are a large fraction of the usable space
+    // Fraction of random barcode pairs whose payloads agree anyway -- the library's clonality.
+    // Payload agreement is worth log(1/clonality): decisive in a diverse repertoire, worth
+    // nothing in a clonal one, and this says which this library is.
+    double payload_clonality = 0.0;
+    size_t merged_by_payload = 0;  // merges the count ratio alone would have refused
 };
 
 // Estimates the per-base UMI error rate from the excess of 1-mismatch neighbours over what
@@ -271,7 +313,8 @@ struct CorrectionResult {
 //                + 3L * sum_i (1 - exp(-c_i eps))^2       sibling
 double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp);
 
-CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {});
+CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {},
+                              const BarcodeEvidence& evidence = {});
 
 // Position of `key` in counts.entries(), or SIZE_MAX. For tests and for translating a barcode
 // into the index space CorrectionResult uses.

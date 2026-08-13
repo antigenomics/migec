@@ -193,13 +193,25 @@ correction is written up in `project/review-algorithms.md`.
   quoted.** X3's split threshold read 9.91, then 9.61, then 11.66 on reruns of ~8,000
   randomisations. At 82,800 it is **8.68, bootstrap 95% CI [8.42, 9.14]**, and that interval is
   what the code uses and the docs quote.
-- ⛔ **The count ratio is not evidence below ~3 reads/UMI**, and that is the common regime.
-  Measured (`scripts/correction_accuracy.py`): recall 0.80 / precision 0.94 at 3.1 reads/UMI,
-  collapsing to 0.02 / 0.25 at 1.1. Molecules are never destroyed (≥0.99 kept), so the failure is
-  missed correction. M3 must add the two pieces of evidence that survive at one read — the
-  barcode's own **base quality** (`QX`, carried and unused) and **payload agreement** with the
-  candidate parent. Do not tune `max_child_fraction` to paper over this; it is the wrong evidence,
-  not the wrong threshold.
+- ⛔ **The count ratio is not evidence below ~3 reads/UMI**, and that is the common regime. Two
+  evidence terms that survive at one read are now in `BarcodeEvidence`: the barcode's own **base
+  quality** at the differing position, and **payload agreement** with the candidate parent, worth
+  `log(1/clonality)` where the clonality is measured from random barcode pairs rather than assumed.
+  Payload agreement lifts the count gates (which is what makes a singleton merge possible) and
+  payload *disagreement* refuses a merge the counts would have made. Never tune
+  `max_child_fraction` to paper over this — it is the wrong evidence, not the wrong threshold.
+- ⛔ **Compare a rate to a rate.** The error likelihood was a zero-truncated Poisson, i.e. a
+  probability conditioned on the child existing, weighed against `a_ind * p_size`, which is an
+  expected *count*. The truncation divides out `(1 − e^−λ)` — exactly the term that says whether an
+  error child should exist — so ZT-Poisson(1, λ) → 1 for every small λ and the error rate stopped
+  mattering at precisely the coverage where nothing else was available. Untruncated.
+- ⛔ **Err on precision, never on recall, when merging.** A wrong merge deletes a molecule and
+  nothing downstream can tell; a missed correction only inflates the count and is recoverable. The
+  current posterior destroys **no** real molecule at any depth measured (≥0.99, 1.000 at the
+  extremes) and that is the property to protect.
+- ⚠ **At ~1 read/UMI, 80% of barcode errors are unfixable in principle** — the parent barcode was
+  never sequenced, so there is nothing to merge into. Always report recall against that reachable
+  ceiling; against all children it understates by 5x and looks like a bug.
 - Next: **M3** (`refine`), taking X3's permuted distance-1 background; then the M2 remainder
   (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
