@@ -6,6 +6,42 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### `migec assemble`: one consensus per molecule
+
+**A molecule is sample + cell barcode + UMI.** Never the UMI alone — the same UMI turning up in two
+cells or two samples is the design, not an error, and 4^12 random tags reused across ten thousand
+cells is exactly what a droplet protocol does. The sort key is `(cell, umi, src_index)` and the
+range partition is on the cell whenever there is one, which also makes a per-cell scope contiguous
+on disk.
+
+**Nothing scales with the library.** Reads are range partitioned into `.mig` buckets and one bucket
+is sorted in RAM at a time. 531,365 reads/s; 121 MB at 16 buckets against 203 MB at one, asserted
+in `tests/benchmark/test_assemble_speed.py` — each configuration measured in its own process,
+because `peak_rss_bytes` is a process high-water mark and two runs in one interpreter cannot be
+compared. ⚠ The writer buffer budget is split *across* buckets rather than being per-bucket: a
+fixed per-writer block made cutting the input finer cost *more* memory (238 MB at 16 buckets
+against 213 at one), which is backwards.
+
+**The quality floor is added, not compared.** `Q(j) = −10 log10(p_cons(j) + p_floor)`. An RT or
+first-cycle-PCR error is in every read of the molecule and no consensus removes it, so the two
+failure modes are independent and the emitted quality carries both. Default 1e-4 from X2, so
+nothing above ~Q38 is emitted.
+
+**Splitting a group uses X3's measured threshold**, 9.61, two-sided and Bonferroni'd within the
+group. ⚠ It implies a minimum group size: the strongest evidence a pair of columns can carry is
+`log10 C(n, n/2)`, so a 50/50 split needs about 34 reads before it can clear 9.61 at all. Below
+that the data cannot separate a subclone from two bad reads at a 1% false-positive rate.
+
+**`--contig` for random-primed libraries.** Reads sharing a barcode tile the molecule rather than
+starting at the same base (X1: true for 92% of 10x groups). They are placed against each other by
+exact seed matching, cut into overlap components by a union-find that carries each read's offset,
+and one consensus is emitted per component — never bridged across a gap, because 27.3% of groups
+hold more than one and a single consensus over those asserts sequence no read covers. This is one
+molecule's fragments and nothing more: full-length receptor assembly, doublet calling and
+contaminating-chain filtering are arda's job. ⚠ It also needs a barcode that is not saturated, so
+`assemble` re-runs the birthday arithmetic on the barcodes it saw and reports
+`expected_molecules_per_group`.
+
 ### X3: three derivations replaced by three permutations
 
 Each of these numbers came out of an argument that assumed something the data had never been asked
@@ -27,11 +63,11 @@ plateauing from a count ratio of 5 upward at z ≈ 48. The permuted background p
 3.4e-3, within 1.7× of the Phred + polymerase prediction, where the analytic estimate is 2.6×
 *below* it. M3's error model takes the permuted background.
 
-**The split threshold is 9.91, not 2.00.** Reads are not exchangeable: a low-quality read carries a
+**The split threshold is 9.61, not 2.00.** Reads are not exchangeable: a low-quality read carries a
 minor base at many positions at once and is indistinguishable from a linked subclone if you only
 look at the columns. Randomising the reads × positions minor-allele matrix while preserving *both*
-margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p` of 9.91. The
-nominal `p < 0.01` the derivation gives calls 31.13% of MIGs against 1.20% — a 26× over-call, every
+margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p` of 9.61. The
+nominal `p < 0.01` the derivation gives calls 27.39% of MIGs against 1.26% — a 22× over-call, every
 one of which would have become a spurious extra molecule.
 
 ### `migec suggest`: read the barcode layout off the reads

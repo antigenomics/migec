@@ -31,6 +31,8 @@ add_library(migec_core STATIC
   src/umi_stats.cpp
   src/checkout.cpp
   src/suggest.cpp
+  src/consensus.cpp
+  src/assemble.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)
 target_link_libraries(migec_core PUBLIC Threads::Threads ZLIB::ZLIB)
@@ -53,6 +55,7 @@ if(MIGEC_TESTS)
     tests/cpp/test_umi_stats.cpp
     tests/cpp/test_checkout.cpp
     tests/cpp/test_checkout_run.cpp
+    tests/cpp/test_consensus.cpp
   )
   target_link_libraries(migec_tests PRIVATE migec_core)
   target_include_directories(migec_tests PRIVATE tests/cpp)

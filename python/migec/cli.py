@@ -131,9 +131,40 @@ def refine() -> None:
 
 
 @app.command()
-def assemble() -> None:
-    """Assemble consensus sequences per molecule. (M1)"""
-    raise typer.Exit(_not_yet("assemble", "M1"))
+def assemble(
+    reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
+    out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
+    sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
+    rt_error: float = typer.Option(
+        1e-4,
+        "--rt-error",
+        help="The RT/first-cycle-PCR error floor, which caps every emitted quality at "
+        "-10 log10 of it. Default measured on an HIV-1 Primer ID control (docs/quality_floor.rst); "
+        "the 1e-6 that gets assumed is excluded by two orders of magnitude.",
+    ),
+    contig: bool = typer.Option(
+        False,
+        "--contig",
+        help="Random-primed reads sharing a barcode tile the molecule instead of starting at the "
+        "same base. Place them against each other and emit one consensus per overlap component. "
+        "X1 measured 27.3% of 10x groups holding more than one component (docs/fragmented.rst); "
+        "one consensus over those asserts sequence no read covers.",
+    ),
+    min_reads: int = typer.Option(
+        1,
+        "--min-reads",
+        help="Molecules below this are dropped. The default keeps everything: a molecule seen "
+        "three times is still sequence.",
+    ),
+) -> None:
+    """Collapse the reads of each barcode (sample + cell + UMI) into a consensus."""
+    from migec.assemble import format_report, run
+
+    summary = run(
+        reads, out_dir, sample_id=sample_id, rt_floor=rt_error, contig=contig,
+        min_reads=min_reads,
+    )
+    typer.echo(format_report(summary))
 
 
 @app.command()

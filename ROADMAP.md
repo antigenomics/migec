@@ -66,24 +66,36 @@ scientific claim and is validated before any throughput work.
       **~19,400 genuine error children**, plateauing from a count ratio of 5 upward. The
       permutation background puts the barcode error at 3.4e-3, within 1.7x of the Phred +
       polymerase prediction, against `checkout`'s analytic 8.0e-4 which is 2.6x *below* it — M3
-      takes the permuted background. (3) **The split threshold is 9.91, not 2.00**: a curveball
+      takes the permuted background. (3) **The split threshold is 9.61, not 2.00**: a curveball
       randomisation preserving both margins of the reads x positions minor-allele matrix puts the
-      1% false-positive point 26x above the nominal `p < 0.01`, because a low-quality read carries
+      1% false-positive point 22x above the nominal `p < 0.01`, because a low-quality read carries
       minor bases at many positions at once and mimics a linked subclone.
       `docs/nulls.rst`, `scripts/permutation_nulls.py`.
 
-## M1 — `assemble`, the consensus and quality model
+## M1 — `assemble`, the consensus and quality model ✅
 
-- [ ] Group dedup, modal draft, offset placement (`--mode amplicon`), overlap components
-      (`--mode fragmented`) — the latter also gives contig assembly for free
-- [ ] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
-- [ ] Sub-clustering by *linkage*, not by count of polymorphic sites; ΔBIC over bases, not reads.
-      Threshold 9.91 (`-log10 p`, Bonferroni'd within the MIG), from X3's false-positive curve —
-      **not** the nominal 2.00, which over-calls by 26x
-- [ ] Quality floor `p_floor = ε_RT + 2·ε_pol`, `--rt-error auto` fitted from data
+- [x] Grouping on the **whole** barcode — sample + cell + UMI. A UMI repeats across cells and
+      samples by design; the sort key is `(cell, umi, src_index)` and the range partition is on
+      the cell whenever there is one
+- [x] Range partition into `.mig` buckets, one bucket resident: 531 k reads/s, 121 MB at 16
+      buckets against 203 MB at one, output identical whatever the bucket count
+- [x] Contig assembly (`--contig`): seed placement, union-find overlap components, one consensus
+      per component, **never** bridged across a gap. This is one molecule's fragments only —
+      full-length receptor assembly and doublet filtering are arda's job
+- [x] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
+- [x] Sub-clustering by *linkage*, not by count of polymorphic sites. Threshold 9.61 (`-log10 p`,
+      two-sided, Bonferroni'd within the MIG) from X3's false-positive curve — **not** the nominal
+      2.00, which over-calls by 22x. ⚠ It implies a minimum group size: the strongest evidence a
+      pair of columns can carry is `log10 C(n, n/2)`, so a 50/50 split needs ~34 reads to clear it
+- [x] Quality floor **added**, not compared: `Q = −10 log10(p_cons + p_floor)`, default 1e-4 from
+      X2, so nothing above ~Q38 is emitted
+- [x] The birthday arithmetic re-run on the barcodes assemble saw: `expected_molecules_per_group`
+      says how many molecules a group holds when the UMI is short by design, and contig mode warns
+      when that makes contigs untrustworthy
+- [ ] `--rt-error auto`, fitted per dataset rather than taken from the default
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
-- [ ] Doublet call from *lineages*, not raw variant counts
-- Gate: per-base error ≤1e-5 at coverage ≥5; `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
+- Gate: per-base error ≤1e-5 at coverage ≥5 ✅ (`tests/synthetic/test_assemble.py`, stratified by
+  depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
 
 ## M2 — `checkout`
 
@@ -133,6 +145,8 @@ scientific claim and is validated before any throughput work.
 - **Indels** — Illumina rates ~1e-6/base and no dataset to verify against. Substitutions only.
 - **Duplex consensus (DCS)** — v2.0 extracts duplex tags and emits single-strand consensuses. No
   error-suppression claim in this repo is based on duplex data until DCS exists.
+- **Full-length receptor assembly, doublet calling and contaminating-chain filtering** — arda's
+  job. `--contig` assembles *one molecule's* fragments into a contig and stops there.
 - **EmptyDrops-style cell rescue** — Cell Ranger's job. Ours is OrdMag plus a knee, and the
   benchmark gate is written against that rather than against a Jaccard we cannot reach.
 - **An external merge sort** — range partitioning plus an in-RAM sort per bucket covers it, and

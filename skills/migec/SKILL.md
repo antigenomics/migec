@@ -9,8 +9,8 @@ license: GPL-3.0-or-later
 UMI barcode extraction, correction and consensus assembly. C++20 core, Python CLI. Successor to
 MIGEC (Groovy) and MAGERI (Java); the algorithms carry over, the code does not.
 
-**Status.** `checkout` works. `refine` and `assemble` are not implemented yet — a call to them
-exits 2 with a pointer to `ROADMAP.md`. Do not tell a user that consensus assembly works.
+**Status.** `checkout`, `suggest` and `assemble` work. `refine` and `subsample` are not implemented
+yet — a call to them exits 2 with a pointer to `ROADMAP.md`.
 
 ## Install and check
 
@@ -54,7 +54,10 @@ migec checkout ... -t 8                                 # threads; output identi
 migec checkout ... --trim none                          # keep the read whole, UMI in header only
 migec checkout ... --min-umi-quality 15                 # MIGEC v1 behaviour; NOT the default
 migec checkout ... --write-unmatched
-migec suggest reads.fq.gz -o out/                       # where is the barcode? read it off the data
+migec assemble out/S1.fq.gz -o cons/                    # one consensus per molecule
+migec assemble out/S1.fq.gz -o cons/ --contig          # random-primed reads tiling a molecule
+migec assemble out/S1.fq.gz -o cons/ --rt-error 3e-5   # a measured floor for THIS chemistry
+migec suggest reads.fq.gz -o out/                      # where is the barcode? read it off the data
 migec suggest reads.fq.gz --cycles 40 --umi-deviation 0.18
 migec sheet barcodes.txt
 migec info
@@ -108,6 +111,34 @@ the SAM record, so a space-separated comment produces a malformed BAM.
 
 ⚠ **`dnaio` drops FASTQ comments**, so arda's rnaseq module never sees the tags — anything a
 downstream Python tool needs must be in the read *name*.
+
+## assemble
+
+⛔ **A molecule is sample + cell + UMI, never the UMI alone.** UMIs repeat across cells and samples
+by design. The sort key is `(cell, umi, src_index)`; the partition is on the cell when there is one.
+
+⛔ **The RT floor is added, not compared**: `Q = −10 log10(p_cons + p_floor)`. An error made before
+amplification is in every read, so the two failure modes are independent. Default `--rt-error 1e-4`
+(X2), which caps every emitted quality at ~Q38.
+
+⛔ **`--contig` assembles one molecule's fragments and stops.** Full-length receptor assembly,
+doublet calling and contaminating-chain filtering are **arda's** job, downstream. Contig mode
+places reads by exact seeds, cuts them into overlap components, and never extends a component
+across a gap.
+
+⚠ **Contig assembly needs an unsaturated barcode.** Two fragments of two *different* molecules on
+one barcode share no sequence — indistinguishable from two fragments of one. Read
+`expected_molecules_per_group` in `assemble.json`: above 1 means a short UMI cannot tag every input
+molecule distinctly, which is a design choice, and the contigs are not trustworthy.
+
+⚠ **A tie is not an `N`.** It is resolved by base order and the emitted quality says so (~Q3). An
+`N` would throw away the fact that it is one of two.
+
+| file | content |
+|---|---|
+| `<sample>.consensus.fq.gz` | one record per molecule, barcodes in the name and in RX/CB/BC/MI/cD |
+| `<sample>.mig.tsv` | cell, umi, contig, molecule, reads, length, quality, consensus error, linkage |
+| `assemble.coverage.tsv` | groups per power-of-two MIG size |
 
 ## Interpreting the statistics
 
@@ -171,12 +202,12 @@ analytic estimate sits 2.6× *below* it.
 
 ## Splitting a MIG into two consensuses
 
-⛔ **The threshold is a Bonferroni'd `-log10 p` of 9.91, not the nominal 2.00.** Reads are not
+⛔ **The threshold is a Bonferroni'd `-log10 p` of 9.61, not the nominal 2.00.** Reads are not
 exchangeable: a low-quality read carries a minor base at many positions at once, which is
 indistinguishable from a linked subclone if you only look at the columns. The false-positive curve
 comes from randomising the reads × positions minor-allele matrix while preserving **both** margins
 (per-position error count *and* per-read error load — a curveball swap). The nominal threshold
-calls 31.13% of MIGs as two molecules; the measured one calls 1.20%. `docs/nulls.rst`.
+calls 27.39% of MIGs as two molecules; the measured one calls 1.26%. `docs/nulls.rst`.
 
 ## Things that look like defects and are not
 

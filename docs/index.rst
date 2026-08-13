@@ -46,6 +46,7 @@ SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
 
    installation
    checkout
+   assemble
    umi_statistics
    barcode_space
    performance

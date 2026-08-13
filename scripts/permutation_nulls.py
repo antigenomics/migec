@@ -241,19 +241,25 @@ def minor_matrix(reads, min_minor, max_cols):
 
 
 def linkage_score(mat):
-    """Strongest co-segregation of minor alleles over any pair of columns, Bonferroni'd."""
+    """Strongest co-segregation of minor alleles over any pair of columns, Bonferroni'd.
+
+    Two-sided. At a 50/50 split which allele is the "major" one is a coin toss taken separately
+    per column, so two columns of a genuine doublet can come out anti-correlated and a one-sided
+    test scores the strongest evidence available as nothing. Minor-with-major is the same evidence
+    in the opposite phase; both are tested and the count is halved for it.
+    """
     n, k = len(mat), len(mat[0]) if mat else 0
     if k < 2:
         return 0.0
     colsum = [sum(row[c] for row in mat) for c in range(k)]
     best = 0.0
-    npairs = k * (k - 1) // 2
+    correction = math.log10(k * (k - 1) // 2) + math.log10(2)
     for x, y in itertools.combinations(range(k), 2):
         c11 = sum(1 for row in mat if row[x] and row[y])
-        if c11 < 2:
-            continue
-        s = hypergeom_sf(c11, n, colsum[x], colsum[y]) - math.log10(npairs)
-        best = max(best, s)
+        a, b = colsum[x], colsum[y]
+        same = hypergeom_sf(c11, n, a, b) if c11 >= 2 else 0.0
+        opposite = hypergeom_sf(a - c11, n, a, n - b) if a - c11 >= 2 else 0.0
+        best = max(best, max(same, opposite) - correction)
     return best
 
 

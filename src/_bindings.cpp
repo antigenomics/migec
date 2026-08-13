@@ -5,9 +5,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
+#include "migec/assemble.hpp"
 #include "migec/checkout.hpp"
 #include "migec/fastq.hpp"
 #include "migec/mig_record.hpp"
@@ -314,6 +316,77 @@ PYBIND11_MODULE(_core, m) {
           "statistics, and the wall clock, throughput and peak RSS of the run. The whole file is "
           "processed in C++ with the GIL released, across `threads` workers (0 = one per core); "
           "the output is byte-identical whatever that is set to.");
+
+    m.def(
+        "assemble",
+        [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
+           double rt_floor, double linkage_threshold, bool contig, uint32_t min_reads,
+           int gzip_level, int bucket_bits) {
+            AssembleRequest req;
+            req.input = input;
+            req.output_dir = out_dir;
+            req.sample_id = sample_id;
+            req.consensus.rt_floor = rt_floor;
+            req.consensus.linkage_threshold = linkage_threshold;
+            req.consensus.contig = contig;
+            req.min_reads = min_reads;
+            req.gzip_level = gzip_level;
+            req.bucket_bits = bucket_bits;
+            AssembleStats st;
+            {
+                py::gil_scoped_release release;
+                st = assemble(req);
+            }
+            py::dict d;
+            d["sample_id"] = st.sample_id;
+            d["reads"] = st.reads;
+            d["reads_without_umi"] = st.reads_without_umi;
+            d["reads_dropped"] = st.reads_dropped;
+            d["groups"] = st.groups;
+            d["molecules"] = st.molecules;
+            d["groups_split"] = st.groups_split;
+            d["groups_fragmented"] = st.groups_fragmented;
+            d["contigs"] = st.contigs;
+            d["contig_mode"] = contig;
+            d["cell_length"] = st.cell_length;
+            d["expected_molecules_per_group"] = st.expected_molecules_per_group;
+            py::dict sp;
+            sp["effective_space"] = st.space.effective_space;
+            sp["effective_length"] = st.space.effective_length;
+            sp["occupancy"] = st.space.occupancy;
+            sp["lambda"] = st.space.lambda;
+            sp["molecules"] = st.space.molecules;
+            sp["p_multi"] = st.space.p_multi;
+            sp["saturated"] = st.space.saturated;
+            d["barcode_space"] = sp;
+            d["umi_length"] = st.umi_length;
+            d["buckets"] = st.buckets;
+            d["mean_quality"] = st.mean_quality;
+            d["mean_consensus_error"] = st.mean_consensus_error;
+            d["quality_cap"] = -10.0 * std::log10(rt_floor);
+            d["wall_seconds"] = st.wall_seconds;
+            d["partition_seconds"] = st.partition_seconds;
+            d["peak_rss_bytes"] = peak_rss_bytes();
+            py::list hist;
+            for (size_t b = 0; b < st.size_histogram.size(); ++b) {
+                py::dict e;
+                e["min_reads"] = static_cast<uint64_t>(1) << b;
+                e["max_reads"] = (static_cast<uint64_t>(1) << (b + 1)) - 1;
+                e["groups"] = st.size_histogram[b];
+                hist.append(e);
+            }
+            d["coverage"] = hist;
+            return d;
+        },
+        py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
+        py::arg("rt_floor") = 1e-4, py::arg("linkage_threshold") = 9.61,
+        py::arg("contig") = false, py::arg("min_reads") = 1u, py::arg("gzip_level") = 6,
+        py::arg("bucket_bits") = 0,
+        "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "
+        "buckets and sorted one bucket at a time, so nothing scales with the library. Emitted "
+        "quality is capped at -10 log10(rt_floor), the RT/first-cycle-PCR error that no consensus "
+        "removes; a group is split into two molecules only when the co-segregation of its minor "
+        "alleles exceeds `linkage_threshold`, which is a measured false-positive point.");
 
     m.def(
         "suggest",

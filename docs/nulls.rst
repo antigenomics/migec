@@ -176,25 +176,36 @@ positions, as a Bonferroni-corrected hypergeometric ``-log10 p``.
      - MIGs called
      - called
    * - 0.05
-     - 5.13
-     - 119
-     - 7.16%
+     - 4.83
+     - 120
+     - 7.22%
    * - 0.01
-     - 9.91
-     - 20
-     - 1.20%
+     - 9.61
+     - 21
+     - 1.26%
    * - 0.001
-     - 32.72
+     - 32.42
      - 1
      - 0.06%
 
-A nominal ``p < 0.01`` — score > 2.00, which is what the derivation gives — calls **517 MIGs,
-31.13%**. The permutation puts the 1% false-positive point at **9.91**, calling 1.20%. The derived
-threshold over-calls by **26×**, and every one of those splits would have become a spurious extra
+A nominal ``p < 0.01`` — score > 2.00, which is what the derivation gives — calls **455 MIGs,
+27.39%**. The permutation puts the 1% false-positive point at **9.61**, calling 1.26%. The derived
+threshold over-calls by **22×**, and every one of those splits would have become a spurious extra
 molecule.
 
 That is the threshold M1 uses. It is a measured false-positive curve, not a derivation, and it is
 the whole reason X3 blocks the error model rather than following it.
+
+The test is **two-sided**, and it has to be. At a 50/50 split which allele is the "major" one is a
+coin toss taken separately in each column, so the two columns of a genuine doublet come out
+*anti*-correlated as often as not, and a one-sided test scores the strongest evidence there is as
+nothing at all. Minor-with-major is the same evidence in the opposite phase; both are tested and
+the count is halved for it, which is where 9.91 became 9.61.
+
+One consequence worth stating, because it is a floor rather than a tuning knob: the strongest
+evidence a pair of columns can carry is ``log10 C(n, n/2)``, so **a 50/50 split needs about 34
+reads before it can clear 9.61 at all**. Below that the data cannot distinguish a subclone from a
+pair of bad reads at a 1% false-positive rate, and migec does not pretend otherwise.
 
 .. note::
 
@@ -212,5 +223,5 @@ What this settles
 - **The distance-1 background is 92% chance** at half occupancy and must be permuted, not derived.
   Doing so moves the barcode error estimate from 2.6× below the Phred + polymerase prediction to
   1.7× above it.
-- **The split threshold is 9.91, not 2.00.** The derivation over-calls by 26× because reads are not
+- **The split threshold is 9.61, not 2.00.** The derivation over-calls by 22× because reads are not
   exchangeable.

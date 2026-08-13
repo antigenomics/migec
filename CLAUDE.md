@@ -67,7 +67,16 @@ correction is written up in `project/review-algorithms.md`.
   a minor base at many positions at once, so column permutation hands every read an average error
   load and calls the resulting co-segregation significant. Preserve *both* margins of the
   reads × positions matrix (curveball). Measured: the nominal `p < 0.01` split threshold calls
-  31.13% of MIGs, the both-margins null puts the 1% false-positive point 26x higher, at 9.91.
+  27.39% of MIGs, the both-margins null puts the 1% false-positive point 22x higher, at 9.61.
+- ⛔ **A molecule is sample + cell + UMI, never the UMI alone.** UMIs repeat across cells and
+  samples by design; grouping on the UMI merges two molecules and nothing downstream can tell.
+  `assemble` sorts on `(cell, umi, src_index)` and partitions on the cell when there is one.
+- ⛔ **Contig assembly means one molecule's fragments, nothing more.** Random priming leaves reads
+  that tile a molecule under one barcode; `--contig` places them and emits one consensus per
+  overlap component. Assembling a cell's full-length receptor, calling doublets and filtering
+  contaminating chains are **arda's** job. ⚠ It also needs a barcode that is not saturated: two
+  fragments of two different molecules on one barcode have no sequence in common, which is exactly
+  what two fragments of one look like. Report `expected_molecules_per_group` and warn.
 - ⛔ **Range partition, never hash partition.** A hash sends a barcode and its 1-mismatch
   neighbours to uncorrelated buckets, which makes correction impossible to apply and splits the
   molecule permanently — and the halves each look like a well-formed MIG, so nothing detects it.
@@ -152,10 +161,21 @@ correction is written up in `project/review-algorithms.md`.
   and the 1.86x collision excess is the read threshold, not the barcode. 92% of distance-1 pairs
   are chance at 47.8% occupancy; the column-shuffle background puts barcode error at 3.4e-3 —
   within 1.7x of the Phred + polymerase prediction, where the analytic estimate is 2.6x below it,
-  so **M3 takes the permuted background**. The split threshold is **9.91, not 2.00**.
+  so **M3 takes the permuted background**. The split threshold is **9.61, not 2.00**.
   `docs/nulls.rst`, `scripts/permutation_nulls.py`, `tests/synthetic/test_nulls.py`.
-- Next: **M1** (`assemble`: overlap components per X1, consensus, quality capped per X2,
-  sub-clustering at X3's threshold).
+- **M1 is done (2026-08-13): `migec assemble` works.** `(cell, umi)` grouping, range partition
+  into `.mig` buckets with one bucket resident, the column log-likelihood posterior, the RT floor
+  added (not compared) so nothing above ~Q38 is emitted, linkage sub-clustering at X3's 9.61, and
+  `--contig` for random-primed reads (seed placement, union-find overlap components, never bridged
+  across a gap). 531 k reads/s; 121 MB at 16 buckets against 203 MB at one; asserted in
+  `tests/benchmark/test_assemble_speed.py` in a fresh process per configuration, because
+  `peak_rss_bytes` is a process high-water mark.
+- ⚠ **The writer buffer budget is split across buckets, not per bucket.** A fixed per-writer block
+  made pass 1 cost grow with the bucket count, which is backwards — more buckets exist to use less
+  memory, and cutting finer made peak RSS go *up* (238 MB at 16 buckets against 213 at one). It is
+  now `clamp(32 MB / buckets, 256 kB, 4 MB)`.
+- Next: **M3** (`refine`), taking X3's permuted distance-1 background; then the M2 remainder
+  (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.

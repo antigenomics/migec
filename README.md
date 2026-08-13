@@ -6,9 +6,9 @@ A complete C++20 rewrite of [MIGEC](https://doi.org/10.1038/nmeth.2960) (Shugay 
 Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shugay et al., *PLoS
 Computational Biology* 2017).
 
-> **Version 2 is under construction.** `checkout` works today — barcode extraction, trimming,
-> header transfer and the UMI statistics. `refine` and `assemble` land over the following
-> milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
+> **Version 2 is under construction.** `checkout` and `assemble` work today — barcode extraction,
+> trimming, header transfer, the UMI statistics, and consensus assembly with a measured quality
+> cap. `refine` lands over the following milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
 > at tag `v1-final` — Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
 
 ## Why
@@ -94,6 +94,41 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
 
+### It collapses each molecule, and caps what it claims
+
+```bash
+migec assemble out/S1.fq.gz -o cons/
+migec assemble out/S1.fq.gz -o cons/ --contig     # random-primed reads that tile the molecule
+```
+
+A molecule is **sample + cell barcode + UMI**, never the UMI alone — the same UMI in two cells is
+two molecules, and that is the design rather than a defect. Reads are range partitioned on the
+packed key into `.mig` buckets and one bucket is sorted at a time, so nothing scales with the
+library: 531,365 reads/s, and 121 MB at 16 buckets against 203 MB at one.
+
+The per-column posterior is `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`, and then the number that
+matters:
+
+```
+Q(j) = −10 log10( p_cons(j) + p_floor )
+```
+
+The floor is **added, not compared**. An RT or first-cycle-PCR error is in every read and no
+consensus removes it, so `assemble` never emits a quality above ~Q38 — the floor measured in
+[docs/quality_floor.rst](docs/quality_floor.rst), not the 1e-6 that gets assumed.
+
+`--contig` is for random-primed libraries, where reads sharing a barcode tile the molecule instead
+of starting at the same base. They are placed against each other by seed matching, cut into overlap
+components, and one consensus is emitted per component — a component is **never** extended across a
+gap, because 27.3% of 10x groups hold more than one and a single consensus over those asserts
+sequence no read covers. Assembling a cell's full receptor and calling doublets is
+[arda](https://github.com/antigenomics/arda)'s job, not this one.
+
+⚠ Contig assembly needs a barcode that is not saturated: two fragments of two *different* molecules
+sharing a barcode have no sequence in common, which is exactly what two fragments of one look like.
+`assemble` runs the same birthday arithmetic on the barcodes it saw and reports how many molecules
+a group holds on average — above 1, the warning says so. See [docs/assemble.rst](docs/assemble.rst).
+
 ### It tells you where the barcode is
 
 `migec suggest` reads the layout off the reads rather than off the protocol. A UMI cycle is one the
@@ -162,13 +197,13 @@ nothing. On the same HIV library — 125,369 distinct 9 nt barcodes, 47.8% occup
 |---|---|---|
 | positions are independent | 1.04× excess over 9 nt | the assumption holds |
 | distance-1 pairs are error children | 92% are chance; ~19,400 are real | permute the background |
-| split a MIG at nominal `p < 0.01` | 1% false positives at `-log10 p` = 9.91 | **26× over-call** |
+| split a MIG at nominal `p < 0.01` | 1% false positives at `-log10 p` = 9.61 | **22× over-call** |
 
 The last one is the one that mattered. Reads are not exchangeable — a low-quality read carries a
 minor base at many positions at once and looks exactly like a linked subclone — so the null has to
 preserve *both* margins of the reads × positions matrix, per-position error count and per-read
-error load. The nominal threshold calls 31.13% of MIGs as two molecules; the permutation calls
-1.20%. See [docs/nulls.rst](docs/nulls.rst).
+error load. The nominal threshold calls 27.39% of MIGs as two molecules; the permutation calls
+1.26%. See [docs/nulls.rst](docs/nulls.rst).
 
 ### Speed and memory are reported, not assumed
 
