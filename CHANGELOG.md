@@ -4,7 +4,10 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.2.0 — 2026-08-13
+
+Throughput and one new measurement. No breaking change: every 2.1.0 command, flag and output file
+behaves as it did, and the additions are a new table, four new JSON fields and two new plot panels.
 
 ### The barcode error rate, measured at every depth
 
