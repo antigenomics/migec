@@ -200,6 +200,10 @@ tool that *deduplicates* on it replaces a stage of migec. Running two deduplicat
 counts each molecule once and then collapses the result again, which silently merges distinct
 molecules that happen to share a sequence.
 
+Variant callers fall on both sides of that same line, and the choice matters less than the
+molecule count they are handed: :doc:`variants` has the table, the published comparison, and the
+arithmetic that says whether a variant is present in enough molecules for any caller to find it.
+
 Counting after collapsing
 -------------------------
 

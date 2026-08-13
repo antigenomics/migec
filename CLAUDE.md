@@ -465,12 +465,35 @@ correction is written up in `project/review-algorithms.md`.
   5. **i7xi5 contingency table** — needs nothing that is not already in the headers.
   6. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
-  7. **ctDNA ground truth** (COSMIC at 0.005-0.075 VAF). Must be built: Maruzani's deposited runs
-     carry no UMI.
+  7. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
+     built -- only the call sets are missing.
   8. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
   9. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+- **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
+  reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
+  `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline
+  UMI**, and `migec suggest` recovers it from base composition alone. Never: "no public ctDNA data
+  has usable UMIs" is a statement about the two runs Maruzani picked, not about the archive --
+  check read structure (`scripts/sra_fetch.py probe`) before believing it. Note: `PRJNA507366`'s
+  design is in **`library_name`**, not `sample_alias`; every alias there is
+  `SeraCare_Reference_Material`, so the alias alone makes a designed study look undesigned.
+- **Never: the molecule total of a multiplex panel is not the count at a site.** A variant sits on
+  one amplicon, so the evidence a caller gets is `molecules / amplicons`. The amplicon count is
+  measured from consensus prefixes, and its share threshold must sit in the **gap** below the
+  smallest real amplicon (5%, where the gap is 7.6% to 1.1%): at 1% the count moved with depth --
+  5 on the deepest run, 10 on the shallowest, because a shallow consensus carries more payload
+  error -- which deflates the per-amplicon count on exactly the runs where evidence is thinnest.
+- **Note: `scripts/sra_fetch.py` is the fetch-on-demand path**, so `isalgo/umi_data` holds only CI
+  fixtures and semi-internal data. Never: ENA's ready-made FASTQ looks like the lazy source and is
+  33x slower -- **200 kB/s against NCBI S3's 6.7 MB/s** on 8 connections, measured on SRR17220895.
+  S3 plus `fasterq-dump` is the default; `--prefer ena` exists for studies that deposited a third
+  file the `.sra` folds away.
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
+- **Note: the ctDNA titration runs on aldan3** (`~/migec-ctdna`, `migec_ctdna.sbatch`, partition
+  `medium`, 16 cores / 32 GB). The job builds its own micromamba env because the cluster's system
+  python is **3.8** and migec needs >= 3.10, and it installs from PyPI rather than from source,
+  which doubles as a check that the published linux wheels work.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. Note: The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.

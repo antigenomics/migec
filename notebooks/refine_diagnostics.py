@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["marimo", "migec", "altair", "polars"]
+# dependencies = ["marimo", "migec", "polars", "altair", "pyarrow", "pandas"]
 # ///
 """UMI diagnostics: the coverage curve, the barcode-rank plot, and where the errors are.
 

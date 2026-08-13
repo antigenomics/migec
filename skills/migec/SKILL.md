@@ -172,6 +172,46 @@ of a *raw* barcode read and deduplicate themselves; migec already did, and the b
 longer exists. One consensus is one molecule, so a plain `salmon`/`kallisto` count already is a
 molecule count.
 
+### Variant calling (`docs/variants.rst`)
+
+Same rule, one level on: a caller that *transports* the barcode composes, one that *deduplicates*
+on it replaces a stage.
+
+| caller | after `assemble`? | why |
+|---|---|---|
+| Mutect2, LoFreq, FreeBayes, VarDict, bcftools | **yes** | they read a BAM and ignore `RX`; depth already is a molecule count |
+| UMI-VarCal | **no** | own UMI pileup and consensus -- an alternative to `assemble` |
+| UMIErrorCorrect | **no** | aligns, then groups on (position, UMI) -- an alternative pipeline |
+| DREAMS-vc, Shearwater | **no** as normally run | per-position error model fitted on *reads*, against a panel of normals |
+
+**Never: do not apply a UMI-aware caller's family-size filter to a consensus.** After `assemble`
+every family has size 1 by construction, so `--min-family-size 3` discards the entire library and
+reports zero variants without erroring.
+
+Which caller matters less than the molecule count it is given:
+
+```
+molecules at a site = input DNA / 3.3 pg x strands recovered x efficiency
+variant molecules   = molecules at a site x VAF
+```
+
+**Note: depth buys molecules until it does not.** Deeper sequencing recovers more of the molecules
+that are in the tube -- measured 6,310 / 10,299 / 16,809 per amplicon at 3.3 / 10 / 30x on the same
+20 ng library -- but the ceiling is the number of input molecules, and past it further reads only
+raise reads-per-molecule. Both depth and input are worth spending on until the molecule count stops
+rising. The supporting count is then a Poisson draw: an expectation of 3 means a third of
+replicates see fewer than 3, whatever the caller.
+
+**Never: for a multiplex panel divide by the panel size.** A variant sits on one amplicon, so the
+library total overstates the evidence by exactly that factor. Measured: 5 amplicons for
+`PRJNA788522`, 3 for `PRJNA507366`. At 0.125% VAF this is what separates a certain call from a coin
+flip -- 20 ng gives 15.0 variant molecules (P(>=3) = 1.00), 5 ng gives 3.4 (P = 0.65).
+
+Defaults, from Maruzani et al. 2024 (BMC Genomics, doi:10.1186/s12864-024-10737-w): **LoFreq** for
+a balanced call set, **Mutect2** for sensitivity (and run `FilterMutectCalls`, which that
+comparison deliberately did not), **UMI-VarCal** for the fewest false positives on UMI data,
+**bcftools** never below ~8% VAF.
+
 ## refine
 
 **Never: Err on precision, never recall.** A wrong merge deletes a molecule and nothing downstream can
@@ -403,9 +443,38 @@ worst *error* at the same substitution distance. Targets after UMI consensus: `V
 Note: Anchor on the junction's 3′ end only. V1 differs at position 4 and V2 at 7–8, so a 5′ anchor
 makes both variants count as zero and the metric look perfect.
 
+## Running a cohort
+
+Two, both in `docs/nextflow.rst`:
+
+- **`integrations/slurm/`** — `migec_sample.sbatch` (env-driven, one sample) and
+  `migec_array.sbatch` (one array task per sheet row). Both run as **ordinary bash without SLURM**,
+  which is how they are tested and how a layout should be checked before queueing.
+  Note: array task 1 is the first *data* row -- the header is skipped, not counted, so the range is
+  `1-(rows - 1)`.
+- **`integrations/nextflow/`** — `--mode consensus | ctdna | airr`. The `ctdna` mode aligns and
+  calls variants, `airr` calls clonotypes with arda. The align module exits non-zero if `MI:Z:`
+  does not reach the BAM, because that failure is otherwise silent. Note: nextflow is not installed
+  on this machine, so those modules are spec-reviewed rather than run.
+
+Sizing: `checkout` wants cores (scales with reads), `refine` wants memory (scales with **distinct
+barcodes**; `table_bytes` in its JSON sizes the next run), `assemble` wants cores (peak memory is
+set by the bucket count, not the library).
+
+## Fetching public data
+
+`scripts/sra_fetch.py` — `probe` (read structure from metadata, no download), `url`, `peek`
+(first N spots, enough for `migec suggest`), `get`. Note: NCBI's S3 mirror is the default because
+it is **33x faster than ENA's ready-made FASTQ** here (6.7 MB/s on 8 connections against 200 kB/s);
+`--prefer ena` exists for studies that deposited a file the `.sra` folds away. Never: some runs
+list their *original submitted* file ahead of the `.sra`, so select on the file `type` rather than
+taking the first entry.
+
 ## References in the repo
 
 - `docs/checkout.rst`, `docs/umi_statistics.rst`, `docs/performance.rst`, `docs/grouping.rst`,
-  `docs/validation.rst`, `docs/formats.rst`, `docs/nulls.rst`
+  `docs/validation.rst`, `docs/formats.rst`, `docs/nulls.rst`, `docs/variants.rst`,
+  `docs/nextflow.rst`
+- `notebooks/` — six marimo notebooks, four of which need no network; `notebooks/README.md`
 - `CLAUDE.md` — the non-negotiables and why each exists
 - `project/` — the design record: six subsystem designs and two critiques, with 25 corrected errors

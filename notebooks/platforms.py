@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["marimo", "migec", "polars", "altair", "huggingface-hub"]
+# dependencies = ["marimo", "migec", "polars", "altair", "pyarrow", "pandas", "huggingface-hub"]
 # ///
 """Every barcode layout migec has been tested against, and how to declare it.
 

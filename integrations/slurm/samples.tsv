@@ -1,0 +1,6 @@
+sample	r1	r2	layout	payload_mate
+PBMC1	PBMC1_R1.fq.gz	PBMC1_R2.fq.gz	10x-v2	2
+PBMC2	PBMC2_R1.fq.gz	PBMC2_R2.fq.gz	10x-v2	2
+HIV	SRR1763769_2.fq.gz	-	primerid	1
+ctDNA1	SRR17220921_1.fq.gz	-	0:12	1
+TSO500	tso_R1.fq.gz	tso_R2.fq.gz	tso500	1

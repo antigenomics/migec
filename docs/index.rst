@@ -76,6 +76,9 @@ Where to go
      - :doc:`Commands <commands>` -- all eight, with the number each one decides
    * - align or quantify the consensus
      - :doc:`Downstream <downstream>`, where every tool in the table was actually run
+   * - call rare variants (ctDNA, tumour)
+     - :doc:`Variant calling <variants>` -- which caller, and the molecule count that decides
+       whether any of them can see it
    * - know why a default is what it is
      - :doc:`Method <method>`
    * - look up a column or a tag
@@ -90,5 +93,6 @@ Where to go
    Layouts <layouts>
    commands
    Downstream <downstream>
+   Variant calling <variants>
    method
    reference

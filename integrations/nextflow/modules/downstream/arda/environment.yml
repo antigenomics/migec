@@ -1,0 +1,8 @@
+name: arda
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - pip
+  - pip:
+      - arda

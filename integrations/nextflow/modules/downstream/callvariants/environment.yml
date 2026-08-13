@@ -1,0 +1,7 @@
+name: callvariants
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::lofreq=2.1.5
+  - bioconda::htslib=1.21

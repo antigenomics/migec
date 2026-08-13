@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["marimo", "migec", "altair", "polars"]
+# dependencies = ["marimo", "migec", "polars", "altair", "pyarrow", "pandas"]
 # ///
 """Barcode space, collisions and the error budget -- the numbers checkout computes rather than counts.
 
