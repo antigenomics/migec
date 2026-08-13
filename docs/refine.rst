@@ -1,5 +1,5 @@
-refine
-======
+refine -- correct the errors in the barcode
+===========================================
 
 Correct the barcode errors, then hand the reads on. This is the stage that decides **how many
 molecules there were**.

@@ -6,7 +6,8 @@ and quantifier checks, skipped when the tool is not on PATH.
 
 The contract has two halves and they are consumed separately: the read NAME carries the molecule
 id for tools that drop FASTQ comments (arda goes through dnaio, which does), and the tab-separated
-SAM tags carry everything for tools that keep it (`minimap2 -y`, `bwa mem -C`).
+SAM tags carry everything for tools that keep it (`minimap2 -y`, `bwa mem -C`,
+`minibwa map -y`).
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ def _tags_in_sam(sam_text):
     return counts
 
 
-@pytest.mark.parametrize("tool", ["minimap2", "bwa"])
+@pytest.mark.parametrize("tool", ["minimap2", "bwa", "minibwa"])
 def test_an_aligner_carries_the_tags_into_the_sam(consensus, tmp_path, tool):
     """The one property `-y` / `-C` exist for. Skipped where the aligner is not installed."""
     if shutil.which(tool) is None:
@@ -107,6 +108,11 @@ def test_an_aligner_carries_the_tags_into_the_sam(consensus, tmp_path, tool):
 
     if tool == "minimap2":
         cmd = ["minimap2", "-ax", "sr", "-y", str(reference), str(consensus)]
+    elif tool == "minibwa":
+        # `-y`, the minimap2 spelling -- NOT bwa's `-C`, even though minibwa succeeds bwa-mem.
+        # The legacy `minibwa mem` subcommand is the one that takes `-C`.
+        subprocess.run(["minibwa", "index", str(reference)], check=True, capture_output=True)
+        cmd = ["minibwa", "map", "-y", str(reference), str(consensus)]
     else:
         subprocess.run(["bwa", "index", str(reference)], check=True, capture_output=True)
         cmd = ["bwa", "mem", "-C", str(reference), str(consensus)]

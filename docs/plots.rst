@@ -1,5 +1,5 @@
-QC figures
-==========
+plot -- sixteen QC figures
+==========================
 
 .. code-block:: bash
 

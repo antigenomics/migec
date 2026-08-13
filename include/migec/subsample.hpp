@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace migec {
 
@@ -55,6 +57,16 @@ struct SubsampleStats {
     uint64_t reads_kept = 0;
     uint64_t barcodes_seen = 0;   // distinct, among kept reads
     uint64_t reads_without_umi = 0;
+    // The MEDIAN reads per kept barcode, next to the mean, because the mean of a MIG size
+    // distribution is set by its tail: a library at a median of 1 and a mean of 4 has been
+    // subsampled correctly and still consists mostly of singletons, and only the median says so.
+    uint64_t reads_per_barcode_median = 0;
+    uint64_t reads_per_barcode_max = 0;
+    // A few kept barcodes with their read counts, so a run can be eyeballed rather than trusted.
+    // In KEY order, never first-seen order: a barcode with 100 reads appears early about 100x more
+    // often than a singleton, so the head of the file is a sample of the large MIGs and of nothing
+    // else -- the same trap `subsample` exists to avoid, one level down.
+    std::vector<std::pair<std::string, uint64_t>> examples;
     double wall_seconds = 0.0;
 };
 

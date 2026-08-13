@@ -95,12 +95,28 @@ Runnable notebooks
    * - ``notebooks/refine_diagnostics.py``
      - the coverage curve, the barcode-rank plot, and where the errors are
 
+Then what
+---------
+
+The consensus is ordinary FASTQ, so an aligner or a quantifier takes it directly. All four were run
+against real ``assemble`` output; :doc:`downstream` has the table and the record counts.
+
+.. code-block:: bash
+
+   minimap2 -ax sr -y  ref.fa asm/S1.consensus.fq.gz | samtools sort -o S1.bam
+   minibwa map -y -t8  ref.fa asm/S1.consensus.fq.gz | samtools sort -o S1.bam
+   bwa mem -C          ref.fa asm/S1.consensus.fq.gz | samtools sort -o S1.bam
+   salmon quant -i tx.idx -l A -r asm/S1.consensus.fq.gz -o quant/   # NumReads = molecules
+
+Never: not ``alevin``, ``bustools`` or ``STARsolo``. They deduplicate from a raw barcode read that
+no longer exists, so running them on a consensus collapses the library twice. :doc:`downstream`
+also covers when to align *before* collapsing instead.
+
 Pipelines
 ---------
 
-``integrations/nextflow/migec/`` is an nf-core-style local module for
+``integrations/nextflow/`` is an nf-core-style local module set for
 `nf-core/airrflow <https://nf-co.re/airrflow>`_ or any pipeline handing you FASTQ pairs. SLURM is
-the pipeline's business; the module declares ``label`` and ``task.cpus`` and nothing more.
-
-Note: only ``checkout`` threads. ``refine`` and ``assemble`` are single-threaded by construction,
-so ask for the cores ``checkout`` can use and no more.
+the pipeline's business; the modules declare ``label`` and ``task.cpus`` and nothing more. All
+three stages thread, and all three are byte-identical at any thread count, so a retry with more
+cores cannot change a result. See :doc:`nextflow`.

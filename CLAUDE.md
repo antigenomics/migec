@@ -289,13 +289,24 @@ correction is written up in `project/review-algorithms.md`.
   correct. Presets in `sheet.PRESETS`: umi, migec, primerid, duplex, 10x, 10x-v2, tso500,
   smarter-umi. Never: every preset carries a citable source and a test that compiles it; a preset
   nobody can run is worse than none, because it looks supported.
-- **The downstream contract is measured (`docs/downstream.rst`).** minimap2 `-y`, bwa `-C`, arda,
-  salmon, kallisto all run against real `assemble` output; 600/600 records keep `RX`/`CB`/`MI`
-  through a sorted BAM, and arda's AIRR `sequence_id` **is** the molecule id. Note: that is why the
-  name is `<sample>.<cell>.<umi>` — `dnaio` drops FASTQ comments, so the name must stand alone.
-  Never: alevin/bustools/STARsolo must not see a consensus FASTQ; they deduplicate from a raw
-  barcode read that no longer exists. STAR unverified here — the brew arm64 build reads 0 reads
-  from any FASTQ, including a one-record file, so it says nothing about our output.
+- **The downstream contract is measured (`docs/downstream.rst`).** minimap2 `-y`, bwa `-C`,
+  **minibwa `map -y`**, arda, salmon, kallisto all run against real `assemble` output; 600/600
+  records keep `RX`/`CB`/`MI` through a sorted BAM, and arda's AIRR `sequence_id` **is** the
+  molecule id. Note: that is why the name is `<sample>.<cell>.<umi>` — `dnaio` drops FASTQ
+  comments, so the name must stand alone. Note: minibwa spells the flag `-y` on `map` (minimap2's)
+  and `-C` on the legacy `mem` (bwa's); each rejects the other with a non-zero exit, so the tags are
+  never dropped quietly. Never: alevin/bustools/STARsolo must not see a consensus FASTQ; they
+  deduplicate from a raw barcode read that no longer exists. STAR unverified here — the brew arm64
+  build reads 0 reads from any FASTQ, including a one-record file, so it says nothing about our
+  output.
+- **Map-first vs collapse-first is written up (`docs/downstream.rst`, 2.0.0a4).** fgbio, UMI-tools
+  and UMIErrorCorrect (Österlund 2022, `SOURCES.md`) align raw reads and group on *(position, UMI)*;
+  we group on *(sample, cell, UMI)* and align once. Note: the position is worth real key bits when
+  the barcode is short (TSO500's 5 nt is 1,024 barcodes) and close to zero on a repertoire library,
+  where everything maps to the same V genes. Note: what `assemble`'s linkage sub-clustering at 8.68
+  recovers is exactly that discriminating power, from the payload, with no aligner. Note: the
+  dividing line for downstream tools is **transport vs deduplicate** — a tool that carries `RX`
+  composes with migec, a tool that dedups on it replaces a stage of migec.
 - **SRP150352 (UMI RNA-seq, Sci Rep 2018) cannot be reprocessed from SRA** — `ncgr/UMI-analysis`
   moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
   missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
@@ -341,11 +352,44 @@ correction is written up in `project/review-algorithms.md`.
   -DCMAKE_CXX_FLAGS="-fsanitize=thread -g"`. 104 cases, 224,116 assertions, no race -- and the
   instrumentation was proven to fire on a deliberate unsynchronised counter in `parallel_for`
   before the clean run was believed.
-- **`--limit-read` / `--limit-umi` on every stage (2.0.0a3).** Never: a limit is not a sample and the
-  report says so -- the first N reads are one corner of one flowcell. `subsample` is the sampler.
-- **Note: `migec sort` was asked for and measured instead.** assemble's partition pass is 0.26 s of
-  a 0.34 s run at 1.4 M reads/s; a separate sort would add a whole read+write to save part of
-  that. It stays unexposed until a benchmark says otherwise.
+- **`--limit-read` on every stage, `--limit-umi` on refine and assemble (2.0.0a3).** Note: checkout
+  has no `--limit-umi` and should not — counting distinct UMIs there means matching first, which is
+  the work being limited. Never: a limit is not a sample and the report says so -- the first N reads
+  are one corner of one flowcell. `subsample` is the sampler.
+- **Note: `migec sort` was asked for and measured instead.** A separate sort adds a whole read+write
+  to skip a pass that is now 1.45 s of a 1.95 s run at 2.05 M reads/s, and you pay it again on every
+  input. It stays unexposed until a benchmark says otherwise.
+- **assemble's partition threads too (2026-08-13, 2.0.0a4).** It was 2.07 s of a 2.69 s run against
+  a 0.23 s `gzip -dc` floor, so five sixths of it was not the inflate. Now: **1,481,946 ->
+  2,051,937 reads/s, and peak RSS 1,479 -> 789 MB.** Never: **ownership, not locking** -- worker w
+  owns every bucket with `bucket % threads == w` for the whole run, so a bucket file has exactly one
+  writer and no bucket state is shared; ownership decides *who* writes a record, never which file or
+  where, which is why the bytes do not move with `-t`. Never: **assign into the chunk, never
+  `clear()` it** -- clear destroys four `std::string` per record and the reader ends up in malloc
+  instead of inflate; that was half the win.
+- **Never: an estimate that nothing checks will be wrong, and this one was.** `choose_bucket_bits`
+  assumed a gzipped FASTQ goes resident at **8x** on disk. Measured: **19x** -- a resident record is
+  two heap `std::string` with allocator headers and rounded-up buckets, not the 180 bytes of
+  payload. Guessing low is the expensive direction: it picks too few buckets and pass 2 holds
+  `kBucketConcurrency` of them at once, which is the entire 1,479 MB. It is 20x now.
+- **Note: the chunk is 8192 and a bigger one is 22% faster.** 64 k reads gives 2,510,241 reads/s,
+  because `parallel_for` starts and joins its threads per call and 4 M reads at 8 k pays ~15,000
+  thread creations. Not taken: 16 MB of resident chunk makes **pass 1** the memory peak on a finely
+  partitioned shallow library, breaking "a finer partition costs less, not more" --
+  `test_shallow_memory_is_still_bounded_by_the_bucket` is what caught it. The upgrade path is a
+  persistent worker pool, not a bigger chunk.
+- **`subsample` reports what it kept (2.0.0a4)**: median and deepest reads per kept barcode next to
+  the mean, plus five example barcodes with their depths. Never: **in key order, not first-seen
+  order** -- a 100-read barcode appears early ~100x more often than a singleton, so the head of a
+  file samples the deep MIGs and nothing else. Same trap as subsampling reads, one level down.
+- **The docs navigate (2.0.0a4).** Twenty pages of flat toctree put every long page title in the
+  pydata header; they are seven sections now (Installation, Examples, Layouts, Commands, Downstream,
+  Method, Reference) with landing pages saying what each page answers, and every command page has a
+  subtitle. `docs/nextflow.rst` is new. Note: nextflow is not installed here, so the modules are
+  reviewed against the nf-core spec, not verified by a run, and the docs say so.
+- **Never: `containsKey`, not `?:`, for a nextflow boolean.** Groovy's elvis treats `false` as
+  absent, so a per-sample `contig: false` against `params.migec_contig = true` silently meant its
+  opposite -- the one direction a per-sample override exists to make possible.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
   (`.mig` bucket output from checkout, i7xi5, bit-parallel matcher), then `--rt-error auto`.
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

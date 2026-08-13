@@ -44,10 +44,13 @@ int choose_bucket_bits(const std::string& path) {
     std::error_code ec;
     const uintmax_t on_disk = std::filesystem::file_size(path, ec);
     if (ec) return floor_bits;
-    // A gzipped FASTQ expands ~3.5x, and a resident record costs about as much again in the
-    // string copies and the record vector. 8x on-disk is the working estimate; it decides only
-    // how finely the input is cut, and being one bucket out costs nothing but a little IO.
-    uint64_t resident = static_cast<uint64_t>(on_disk) * 8;
+    // MEASURED, not estimated: 8x was a guess and it was 2.4x too small. 4 M reads of 90 nt in a
+    // 67 MB gzip hold 1.28 GB across the buckets of pass 2 -- 19x on disk -- because a `Resident`
+    // is two heap std::strings (each with its allocator header and its rounded-up bucket) plus
+    // three 8-byte keys, not just the 180 bytes of payload. Guessing low is the expensive
+    // direction: it picks too few buckets, and pass 2 holds `kBucketConcurrency` of them at once.
+    // 20x rounds the measurement up.
+    uint64_t resident = static_cast<uint64_t>(on_disk) * 20;
     // Per bucket, so that kBucketConcurrency of them are resident inside the total budget.
     const uint64_t per_bucket = kBucketBudgetBytes / static_cast<uint64_t>(kBucketConcurrency);
     int bits = floor_bits;
@@ -106,77 +109,162 @@ AssembleStats assemble(const AssembleRequest& request) {
     stats.buckets = static_cast<int>(n_buckets);
 
     // ------------------------------------------------------------------ pass 1: partition
+    //
+    // Measured before it was threaded: 2.07 s of a 2.69 s run on 4 M reads, against a 0.23 s
+    // `gzip -dc` floor for the same file. So five sixths of the partition is not the inflate --
+    // it is the tag scan, the barcode packing, the record serialisation and the level-1 deflate of
+    // each bucket block. All four move to the workers here, and the reader stays where it has to.
+    //
+    // Ownership, not locking: worker w owns every bucket with `bucket % threads == w` for the whole
+    // run, so a bucket file has exactly one writer and no bucket state is ever shared. Records
+    // reach a bucket in input order because the chunks are consumed in order and each worker walks
+    // its chunk forwards, which is what keeps the bytes identical to the serial version -- and
+    // identical at any `-t`, since ownership decides *who* writes a record and never *which* file
+    // it lands in or *where* in that file.
     {
         Stopwatch partition_clock;
         std::vector<Bucket> buckets(n_buckets);
         const size_t block_bytes = std::clamp(
             static_cast<size_t>(kWriterBudgetBytes / n_buckets), kMinBlockBytes, kMaxBlockBytes);
+        // A CONSTANT, for the same reason the bucket count is: the chunking must not be a function
+        // of `-t`. ONE chunk is held rather than one per worker, so this is ~2 MB whatever the
+        // thread count.
+        //
+        // ponytail: 8192 is where a real trade sits, and it is worth naming. `parallel_for` starts
+        // and joins its threads per call, so a bigger chunk amortises that: 64 k reads runs 26%
+        // faster (2.51 M reads/s against 1.99 M) but costs 16 MB of resident chunk, and that is
+        // enough to make PASS 1 the memory peak on a finely partitioned shallow library -- which
+        // breaks the property that a finer partition costs less, not more, and
+        // `test_shallow_memory_is_still_bounded_by_the_bucket` catches exactly that. The upgrade
+        // path is a persistent worker pool rather than a bigger chunk: with the threads started
+        // once for the whole pass, chunk size stops buying anything and can stay small.
+        constexpr size_t kChunkReads = 8192;
+        // What the parallel scan extracts from a record. No strings: the serial pass that follows
+        // only validates and counts, so it must not have to touch the comment again.
+        struct Parsed {
+            uint64_t umi_key = 0, cell_key = 0, src_index = 0;
+            uint32_t umi_len = 0, cell_len = 0;
+            uint16_t flags = 0;
+            uint32_t bucket = 0;
+            bool has_umi = false;
+        };
+        // Sized once and ASSIGNED into, never cleared: `clear()` destroys the four strings of every
+        // record, so a fresh chunk costs 4 x kChunkReads allocations and the reader spends its time
+        // in malloc rather than in inflate. `assign` reuses the capacity a previous chunk left.
+        std::vector<FastqOwned> chunk(kChunkReads);
+        std::vector<Parsed> parsed(kChunkReads);
+        size_t held = 0;
+
         FastqReader reader(request.input);
         FastqRecord rec;
         uint64_t index = 0;
         IntakeLimit limit = request.limit;
-        while (reader.next(rec)) {
-            ++stats.reads;
-            const std::string_view umi = tag_value(rec.comment, "RX:Z:");
-            if (umi.empty()) { ++stats.reads_without_umi; continue; }
-            if (stats.umi_length == 0) {
-                stats.umi_length = static_cast<int>(umi.size());
-                if (stats.umi_length > kMaxBarcodeLen) {
-                    throw MigecError("assemble: a " + std::to_string(stats.umi_length) +
-                                     " nt UMI does not fit the packed key (max " +
-                                     std::to_string(kMaxBarcodeLen) + ")");
+        bool eof = false, stopped = false;
+
+        while (!eof && !stopped) {
+            held = 0;
+            while (held < kChunkReads && reader.next(rec)) {
+                FastqOwned& slot = chunk[held++];
+                slot.name.assign(rec.name);
+                slot.comment.assign(rec.comment);
+                slot.seq.assign(rec.seq);
+                slot.qual.assign(rec.qual);
+            }
+            if (held < kChunkReads) eof = true;
+            if (held == 0) break;
+            std::fill(parsed.begin(), parsed.begin() + static_cast<ptrdiff_t>(held), Parsed{});
+
+            parallel_for(held, threads, [&](size_t i, int) {
+                const FastqOwned& r = chunk[i];
+                Parsed& p = parsed[i];
+                const std::string_view umi = tag_value(r.comment, "RX:Z:");
+                if (umi.empty()) return;
+                p.has_umi = true;
+                p.umi_len = static_cast<uint32_t>(umi.size());
+                const std::string_view cell = tag_value(r.comment, "CB:Z:");
+                p.cell_len = static_cast<uint32_t>(cell.size());
+                bool has_n = false, cell_has_n = false;
+                p.umi_key = pack_barcode(umi, &has_n);
+                p.cell_key = cell.empty() ? 0 : pack_barcode(cell, &cell_has_n);
+                p.flags = static_cast<uint16_t>(kSingleEnd | (has_n ? kUmiHasN : 0) |
+                                                (cell_has_n ? kCellHasN : 0));
+                // Partition on the cell when there is one: every read of a cell then lands in one
+                // bucket, which is what makes a per-cell scope local. Without cells the UMI is the
+                // whole key and the partition is on it.
+                p.bucket = bucket_of(cell.empty() ? p.umi_key : p.cell_key, bits);
+            });
+
+            // Serial: everything order-dependent. Counters, the length agreement that says two
+            // runs were concatenated, the intake limit, and `src_index` -- which is the read's
+            // position in the input and so cannot be handed out by a worker.
+            size_t emit = 0;
+            for (; emit < held; ++emit) {
+                Parsed& p = parsed[emit];
+                ++stats.reads;
+                if (!p.has_umi) { ++stats.reads_without_umi; continue; }
+                if (stats.umi_length == 0) {
+                    stats.umi_length = static_cast<int>(p.umi_len);
+                    if (stats.umi_length > kMaxBarcodeLen) {
+                        throw MigecError("assemble: a " + std::to_string(stats.umi_length) +
+                                         " nt UMI does not fit the packed key (max " +
+                                         std::to_string(kMaxBarcodeLen) + ")");
+                    }
+                } else if (static_cast<int>(p.umi_len) != stats.umi_length) {
+                    throw MigecError("assemble: read '" + chunk[emit].name + "' carries a " +
+                                     std::to_string(p.umi_len) + " nt UMI where the file started " +
+                                     "with " + std::to_string(stats.umi_length) +
+                                     " -- these are two runs concatenated, not one sample");
                 }
-            } else if (static_cast<int>(umi.size()) != stats.umi_length) {
-                throw MigecError("assemble: read '" + std::string(rec.name) + "' carries a " +
-                                 std::to_string(umi.size()) + " nt UMI where the file started " +
-                                 "with " + std::to_string(stats.umi_length) +
-                                 " -- these are two runs concatenated, not one sample");
+                if (stats.sample_id.empty()) {
+                    const std::string_view bc = tag_value(chunk[emit].comment, "BC:Z:");
+                    stats.sample_id = bc.empty() ? std::string("sample") : std::string(bc);
+                }
+                if (stats.cell_length == 0 && p.cell_len) {
+                    stats.cell_length = static_cast<int>(p.cell_len);
+                }
+                // Checked after the key is known, so `--limit-umi` counts barcodes, not reads.
+                const uint64_t partition_key = p.cell_len ? p.cell_key : p.umi_key;
+                if (limit.active() && !limit.admit(stats.reads, partition_key)) {
+                    --stats.reads;
+                    stats.limited = true;
+                    stopped = true;
+                    break;
+                }
+                p.src_index = index++;
+                ++buckets[p.bucket].records;
             }
-            if (stats.sample_id.empty()) {
-                const std::string_view bc = tag_value(rec.comment, "BC:Z:");
-                stats.sample_id = bc.empty() ? std::string("sample") : std::string(bc);
-            }
-            const std::string_view cell = tag_value(rec.comment, "CB:Z:");
-            if (stats.cell_length == 0 && !cell.empty()) {
-                stats.cell_length = static_cast<int>(cell.size());
-            }
-            bool has_n = false, cell_has_n = false;
-            const uint64_t key = pack_barcode(umi, &has_n);
-            const uint64_t cell_key = cell.empty() ? 0 : pack_barcode(cell, &cell_has_n);
-            // Partition on the cell when there is one: every read of a cell then lands in one
-            // bucket, which is what makes a per-cell scope local. Without cells the UMI is the
-            // whole key and the partition is on it.
-            // Checked after the key is known, so `--limit-umi` counts barcodes rather than reads.
-            if (limit.active() && !limit.admit(stats.reads, cell.empty() ? key : cell_key)) {
-                --stats.reads;
-                stats.limited = true;
-                break;
-            }
-            const uint64_t partition_key = cell.empty() ? key : cell_key;
-            Bucket& b = buckets[bucket_of(partition_key, bits)];
-            if (!b.writer) {
+
+            // The writers are opened here, on the driver, so that a bucket's header carries the
+            // sample id and the barcode lengths the serial pass above has just settled.
+            for (size_t b = 0; b < n_buckets; ++b) {
+                if (buckets[b].records == 0 || buckets[b].writer) continue;
                 MigHeader header;
                 header.umi_len = static_cast<uint8_t>(stats.umi_length);
                 header.cell_len = static_cast<uint8_t>(stats.cell_length);
-                header.bucket_index = static_cast<uint8_t>(bucket_of(partition_key, bits));
+                header.bucket_index = static_cast<uint8_t>(b);
                 header.bucket_bits = static_cast<uint8_t>(bits);
                 header.paired = false;
                 header.sample_id = stats.sample_id;
-                b.path = (temp_dir /
-                          ("bucket." + std::to_string(bucket_of(partition_key, bits)) + ".mig"))
-                             .string();
-                b.writer = std::make_unique<MigWriter>(b.path, header, block_bytes);
+                buckets[b].path = (temp_dir / ("bucket." + std::to_string(b) + ".mig")).string();
+                buckets[b].writer =
+                    std::make_unique<MigWriter>(buckets[b].path, header, block_bytes);
             }
-            MigRecord out;
-            out.cell = cell_key;
-            out.umi = key;
-            out.src_index = index++;
-            out.flags = static_cast<uint16_t>(kSingleEnd | (has_n ? kUmiHasN : 0) |
-                                              (cell_has_n ? kCellHasN : 0));
-            out.seq1 = rec.seq;
-            out.qual1 = rec.qual;
-            b.writer->write(out);
-            ++b.records;
+
+            const size_t written = emit;
+            parallel_for(static_cast<size_t>(threads), threads, [&](size_t w, int) {
+                for (size_t i = 0; i < written; ++i) {
+                    const Parsed& p = parsed[i];
+                    if (!p.has_umi || p.bucket % static_cast<uint32_t>(threads) != w) continue;
+                    MigRecord out;
+                    out.cell = p.cell_key;
+                    out.umi = p.umi_key;
+                    out.src_index = p.src_index;
+                    out.flags = p.flags;
+                    out.seq1 = chunk[i].seq;
+                    out.qual1 = chunk[i].qual;
+                    buckets[p.bucket].writer->write(out);
+                }
+            });
         }
         for (Bucket& b : buckets) {
             if (b.writer) b.writer->close();

@@ -15,7 +15,9 @@ process MIGEC_ASSEMBLE {
     label 'process_medium'
 
     conda "${moduleDir}/../environment.yml"
-    container "migec:2.0.0a3"
+    // One place, so a release bumps one line rather than four. Override with
+    // `--migec_container` when you build your own image.
+    container params.getOrDefault('migec_container', 'migec:2.0.0a4')
 
     input:
     tuple val(meta), path(reads)
@@ -33,13 +35,23 @@ process MIGEC_ASSEMBLE {
     script:
     def prefix = task.ext.prefix ?: "${meta.id}"
     def rt     = meta.rt_error ?: params.getOrDefault('migec_rt_error', 'rt')
-    def contig = (meta.contig ?: params.getOrDefault('migec_contig', false)) ? '--contig' : ''
-    def fast   = (meta.fast ?: params.getOrDefault('migec_fast', false)) ? '--fast' : ''
+    // Never: `containsKey`, not `?:`. Groovy's elvis treats `false` as absent, so `contig: false`
+    // in meta would fall through to a params default of `true` and silently mean its opposite --
+    // which is the one direction a per-sample override exists to make possible.
+    def wantContig = meta.containsKey('contig') ? meta.contig
+                                                : params.getOrDefault('migec_contig', false)
+    def wantFast   = meta.containsKey('fast')   ? meta.fast
+                                                : params.getOrDefault('migec_fast', false)
+    def contig = wantContig ? '--contig' : ''
+    def fast   = wantFast   ? '--fast'   : ''
+    def limitR = (params.getOrDefault('migec_limit_read', 0) as long) ?: 0
+    def limitU = (params.getOrDefault('migec_limit_umi', 0) as long) ?: 0
+    def limits = (limitR ? "--limit-read ${limitR} " : '') + (limitU ? "--limit-umi ${limitU}" : '')
     """
     migec assemble ${reads} \\
         --sample ${prefix} \\
         --rt-error ${rt} \\
-        ${contig} ${fast} \\
+        ${contig} ${fast} ${limits} \\
         --threads ${task.cpus} \\
         ${params.getOrDefault('migec_assemble_args', '')} \\
         -o asm/

@@ -57,26 +57,38 @@ say that is a position:
 
 See :doc:`layouts` for the presets, the slice grammar, fgbio read structures and barcode tables.
 
+Where to go
+-----------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - if you want to
+     - go to
+   * - **run something now**
+     - :doc:`Installation <installation>`, then :doc:`Examples <examples>` -- a copy-paste run per
+       platform, and three marimo notebooks that fetch their own fixtures
+   * - say where your barcode is
+     - :doc:`Layouts <layouts>` for the grammar and the presets; :doc:`suggest <suggest>` if you do
+       not know
+   * - understand one stage
+     - :doc:`Commands <commands>` -- all eight, with the number each one decides
+   * - align or quantify the consensus
+     - :doc:`Downstream <downstream>`, where every tool in the table was actually run
+   * - know why a default is what it is
+     - :doc:`Method <method>`
+   * - look up a column or a tag
+     - :doc:`Reference <reference>`
+
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   :hidden:
 
    installation
    examples
    layouts
-   suggest
-   checkout
+   commands
    downstream
-   refine
-   assemble
-   subsample
-   plots
-   umi_statistics
-   barcode_space
-   performance
-   grouping
-   fragmented
-   quality_floor
-   nulls
-   validation
-   formats
-   roadmap
+   method
+   reference

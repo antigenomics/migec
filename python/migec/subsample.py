@@ -36,14 +36,23 @@ def run(
 
 def format_report(summary: dict) -> str:
     s = summary
+    barcodes = max(s["barcodes"], 1)
     lines = [
         f"read  {s['reads']:,}",
-        f"kept  {s['reads_kept']:,} ({_pct(s['reads_kept'], max(s['reads'], 1))}) "
+        f"kept  {s['reads_kept']:,} reads ({_pct(s['reads_kept'], max(s['reads'], 1))}) "
         f"in {s['barcodes']:,} barcodes",
-        f"      {s['reads_kept'] / max(s['barcodes'], 1):.2f} reads per barcode -- the same "
-        f"distribution as the input, which is the point",
-        f"{_dur(s['wall_seconds'])}",
+        f"      {s['reads_kept'] / barcodes:.2f} reads per barcode on average, "
+        f"median {s['reads_per_barcode_median']:,}, deepest {s['reads_per_barcode_max']:,} -- "
+        f"the same distribution as the input, which is the point",
     ]
+    if s["examples"]:
+        shown = ", ".join(f"{bc} x{depth}" for bc, depth in s["examples"])
+        lines.append(f"      {shown}")
+        lines.append(
+            "      (five kept barcodes in key order, not the first five seen: first-seen "
+            "order is a sample of the deep MIGs and of nothing else)"
+        )
+    lines.append(f"{_dur(s['wall_seconds'])}")
     if s["reads_without_umi"]:
         lines.append(
             f"warning: {s['reads_without_umi']:,} reads carried no RX tag and were dropped"

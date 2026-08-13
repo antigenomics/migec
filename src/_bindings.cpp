@@ -533,6 +533,13 @@ PYBIND11_MODULE(_core, m) {
             d["reads_kept"] = st.reads_kept;
             d["barcodes"] = st.barcodes_seen;
             d["reads_without_umi"] = st.reads_without_umi;
+            d["reads_per_barcode_median"] = st.reads_per_barcode_median;
+            d["reads_per_barcode_max"] = st.reads_per_barcode_max;
+            py::list examples;
+            for (const auto& [barcode, depth] : st.examples) {
+                examples.append(py::make_tuple(barcode, depth));
+            }
+            d["examples"] = examples;
             d["wall_seconds"] = st.wall_seconds;
             return d;
         },

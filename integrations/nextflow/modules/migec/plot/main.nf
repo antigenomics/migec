@@ -10,7 +10,9 @@ process MIGEC_PLOT {
     label 'process_single'
 
     conda "${moduleDir}/../environment.yml"
-    container "migec:2.0.0a3"
+    // One place, so a release bumps one line rather than four. Override with
+    // `--migec_container` when you build your own image.
+    container params.getOrDefault('migec_container', 'migec:2.0.0a4')
 
     input:
     tuple val(meta), path(tables)

@@ -56,10 +56,17 @@ read **name** (`<sample>.<cell>.<umi>`, for tools that drop FASTQ comments) and 
 
 ```bash
 minimap2 -ax sr -y ref.fa cons/S1.consensus.fq.gz | samtools sort -o S1.bam   # RX, CB, MI in the BAM
+minibwa map -y -t8 ref.fa cons/S1.consensus.fq.gz | samtools sort -o S1.bam   # `-y`, not bwa's `-C`
 bwa mem -C     ref.fa cons/S1.consensus.fq.gz     | samtools sort -o S1.bam
 arda amplicon --r1 cons/S1.consensus.fq.gz -p S1      # AIRR sequence_id IS the molecule id
 salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads are molecule counts
 ```
+
+[minibwa](https://github.com/lh3/minibwa) spells the comment flag `-y` on `map` and `-C` on the
+legacy `mem` subcommand — the wrong one exits with an error rather than dropping the tags quietly.
+Whether to align *before* grouping (position + UMI, the fgbio/UMIErrorCorrect order) or after
+collapsing is a real choice, and [docs/downstream.rst](docs/downstream.rst) works through what each
+one buys.
 
 > **Never** run alevin, bustools or STARsolo on a consensus FASTQ. They read the barcode out of a
 > *raw* barcode read and deduplicate themselves; migec already did, and that read no longer exists.
@@ -450,12 +457,30 @@ and nothing else, which is asserted per stage in C++, at the CLI, and under the 
 |---|---|---|---|
 | `checkout` | 202,717 | **1,056,472** | reads |
 | `refine` | 605,611 | **1,012,368** | distinct barcodes |
-| `assemble` | 569,379 | **1,434,573** | reads, then the largest bucket |
+| `assemble` | 549,745 | **2,051,937** | reads, then the largest bucket |
 
-reads/s on the same 500 k-read sample. Two of those used to be 222,017 and 202,977, and the first
-fix was not a thread: **zlib at its default level 6 was 83% of refine's wall clock**, compressing
-an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes and gave 3x
-before a single thread was added. Measure the stage before parallelising it.
+reads/s. Two of those used to be 222,017 and 202,977, and the first fix was not a thread: **zlib at
+its default level 6 was 83% of refine's wall clock**, compressing an intermediate the next stage
+decompresses immediately. Level 1 costs 21% more bytes and gave 3x before a single thread was
+added. Measure the stage before parallelising it.
+
+The same lesson twice in assemble: after the consensus was threaded, the **partition** was 2.07 s
+of a 2.69 s run against a 0.23 s `gzip -dc` floor for the same file — so it was not the inflate. It
+runs on the workers now, by ownership rather than locking (worker *w* owns every bucket with
+`bucket % threads == w`), and half the win was in the reader: the chunk is assigned into rather
+than cleared, because `clear()` destroys four `std::string` per record and the reader ends up in
+malloc instead of inflate.
+
+| 4 M reads, `-t 16` | before | after |
+|---|---|---|
+| wall clock | 2.70 s | **1.95 s** |
+| reads/s | 1,481,946 | **2,051,937** |
+| peak RSS | 1,479 MB | **789 MB** |
+
+The memory fell with it, because the estimate deciding how finely to cut the input said a gzipped
+FASTQ goes resident at 8x its on-disk size and it is really **19x** — a resident record is two heap
+`std::string` with their allocator headers, not the 180 bytes of payload. Guessing low picks too
+few buckets, and pass 2 holds sixteen of them at once.
 
 | threads | reads/s | matching reads/s | peak RSS |
 |---|---|---|---|
@@ -516,13 +541,16 @@ distinct molecules. Both are reported; only the collision form feeds any decisio
 
 ## Pipelines
 
-`integrations/nextflow/migec/` is an nf-core-style local module — `main.nf`, `meta.yml`,
-`nextflow.config`, `environment.yml` — that drops into
+`integrations/nextflow/` is an nf-core-style local module set — four processes, a subworkflow,
+`meta.yml`, `nextflow.config`, `environment.yml` — that drops into
 [nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands you FASTQ pairs. SLURM is
 the pipeline's business, not the module's: it declares `label` and `task.cpus` and nothing more.
 
 All three stages thread, and each is byte-identical at any `-t`, so a retry with different cores
-cannot change a result -- which is what makes an escalating `errorStrategy 'retry'` safe here.
+cannot change a result — which is what makes an escalating `errorStrategy 'retry'` safe here.
+Per-sample keys in `meta` beat the `params.migec_*` defaults, so one run can mix chemistries. See
+[docs/nextflow.rst](docs/nextflow.rst); nextflow is not installed on the machine these docs were
+measured on, so the modules are reviewed against the nf-core spec rather than verified by a run.
 
 ## Documentation
 

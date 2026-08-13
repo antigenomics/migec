@@ -4,6 +4,72 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.0.0a4 — 2026-08-13
+
+**The partition threads, and the memory estimate behind it was wrong.** With the consensus already
+parallel, `assemble`'s *partition* was 2.07 s of a 2.69 s run — 77% of the stage, on one thread.
+`gzip -dc` on the same file takes 0.23 s, so five sixths of it was not the inflate: it was the tag
+scan, the barcode packing, the record serialisation and the level-1 deflate of each bucket block.
+All four run on the workers now, by **ownership rather than locking** — worker *w* owns every
+bucket with `bucket % threads == w` for the whole run, so a bucket file has exactly one writer and
+no bucket state is shared.
+
+| 4 M reads, `-t 16` | before | after |
+|---|---|---|
+| wall clock | 2.70 s | **1.95 s** |
+| partition | 2.06 s | **1.45 s** |
+| reads/s | 1,481,946 | **2,051,937** |
+| peak RSS | 1,479 MB | **789 MB** |
+
+Half of that was the reader rather than the threading: **assign into the chunk rather than clearing
+it**, because `clear()` destroys four `std::string` per record and the reader ends up spending its
+time in malloc instead of inflate. One chunk is held rather than one per worker, so it costs ~2 MB
+at any `-t`.
+
+Note: a **bigger** chunk is 22% faster again — 2,510,241 reads/s at 64 k reads, because
+`parallel_for` starts and joins its threads per call and 4 M reads at 8 k a chunk pays ~15,000
+thread creations. It is not taken: 16 MB of resident chunk makes the *partition* the memory peak on
+a finely partitioned shallow library, which breaks the property that a finer partition costs less
+rather than more, and `test_shallow_memory_is_still_bounded_by_the_bucket` catches it. The upgrade
+path is a persistent worker pool, not a bigger chunk.
+
+**Never: an estimate that nothing checks will be wrong.** The constant deciding how finely to cut
+the input said a gzipped FASTQ goes resident at **8x** its on-disk size. Measured, it is **19x** —
+a resident record is two heap `std::string` with their allocator headers and rounded-up buckets,
+plus three 8-byte keys, not the 180 bytes of payload. Guessing low is the expensive direction,
+because it picks too few buckets and pass 2 holds sixteen of them at once. That single wrong
+number is where the 1,479 MB came from.
+
+**`subsample` says what it did.** The report now carries the median and the deepest reads per kept
+barcode next to the mean, and five kept barcodes with their depths. Never: **in key order, not
+first-seen order** — a barcode with 100 reads appears early about 100x more often than a singleton,
+so the head of a file is a sample of the deep MIGs and of nothing else, which is the same trap
+`subsample` exists to avoid, one level down.
+
+**minibwa is in the downstream contract**, run and counted like the rest: 600/600 records keep
+`RX`/`CB`/`MI` through a sorted BAM. Note: the comment flag is **`-y` on `minibwa map`** (the
+minimap2 spelling) and **`-C` on the legacy `minibwa mem`** (bwa's), and each rejects the other's
+flag with a non-zero exit rather than dropping the tags quietly.
+
+**Map first, or collapse first?** `docs/downstream.rst` now works the question through: what the
+chromosomal position buys as extra key bits (and when — a 5 nt TSO500 UMI is 1,024 barcodes), what
+it costs (N x the alignment, a mismapping becoming a grouping error, needing a reference at all),
+and why `assemble`'s linkage sub-clustering recovers most of it from the payload without an
+aligner. With a table separating tools that *transport* a UMI from tools that *deduplicate* on one:
+the first compose with migec, the second replace a stage of it.
+
+**The docs navigate.** Twenty pages of flat toctree put every long page title in the header; they
+are grouped into seven sections now — Installation, Examples, Layouts, Commands, Downstream,
+Method, Reference — with landing pages that say what each page answers. Every command page carries
+a subtitle (`assemble -- one consensus per molecule`), and `docs/nextflow.rst` is new.
+
+**Nextflow.** Never: `containsKey`, not `?:`. Groovy's elvis treats `false` as absent, so a
+per-sample `contig: false` against a params default of `true` silently meant its opposite — the one
+direction a per-sample override exists to make possible. `--limit-read`/`--limit-umi` now reach
+`assemble`, and the container tag is one param rather than four literals. Note: nextflow is not
+installed on the machine this was measured on, so the modules are reviewed against the nf-core
+spec, not verified by a run, and the docs say so.
+
 ## 2.0.0a3 — 2026-08-13
 
 **Every stage threads now, and the first fix was not a thread.** `refine` and `assemble` were the

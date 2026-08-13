@@ -134,11 +134,12 @@ first fix was not a thread:
      - 1,012,368
      - distinct barcodes
    * - ``assemble``
-     - 569,379
-     - 1,434,573
+     - 549,745
+     - 2,051,937
      - reads, then the largest bucket
 
-reads/s on the same 500 k-read sample.
+reads/s on the same 500 k-read sample, except ``assemble``, which is measured on 4 M reads because
+its partition only shows up at that size.
 
 **zlib at its default level 6 was 83% of refine's wall clock** -- 1.78 s of a 2.14 s run,
 compressing an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes
@@ -155,6 +156,66 @@ the partition is on the barcode itself, so a worker owns its output files and it
 takes no lock at all. The per-bucket outputs are concatenated in bucket order, and bucket order is
 key order, so the consensus FASTQ comes out sorted by barcode whatever order the buckets finished
 in.
+
+The partition itself
+~~~~~~~~~~~~~~~~~~~~
+
+Threading the consensus left the *partition* as 2.07 s of a 2.69 s run -- 77% of assemble, on one
+thread. ``gzip -dc`` on the same file takes 0.23 s, so five sixths of that was not the inflate: it
+was the tag scan, the barcode packing, the record serialisation and the level-1 deflate of each
+bucket block. All four now run on the workers, by **ownership rather than locking** -- worker *w*
+owns every bucket with ``bucket % threads == w`` for the whole run, so a bucket file has exactly
+one writer and no bucket state is shared. Records still reach a bucket in input order, because the
+chunks are consumed in order and each worker walks its chunk forwards. Ownership decides *who*
+writes a record, never *which* file it lands in or *where*, which is why the bytes do not move.
+
+The reader mattered as much as the threading. **The chunk is assigned into, never cleared**:
+``clear()`` destroys the four ``std::string`` of every record, so a fresh chunk costs four
+allocations per read and the reader spends its time in malloc rather than in inflate.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 22 22
+
+   * -
+     - before
+     - after
+     - change
+   * - wall clock, 4 M reads, ``-t 16``
+     - 2.70 s
+     - **1.95 s**
+     - 1.38x
+   * - partition
+     - 2.06 s
+     - **1.45 s**
+     - 1.42x
+   * - reads/s end to end
+     - 1,481,946
+     - **2,051,937**
+     - 1.38x
+   * - peak RSS
+     - 1,479 MB
+     - **789 MB**
+     - 0.53x
+
+.. note::
+
+   The chunk is 8,192 reads, and a bigger one is measurably faster: ``parallel_for`` starts and
+   joins its threads per call, so 64 k reads a chunk runs at **2,510,241 reads/s** against
+   2,051,937 -- 22% more. It costs 16 MB of resident chunk, and that is enough to make the
+   *partition* the memory peak on a finely partitioned shallow library, which breaks the property
+   that a finer partition costs less rather than more.
+   ``tests/benchmark/test_assemble_speed.py::test_shallow_memory_is_still_bounded_by_the_bucket``
+   is what catches it. The upgrade path is a persistent worker pool rather than a bigger chunk:
+   start the threads once for the whole pass and chunk size stops buying anything.
+
+The memory fell at the same time, and not by accident. Pass 2 holds ``kBucketConcurrency`` buckets
+at once, so how finely the input is cut decides the peak -- and the estimate feeding that choice
+said a gzipped FASTQ goes resident at **8x** its on-disk size. Measured, it is **19x**: a resident
+record is two heap ``std::string`` with their allocator headers and rounded-up buckets, plus three
+8-byte keys, not the 180 bytes of payload. Guessing low is the expensive direction, because it
+picks too few buckets. The constant is 20x now, and it is a measurement rather than an estimate --
+which is the property that was missing.
 
 .. warning::
 

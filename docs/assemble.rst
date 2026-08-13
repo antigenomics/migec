@@ -1,5 +1,5 @@
-assemble
-========
+assemble -- one consensus per molecule
+======================================
 
 Reads carrying the same barcode are reads of one molecule, so collapse them into one consensus.
 

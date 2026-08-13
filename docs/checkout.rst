@@ -1,5 +1,5 @@
-Checkout — barcode extraction
-=============================
+checkout -- find the barcode and cut it out
+===========================================
 
 ``migec checkout`` finds the barcode pattern in each read, extracts the sample tag and the UMI,
 trims the synthetic sequence away, and puts the barcode in the read header.

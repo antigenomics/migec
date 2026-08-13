@@ -28,6 +28,14 @@ autodoc_mock_imports = ["typer", "polars", "migec._core"]
 html_theme = "pydata_sphinx_theme"
 html_theme_options = {
     "github_url": "https://github.com/antigenomics/migec",
+    # Two levels open in the sidebar, so every command and every method page is visible without a
+    # click. The header carries the seven SECTION names only -- a flat toctree put all twenty page
+    # titles up there, and "Fragmented libraries -- why 10x needs a different consensus" is not a
+    # navbar link, it is a sentence.
     "show_nav_level": 2,
+    "navigation_depth": 2,
+    "header_links_before_dropdown": 7,
+    "collapse_navigation": False,
+    "navbar_align": "left",
 }
 exclude_patterns = ["_build"]

@@ -1,5 +1,5 @@
-subsample
-=========
+subsample -- a smaller library that is still a library
+======================================================
 
 A smaller library that is still a library.
 

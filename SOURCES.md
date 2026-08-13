@@ -171,6 +171,34 @@ comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
 | Storage | Never: do not store simulated reads — record the exact command and seed here instead |
 | Provenance | derived (simulated) |
 
+### minibwa (github.com/lh3/minibwa)
+
+| Item | Value |
+|---|---|
+| Use | downstream aligner in the `docs/downstream.rst` contract table, alongside minimap2 and bwa |
+| Get it | `git clone https://github.com/lh3/minibwa && cd minibwa && make` → `./minibwa` |
+| Version run | `0.7-r424-dirty`, commit `f0e1174` (2026-08-10), built on darwin/arm64 |
+| Run | `minibwa index ref.fa` then `minibwa map -y ref.fa cons.fq.gz` |
+| Result | 600/600 consensus records kept `RX`, `CB`, `MI`, `BC`, `cD`; `samtools sort` → `quickcheck` valid |
+| Note | the comment flag is **`-y` on `map`** (the minimap2 spelling) and **`-C` on the legacy `mem` subcommand** (bwa's). Each rejects the other's flag with a non-zero exit, so the tags are never dropped silently |
+| Checked by | `tests/unit/test_downstream.py::test_an_aligner_carries_the_tags_into_the_sam[minibwa]`, skipped when not on `PATH` |
+| Provenance | derived (run here against our own synthetic 10x-shaped fixture) |
+
+### UMIErrorCorrect / UMIAnalyzer — Österlund et al. (Clin Chem 2022, doi:10.1093/clinchem/hvac136)
+
+Read 2026-08-13. Not a data source: a **comparator and a design reference** for the map-first order.
+
+| Item | Value |
+|---|---|
+| What it is | a Python pipeline + R Shiny app for UMI ctDNA panels: `preprocess.py` → `run_mapping.py` (bwa mem) → `umi_error_correct.py` → `call_variants.py` |
+| Order | aligns **raw reads first**, then groups on *(chromosomal position, UMI)* with edit distance ≤ 1 — the opposite order to migec, and the reason `docs/downstream.rst` has a section weighing the two |
+| Layout grammar | `-ul` UMI length, `-sl` spacer length (SiMSen-Seq: 12 and 16). Our positional slices and `--read-structure` cover the same ground |
+| Depth reported | **3.3 and 10 reads per UMI** on SiMSen-Seq ctDNA — independent corroboration that 1–3 reads/UMI is the ordinary regime, not the exotic one |
+| Consensus cutoff | group size ≥ 3 by default; we default `--min-reads 1` and report the cutoff sweep instead |
+| Variant caller | beta-binomial background per position, Q ≥ 20 cutoff. **Not implemented here** — it needs a reference and an alignment, which is a variant caller and not one of migec's five commands |
+| Public data cited by it | PRJNA788522, PRJNA507366 (SiMSen-Seq); PRJNA577992 (Roche Avenio, QiaSeq); PRJEB31811 (Archer) |
+| Provenance | reference (published method), not data |
+
 ### UMI RNA-seq — Fennell et al. / NCGR (Sci Rep 2018, doi:10.1038/s41598-018-31064-7)
 
 The layout behind the `smarter-umi` preset, and a worked example of why a deposited FASTQ has to be

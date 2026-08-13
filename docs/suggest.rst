@@ -1,5 +1,5 @@
-suggest
-=======
+suggest -- read the layout off the data
+=======================================
 
 Where is the barcode? Read it off the data rather than off the protocol.
 
