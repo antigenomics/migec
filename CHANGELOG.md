@@ -4,7 +4,19 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased — 2.0.0.dev0
+## 2.0.0a1 — 2026-08-13
+
+First published build of the rewrite. All three stages work and are validated against real data on
+four layouts: a bulk amplicon with an anchor (HIV-1 Primer ID, `SRR1763769`), a 10x droplet VDJ
+library (`sc5p_v2_hs_PBMC_1k`), dual-end barcodes (MAGERI's design), and TSO500 read structures.
+
+An alpha because the roadmap's remaining items are real: index hopping from the i7 x i5 table,
+`.mig` bucket output from checkout (which is what would bound the UMI counters at NovaSeq scale),
+and the published benchmark comparisons. Install with `pip install --pre migec`.
+
+Everything below was developed before this tag.
+
+## Unreleased
 
 ### Cell barcodes, whitelists, cell calling, dual-end barcodes, and what the Phred is worth
 

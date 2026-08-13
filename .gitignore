@@ -27,3 +27,10 @@ docs/_build/
 
 # --- os ---
 .DS_Store
+
+# Alignment indices pulled down by scripts/read_start_dispersion.py (X1). pysam writes the .bai
+# next to wherever it is pointed, which for an HTTP URL is the working directory -- 4.6 MB of it
+# reached a published sdist before this line existed.
+*.bam
+*.bai
+*.crai
