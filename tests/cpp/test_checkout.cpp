@@ -142,3 +142,46 @@ TEST_CASE("counters account for every read exactly once") {
     CHECK(c.assigned + c.unmatched + c.ambiguous + c.short_payload + c.bad_umi == c.total);
     CHECK(c.assigned == 2);
 }
+
+TEST_CASE("quality calibration fits the slope and drops variable positions") {
+    QualityCalibration c;
+    // Two quality levels, each with an error rate exactly twice the nominal, over four positions.
+    for (size_t p = 0; p < 4; ++p) {
+        c.by_position[p][30][0] = 1'000'000 - 2000;   // Q30 nominal 1e-3, observed 2e-3
+        c.by_position[p][30][1] = 2000;
+        c.by_position[p][20][0] = 1'000'000 - 20000;  // Q20 nominal 1e-2, observed 2e-2
+        c.by_position[p][20][1] = 20000;
+    }
+    // ...and one position that is simply variable: 30% mismatch at every quality.
+    c.by_position[4][30][0] = 700'000;
+    c.by_position[4][30][1] = 300'000;
+
+    c.fit();
+    CHECK(c.fitted);
+    CHECK(c.positions_dropped == 1);
+    CHECK(c.slope == doctest::Approx(2.0).epsilon(0.02));
+    CHECK(c.quality_independent < 1e-4);
+    // error() applies the slope and NOT the intercept: the intercept belongs to the standard
+    // being measured against, which is a synthesised oligo.
+    CHECK(c.error(30) == doctest::Approx(2e-3).epsilon(0.02));
+}
+
+TEST_CASE("a calibration with one quality level declines to fit") {
+    QualityCalibration c;
+    c.by_position[0][38][0] = 10'000'000;
+    c.by_position[0][38][1] = 1000;
+    c.fit();
+    CHECK_FALSE(c.fitted);
+    // ...and falls back to the nominal rate rather than to a line through one point.
+    CHECK(c.error(38) == doctest::Approx(phred_error(38)));
+}
+
+TEST_CASE("an intercept the fit puts below zero is reported as zero, not as a negative rate") {
+    QualityCalibration c;
+    c.by_position[0][30][0] = 1'000'000; c.by_position[0][30][1] = 100;      // 1e-4, below nominal
+    c.by_position[0][10][0] = 1'000'000; c.by_position[0][10][1] = 200'000;  // 2e-1
+    c.fit();
+    CHECK(c.fitted);
+    CHECK(c.quality_independent >= 0.0);
+    CHECK(c.slope >= 0.0);
+}

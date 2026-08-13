@@ -183,7 +183,16 @@ model has to use the evidence that survives at one read:
       the original, `<sample>.barcodes.tsv`, coverage histogram after correction. Recovered 20,055
       molecules from 20,000 simulated with ε at 0.96x of injected. Holds the table, never the
       reads; three streaming passes
-- [ ] Three error-rate estimators, sequencing vs quality-independent separation
+- [x] **Quality calibration measured against the pattern's own constant bases**, fitted as
+      `ê(q) = ε_qi + a·10^(−q/10)` weighted by bases per Q. On `SRR1763769` the slope is 1.04 over
+      46.3 M bases, so the reported Phred's *scaling* is right. ⛔ The intercept (3.9e-3) is **not**
+      a sequencing floor -- the standard is a synthesised oligo, and synthesis runs ~1 defect per
+      200-500 bases. It is spread evenly over all 23 anchor positions, none polymorphic, and
+      matches the independently measured 0.55% one-base-short rate. Reported as a diagnostic of the
+      primer and left out of `error()`
+- [ ] Three error-rate estimators, sequencing vs quality-independent separation *of the template*
+      (the pattern bases can only calibrate the primer, so the polymerase/RT split needs a
+      different standard)
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`

@@ -100,6 +100,22 @@ def _write_tables(out: Path, summary: dict) -> None:
                 f"{e['neighbour_occupancy']:.6f}\t{int(e['estimate_unreliable'])}\n"
             )
 
+    # What the reported Phred is worth, measured against the pattern's own constant bases.
+    with open(out / "checkout.quality_calibration.tsv", "w") as fh:
+        fh.write("phred\tbases\tmismatches\tobserved\tnominal\tcalibrated\n")
+        for q in summary["quality_calibration"]["per_phred"]:
+            fh.write(
+                f"{q['phred']}\t{q['bases']}\t{q['mismatches']}\t{q['observed']:.6e}\t"
+                f"{q['nominal']:.6e}\t{q['fitted']:.6e}\n"
+            )
+    with open(out / "checkout.pattern_positions.tsv", "w") as fh:
+        fh.write("position\tbases\tmismatches\trate\tused_for_calibration\n")
+        for p in summary["quality_calibration"]["per_position"]:
+            fh.write(
+                f"{p['position']}\t{p['bases']}\t{p['mismatches']}\t{p['rate']:.6e}\t"
+                f"{int(p['used'])}\n"
+            )
+
     # Reported Phred over the barcode bases -- the input to the predicted error rate.
     with open(out / "checkout.umi_quality.tsv", "w") as fh:
         fh.write("sample_id\tphred\tbases\terror_probability\n")
@@ -176,6 +192,23 @@ def format_report(summary: dict) -> str:
             f"{e['predicted']:>11.1e}{e['estimated']:>10.1e}"
         )
 
+    cal = c.get("quality_calibration", {})
+    if cal.get("fitted"):
+        lines.append("")
+        lines.append(
+            f"reported Phred is worth {cal['slope']:.2f}x its nominal error, measured on "
+            f"{cal['bases']:,} constant pattern bases"
+        )
+        lines.append(
+            f"  the fit's intercept is {cal['quality_independent']:.1e} per base -- the "
+            f"SYNTHESISED anchor's own defect rate, not a sequencing floor"
+        )
+        if cal["positions_dropped"]:
+            lines.append(
+                f"  {cal['positions_dropped']} pattern position(s) dropped as variable rather "
+                f"than miscalled"
+            )
+
     warnings = []
     # The UMI counters are the one allocation that grows with the library rather than with the
     # chunk size, so they are the thing that decides whether a run fits. Range partitioning is
@@ -185,6 +218,18 @@ def format_report(summary: dict) -> str:
             f"UMI counters hold {_bytes(c['umi_memory_bytes'])}. This grows with the number of "
             f"distinct UMIs and is not yet partitioned across buckets, so a much larger input may "
             f"not fit in memory"
+        )
+    if cal.get("fitted") and cal["slope"] > 2.0:
+        warnings.append(
+            f"the reported Phred understates the error by {cal['slope']:.1f}x. Every likelihood "
+            f"here is computed from it, so the calibrated table is the one to use downstream"
+        )
+    if cal.get("fitted") and cal["quality_independent"] > 1e-3:
+        warnings.append(
+            f"the constant pattern bases mismatch at {cal['quality_independent']:.1e} per base "
+            f"even at the best quality. That is the oligo, not the instrument: synthesis runs "
+            f"about one defect per 200-500 bases. It caps how well any barcode on this primer "
+            f"can be read"
         )
     if c["total"] and c["assigned"] / c["total"] < 0.5:
         warnings.append(

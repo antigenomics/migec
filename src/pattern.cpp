@@ -235,6 +235,26 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
     return out;
 }
 
+void BarcodePattern::calibrate(std::string_view seq, std::string_view qual, int offset,
+                               std::vector<std::array<std::array<uint64_t, 2>, 61>>& by_position)
+    const {
+    if (offset < 0) return;
+    const size_t begin = static_cast<size_t>(offset);
+    if (begin + mask_.size() > seq.size()) return;
+    for (size_t i = 0; i < mask_.size(); ++i) {
+        const uint8_t m = mask_[i];
+        // Unambiguous scored positions only. A degenerate position tolerates more than one base,
+        // so a disagreement there is not a miscall with probability 1 and would bias the table.
+        if (m == 0 || iupac_size(m) != 1) continue;
+        const size_t at = begin + i;
+        const uint8_t obs = base_code(seq[at]);
+        if (obs == kInvalidBase) continue;
+        if (i >= by_position.size()) break;
+        const uint8_t q = at < qual.size() ? phred_from_char(qual[at]) : kMaxPhred;
+        ++by_position[i][q > 60 ? 60 : q][((m >> obs) & 1u) ? 0 : 1];
+    }
+}
+
 void PatternSet::add(std::string sample_id, std::string_view spec) {
     samples_.push_back(std::move(sample_id));
     patterns_.push_back(BarcodePattern::compile(spec));

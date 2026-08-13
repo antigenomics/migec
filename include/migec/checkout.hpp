@@ -36,6 +36,59 @@ struct CheckoutParams {
     int min_umi_quality = 0;
 };
 
+// What the reported Phred is actually worth, measured against the pattern's own constant bases.
+//
+// ⛔ The nominal `e = 10^(-q/10)` is not the error rate. RTA3 emits about four distinct Q values,
+// so the mapping is coarse to begin with, and it is wrong by an order of magnitude by cycle and
+// context -- which matters because every likelihood in this pipeline is computed from it.
+//
+// Fitting the measured table as
+//
+//     e_hat(q) = eps_qi + a * 10^(-q/10)
+//
+// separates two things. The SLOPE calibrates the instrument: 1.0 means the reported Phred is
+// exactly right, and it is what `error(q)` applies.
+//
+// ⛔ The INTERCEPT is NOT a sequencing floor, and using it as one would add a constant to every
+// base likelihood in the pipeline. The standard being measured against is a SYNTHESISED oligo,
+// and oligo synthesis carries roughly one defect per 200-500 bases -- so on a real primer the
+// intercept comes out at ~4e-3, which is the primer's own quality and not the instrument's.
+// Measured on SRR1763769: intercept 3.9e-3 spread evenly over all 23 anchor positions (none
+// polymorphic), against an independently measured 0.55% rate of one-base-short barcodes from
+// failed couplings in the same oligo. Same order, same cause. It is reported as a diagnostic of
+// the primer and deliberately left out of `error()`.
+// ⚠ It only works if the "constant" bases really are constant. A pattern position that is 97%
+// conserved rather than 100% contributes 3% mismatch at every quality, and the fit reads that as a
+// quality-independent floor. So the counts are kept per POSITION as well, and a position whose
+// mismatch rate is far above its neighbours' is dropped before fitting -- it is polymorphic, or
+// the pattern is wrong about it, and either way it is not measuring the instrument.
+struct QualityCalibration {
+    static constexpr size_t kMaxPositions = 64;
+    // [position][q] = {bases seen, mismatches} at unambiguous scored pattern positions.
+    std::vector<std::array<std::array<uint64_t, 2>, 61>> by_position;
+    // Summed over the positions that survived the check above. Empty until fit() runs.
+    std::array<std::array<uint64_t, 2>, 61> counts{};
+    std::vector<uint8_t> position_used;
+    size_t positions_dropped = 0;
+    // The intercept: the anchor's own defect rate, not a sequencing floor. See above.
+    double quality_independent = 0.0;
+    double slope = 0.0;                // 1.0 would mean the reported Phred is exactly right
+    uint64_t bases = 0;
+    bool fitted = false;               // false when no Q value had enough bases to fit
+
+    QualityCalibration() : by_position(kMaxPositions), position_used(kMaxPositions, 0) {}
+
+    void merge(const QualityCalibration& o);
+    // Drops polymorphic positions, then fits by weighted least squares over the Q values with at
+    // least `min_bases` observations. `max_excess` is how far above the median mismatch rate a
+    // position may sit before it is treated as variable rather than miscalled.
+    void fit(uint64_t min_bases = 1000, double max_excess = 5.0);
+    // The calibrated sequencing error at reported Phred q: `slope * 10^(-q/10)`, or the nominal
+    // rate when nothing could be fitted. The intercept is deliberately excluded -- it belongs to
+    // the primer that was used as the standard, not to the instrument.
+    double error(int q) const;
+};
+
 struct CheckoutCounters {
     uint64_t total = 0;
     uint64_t assigned = 0;
@@ -52,6 +105,7 @@ struct CheckoutCounters {
     // the quality the instrument reported", which is the comparison that says whether to believe
     // either number.
     std::vector<std::array<uint64_t, 61>> umi_phred;
+    QualityCalibration calibration;
 
     void merge(const CheckoutCounters& o);
 };

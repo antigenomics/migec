@@ -132,6 +132,47 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     out["normalised"] = c.normalised;
     out["paired"] = !in_path2.empty();
     out["threads"] = stats.threads;
+    {
+        const QualityCalibration& c = stats.counters.calibration;
+        py::dict cal;
+        cal["fitted"] = c.fitted;
+        cal["quality_independent"] = c.quality_independent;
+        cal["slope"] = c.slope;
+        cal["bases"] = c.bases;
+        cal["positions_dropped"] = c.positions_dropped;
+        py::list pos;
+        for (size_t i = 0; i < c.by_position.size(); ++i) {
+            uint64_t n = 0, bad = 0;
+            for (size_t q = 0; q < 61; ++q) {
+                n += c.by_position[i][q][0] + c.by_position[i][q][1];
+                bad += c.by_position[i][q][1];
+            }
+            if (!n) continue;
+            py::dict e;
+            e["position"] = i;
+            e["bases"] = n;
+            e["mismatches"] = bad;
+            e["rate"] = static_cast<double>(bad) / static_cast<double>(n);
+            e["used"] = i < c.position_used.size() && c.position_used[i] != 0;
+            pos.append(e);
+        }
+        cal["per_position"] = pos;
+        py::list per_q;
+        for (size_t q = 0; q < c.counts.size(); ++q) {
+            const uint64_t n = c.counts[q][0] + c.counts[q][1];
+            if (!n) continue;
+            py::dict e;
+            e["phred"] = q;
+            e["bases"] = n;
+            e["mismatches"] = c.counts[q][1];
+            e["observed"] = static_cast<double>(c.counts[q][1]) / static_cast<double>(n);
+            e["nominal"] = phred_error(static_cast<uint8_t>(q));
+            e["fitted"] = c.error(static_cast<int>(q));
+            per_q.append(e);
+        }
+        cal["per_phred"] = per_q;
+        out["quality_calibration"] = cal;
+    }
     out["match_seconds"] = stats.wall_seconds;
     out["peak_rss_bytes"] = stats.peak_rss_bytes;
     out["umi_memory_bytes"] = stats.umi_memory_bytes;

@@ -122,8 +122,15 @@ correction is written up in `project/review-algorithms.md`.
 - ⚠ **Strand normalisation happens in `checkout`.** The `.mig` flags describe what has *already*
   been applied. A group containing both orientations silently loses half its reads in consensus.
 - ⚠ **Nominal Phred is not the error rate.** On 2-colour instruments there are ~4 distinct Q
-  values. Use the measured calibration table from the `.mig` header wherever a likelihood is
-  computed.
+  values. `checkout` measures `ê(q)` against the pattern's own constant bases and fits
+  `ε_qi + a·10^(−q/10)`; use the calibrated table wherever a likelihood is computed. Measured
+  slope on SRR1763769: 1.04 over 46.3 M bases.
+- ⛔ **The calibration intercept is the PRIMER's defect rate, not a sequencing floor.** The
+  standard is a synthesised oligo and synthesis runs ~1 defect per 200-500 bases; the fitted
+  intercept is 3.9e-3, spread evenly over all 23 anchor positions with none polymorphic, and it
+  agrees with the independently measured 0.55% one-base-short rate from failed couplings. Folding
+  it into `error()` would add 4e-3 to every base likelihood in the pipeline on the strength of the
+  primer's quality. Report it, never apply it.
 - ⚠ **Do not reproduce MIGEC v1's bugs.** Quality must be indexed at the *match offset*, not the
   read start; low-quality mismatches must actually be counted (v1's dangling `else` meant they
   never were).

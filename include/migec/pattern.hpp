@@ -34,10 +34,13 @@
 #ifndef MIGEC_PATTERN_HPP
 #define MIGEC_PATTERN_HPP
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "migec/types.hpp"
 
 namespace migec {
 
@@ -74,6 +77,14 @@ public:
 
     PatternMatch match(std::string_view seq, std::string_view qual,
                        const MatchParams& params = MatchParams()) const;
+
+    // Counts match/mismatch at this pattern's UNAMBIGUOUS scored positions, indexed by the
+    // reported Phred. Those positions are known sequence -- the adapter and the sample tag -- so
+    // a disagreement there is an instrument error and nothing else, which makes them the only
+    // free calibration standard in the read. Degenerate (IUPAC) positions are skipped: a mismatch
+    // against a 2-base set is not a miscall with probability 1.
+    void calibrate(std::string_view seq, std::string_view qual, int offset,
+                   std::vector<std::array<std::array<uint64_t, 2>, 61>>& by_position) const;
 
     size_t size() const { return mask_.size(); }
     int umi_length() const { return umi_length_; }

@@ -15,6 +15,90 @@
 
 namespace migec {
 
+void QualityCalibration::merge(const QualityCalibration& o) {
+    for (size_t p = 0; p < by_position.size() && p < o.by_position.size(); ++p) {
+        for (size_t q = 0; q < 61; ++q) {
+            by_position[p][q][0] += o.by_position[p][q][0];
+            by_position[p][q][1] += o.by_position[p][q][1];
+        }
+    }
+}
+
+void QualityCalibration::fit(uint64_t min_bases, double max_excess) {
+    // Per-position mismatch rate first. A position far above the median is not measuring the
+    // instrument -- it is a base the pattern is wrong about, or one that is genuinely variable,
+    // and leaving it in would put its variation into the intercept as a fake error floor.
+    std::vector<double> rates;
+    std::vector<uint64_t> totals(by_position.size(), 0), bad(by_position.size(), 0);
+    for (size_t p = 0; p < by_position.size(); ++p) {
+        for (size_t q = 0; q < 61; ++q) {
+            totals[p] += by_position[p][q][0] + by_position[p][q][1];
+            bad[p] += by_position[p][q][1];
+        }
+        if (totals[p] >= min_bases) {
+            rates.push_back(static_cast<double>(bad[p]) / static_cast<double>(totals[p]));
+        }
+    }
+    double median = 0.0;
+    if (!rates.empty()) {
+        std::sort(rates.begin(), rates.end());
+        median = rates[rates.size() / 2];
+    }
+    counts = {};
+    position_used.assign(by_position.size(), 0);
+    positions_dropped = 0;
+    for (size_t p = 0; p < by_position.size(); ++p) {
+        if (!totals[p]) continue;
+        const double rate = static_cast<double>(bad[p]) / static_cast<double>(totals[p]);
+        if (totals[p] >= min_bases && median > 0.0 && rate > max_excess * median) {
+            ++positions_dropped;
+            continue;
+        }
+        position_used[p] = 1;
+        for (size_t q = 0; q < 61; ++q) {
+            counts[q][0] += by_position[p][q][0];
+            counts[q][1] += by_position[p][q][1];
+        }
+    }
+
+    // ...then e_hat(q) = eps_qi + a * 10^(-q/10), weighted by how many bases carried that Q. Weighting
+    // matters: on a 2-colour instrument almost every base sits at one of four Q values, and an
+    // unweighted fit would let a Q value seen a hundred times outvote one seen a billion.
+    double sw = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    int used = 0;
+    bases = 0;
+    for (size_t q = 0; q < counts.size(); ++q) {
+        const uint64_t n = counts[q][0] + counts[q][1];
+        bases += n;
+        if (n < min_bases) continue;
+        const double w = static_cast<double>(n);
+        const double x = std::pow(10.0, -static_cast<double>(q) / 10.0);
+        const double y = static_cast<double>(counts[q][1]) / w;
+        sw += w; sx += w * x; sy += w * y; sxx += w * x * x; sxy += w * x * y;
+        ++used;
+    }
+    const double det = sw * sxx - sx * sx;
+    if (used < 2 || det <= 0.0) {
+        fitted = false;
+        return;
+    }
+    slope = (sw * sxy - sx * sy) / det;
+    quality_independent = (sy - slope * sx) / sw;
+    // A negative intercept is not an error rate. It means the two best Q values disagree with the
+    // straight line by more than the line's own span, so report no floor rather than a fiction.
+    if (quality_independent < 0.0) quality_independent = 0.0;
+    if (slope < 0.0) slope = 0.0;
+    fitted = true;
+}
+
+double QualityCalibration::error(int q) const {
+    const double nominal = phred_error(static_cast<uint8_t>(std::clamp(q, 0, 60)));
+    if (!fitted) return nominal;
+    // Slope only. The intercept is the synthesised anchor's own defect rate; folding it in would
+    // add ~4e-3 to every base likelihood in the pipeline on the strength of the primer's quality.
+    return std::clamp(slope * nominal, 1e-7, 0.75);
+}
+
 void CheckoutCounters::merge(const CheckoutCounters& o) {
     total += o.total;
     assigned += o.assigned;
@@ -25,6 +109,7 @@ void CheckoutCounters::merge(const CheckoutCounters& o) {
     normalised += o.normalised;
     if (per_sample.size() < o.per_sample.size()) per_sample.resize(o.per_sample.size(), 0);
     for (size_t i = 0; i < o.per_sample.size(); ++i) per_sample[i] += o.per_sample[i];
+    calibration.merge(o.calibration);
     if (umi_phred.size() < o.umi_phred.size()) umi_phred.resize(o.umi_phred.size());
     for (size_t i = 0; i < o.umi_phred.size(); ++i) {
         for (size_t q = 0; q < 61; ++q) umi_phred[i][q] += o.umi_phred[i][q];
@@ -190,6 +275,10 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     if (normalised) ++counters_.normalised;
     ++counters_.per_sample[static_cast<size_t>(a.sample)];
     for (char ch : m.umi_qual) ++counters_.umi_phred[static_cast<size_t>(a.sample)][phred_from_char(ch)];
+    // The pattern's own constant bases are known sequence, so a disagreement there is an
+    // instrument error and nothing else -- the only free calibration standard in the read.
+    patterns_.pattern(static_cast<size_t>(a.sample))
+        .calibrate(seq, qual, m.offset, counters_.calibration.by_position);
     return out;
 }
 
@@ -541,6 +630,9 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         stats.sample_reads[file_of[i]] += stats.counters.per_sample[i];
         for (size_t q = 0; q < 61; ++q) stats.sample_phred[file_of[i]][q] += stats.counters.umi_phred[i][q];
     }
+    // Fit once, after every worker's counts are in: the intercept is a property of the run, and
+    // fitting per chunk would give as many answers as there were chunks.
+    stats.counters.calibration.fit();
     stats.wall_seconds = clock.seconds();
     stats.reads_per_second =
         stats.wall_seconds > 0.0 ? static_cast<double>(stats.counters.total) / stats.wall_seconds

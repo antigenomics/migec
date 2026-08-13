@@ -157,3 +157,39 @@ file                                 content
 
 See :doc:`umi_statistics` for what the last two contain and how to read them, and
 :doc:`performance` for ``--threads`` and what the run costs in time and memory.
+
+
+What the reported Phred is actually worth
+-----------------------------------------
+
+The pattern's own constant bases are known sequence — the adapter and the sample tag — so a
+disagreement there is an instrument error and nothing else. That makes them the only free
+calibration standard in the read, and ``checkout`` counts match/mismatch at every unambiguous
+scored position, indexed by the reported Phred.
+
+.. code-block:: text
+
+   reported Phred is worth 1.04x its nominal error, measured on 46,289,536 constant pattern bases
+     the fit's intercept is 3.9e-03 per base -- the SYNTHESISED anchor's own defect rate,
+     not a sequencing floor
+
+The table is fitted as ``ê(q) = ε_qi + a · 10^(−q/10)``, weighted by how many bases carried each
+Q — which matters, because RTA3 emits about four distinct Q values and an unweighted fit would let
+one seen a hundred times outvote one seen a billion.
+
+.. warning::
+
+   **The intercept is not a sequencing floor.** The standard being measured against is a
+   *synthesised* oligo, and oligo synthesis carries roughly one defect per 200–500 bases. On
+   ``SRR1763769`` the intercept comes out at 3.9·10⁻³, spread evenly over all 23 anchor positions
+   with none polymorphic — against an independently measured **0.55% rate of one-base-short
+   barcodes** from failed couplings in the same oligo. Same order, same cause.
+
+   So it is reported as a diagnostic **of the primer** and deliberately left out of the calibrated
+   error. ``error(q)`` applies the slope only; folding the intercept in would add 4·10⁻³ to every
+   base likelihood in the pipeline on the strength of the primer's quality.
+
+A pattern position whose mismatch rate sits far above the median is dropped before fitting: it is
+polymorphic, or the pattern is wrong about it, and either way it is not measuring the instrument.
+``checkout.pattern_positions.tsv`` shows every position and whether it was used;
+``checkout.quality_calibration.tsv`` is the per-Q table.
