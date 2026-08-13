@@ -7,8 +7,11 @@ Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shuga
 Computational Biology* 2017).
 
 > **Version 2 is under construction.** All three stages work today — `checkout`, `refine` and
-> `assemble`. Whitelists, dual-end barcodes and cell calling land over the following milestones. The Groovy MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and
-> at tag `v1-final` — Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
+> `assemble` — with cell barcodes, whitelists, dual-end and positional (10x) layouts, cell calling
+> and `suggest`/`subsample`. Index hopping, `.mig` bucket output and the published benchmark
+> comparisons are what remain; see [`ROADMAP.md`](ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on
+> branch [`legacy-v1`](../../tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
+> [1.2.9 release](../../releases/tag/1.2.9).
 
 ## Why
 
