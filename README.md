@@ -105,6 +105,27 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
 
+### Positional chemistries, and one pattern instead of a sheet
+
+10x, dual-end and any other layout where the chemistry fixes the barcode's position needs no
+barcode table and no anchor:
+
+```bash
+migec checkout R1.fq.gz R2.fq.gz --bc-pattern XXXXXXXXXXXXXXXXNNNNNNNNNN --max-offset 0 -o co/
+```
+
+`X` is a cell-barcode position, `N` a UMI position — the interface `umi_tools`, `umitools` and
+`mgatk` all take. ⚠ `umi_tools` spells a cell barcode `C`, which is **cytosine** here; pasting one
+is refused with the translation rather than compiled into a pattern that matches nothing.
+
+`--max-offset 0` is not a convenience. A 10x barcode has no constant sequence anywhere, so a free
+scan cannot place it and correctly refuses; anchored, the placement is the chemistry's and the bar
+does not apply. On `sc5p_v2_hs_PBMC_1k` VDJ-T: **100% of 3,155,166 reads assigned**, 221,024
+barcodes at 14.28 reads each, 813 cells called.
+
+⚠ On such a chemistry `refine` and `assemble` take **R2**: the barcode read is 26 nt and nothing
+else, so R1 has no payload at all.
+
 ### It corrects the barcodes, with the evidence that survives at one read
 
 ```bash
@@ -331,6 +352,16 @@ The distinction matters more than it looks: a sequence logo draws *Shannon* entr
 probability two molecules collide is the *Rényi-2* (collision) entropy. Since H₂ ≤ H₁, using
 Shannon overstates the usable space and understates collisions — the direction that silently merges
 distinct molecules. Both are reported; only the collision form feeds any decision.
+
+## Pipelines
+
+`integrations/nextflow/migec/` is an nf-core-style local module — `main.nf`, `meta.yml`,
+`nextflow.config`, `environment.yml` — that drops into
+[nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands you FASTQ pairs. SLURM is
+the pipeline's business, not the module's: it declares `label` and `task.cpus` and nothing more.
+
+⚠ Only `checkout` threads. `refine` and `assemble` are single-threaded by construction, so ask for
+the cores `checkout` can use and no more.
 
 ## Documentation
 

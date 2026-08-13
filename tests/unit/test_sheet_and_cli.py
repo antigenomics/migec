@@ -143,3 +143,40 @@ def test_describe_rejects_a_pattern_the_grammar_does_not_accept(tmp_path):
     rows = read_barcodes(sheet(tmp_path, "S1\tNNNN\n"))
     with pytest.raises(ValueError, match="S1:"):
         describe(rows)
+
+
+# ------------------------------------------------------- inline patterns (umi_tools style)
+
+
+def test_bc_pattern_replaces_the_sheet(tmp_path):
+    """A positional chemistry is one sample and one pattern; writing a one-line file for it is
+    friction umi_tools, umitools and mgatk all avoid."""
+    import gzip
+
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        for i in range(50):
+            f1.write(f"@r{i}\n{'ACGT' * 4}{'TTTTTTTTTT'}\n+\n{'I' * 26}\n")
+            f2.write(f"@r{i}\n{'G' * 90}\n+\n{'I' * 90}\n")
+    r = runner.invoke(app, ["checkout", str(tmp_path / "r1.fq.gz"), str(tmp_path / "r2.fq.gz"),
+                            "--bc-pattern", "X" * 16 + "N" * 10, "--sample", "PBMC",
+                            "--max-offset", "0", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+    assert (tmp_path / "out" / "PBMC_R1.fq.gz").exists()
+
+
+def test_a_umi_tools_pattern_is_refused_rather_than_misread(tmp_path):
+    """⛔ umi_tools spells a cell barcode `C`; here `C` is cytosine. Pasting one would compile
+    into a pattern demanding literal cytosines, match nothing, and look like a bad library."""
+    r = runner.invoke(app, ["checkout", "reads.fq", "--bc-pattern", "CCCCCCCCCCCCCCCCNNNNNNNNNN",
+                            "-o", str(tmp_path / "out")])
+    assert r.exit_code != 0
+    assert "cytosine" in r.output
+    assert "XXXXXXXXXXXXXXXXNNNNNNNNNN" in r.output
+
+
+def test_exactly_one_of_barcodes_and_bc_pattern(tmp_path):
+    p = sheet(tmp_path, "S1\tACGTNNNN\n")
+    for args in ([], ["-b", str(p), "--bc-pattern", "ACGTNNNN"]):
+        r = runner.invoke(app, ["checkout", "reads.fq", "-o", str(tmp_path / "o"), *args])
+        assert r.exit_code != 0
+        assert "exactly one" in r.output

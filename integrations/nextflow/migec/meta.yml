@@ -1,0 +1,111 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/modules/meta-schema.json
+name: "migec"
+description: Collapse UMI-tagged reads into one consensus per molecule, with a measured quality cap
+keywords:
+  - umi
+  - molecular barcodes
+  - consensus
+  - single-cell
+  - immunogenomics
+  - ctdna
+tools:
+  - "migec":
+      description: |
+        Extracts sample/cell/UMI barcodes from reads, corrects errors in the barcodes using the
+        evidence that survives at one read per molecule (base quality and payload agreement, not
+        only the count ratio), and assembles the reads of each molecule into a consensus whose
+        emitted quality is capped by a measured RT/first-cycle-PCR floor rather than by a guess.
+      homepage: "https://github.com/antigenomics/migec"
+      documentation: "https://antigenomics.github.io/migec/"
+      tool_dev_url: "https://github.com/antigenomics/migec"
+      licence: ["GPL-3.0-or-later"]
+      identifier: ""
+
+input:
+  - - meta:
+        type: map
+        description: |
+          Groovy Map with sample information. Recognised optional keys:
+          `bc_pattern` (overrides params.migec_bc_pattern), `max_offset`, `payload_mate`.
+    - reads:
+        type: file
+        description: FASTQ, single or a pair. A pair is required for any chemistry whose barcode
+          read carries no payload, which includes every droplet platform.
+        pattern: "*.{fastq,fq}.gz"
+
+output:
+  - consensus:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.consensus.fq.gz":
+          type: file
+          description: One record per molecule, barcodes in the name and in RX/CB/BC/MI/cD tags
+          pattern: "*.consensus.fq.gz"
+  - molecules:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.mig.tsv":
+          type: file
+          description: Per molecule -- cell, umi, contig, reads, length, quality, linkage
+          pattern: "*.mig.tsv"
+  - barcodes:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.barcodes.tsv":
+          type: file
+          description: Per barcode -- reads before and after correction, and its parent if merged
+          pattern: "*.barcodes.tsv"
+  - cells:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.cells.tsv":
+          type: file
+          description: Per cell barcode -- molecules and whether OrdMag called it. Cell barcodes only.
+          pattern: "*.cells.tsv"
+  - rank:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.rank.tsv":
+          type: file
+          description: The barcode-rank curve and its CDF, log-spaced
+          pattern: "*.rank.tsv"
+  - bins:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.bins.tsv":
+          type: file
+          description: Per MIG size -- barcodes, reads, fraction merged as error, payload entropy
+          pattern: "*.bins.tsv"
+  - checkout_qc:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "checkout.*.tsv":
+          type: file
+          description: Yields, coverage histogram, UMI composition, barcode space, quality calibration
+          pattern: "checkout.*.tsv"
+  - report:
+      - meta:
+          type: map
+          description: Groovy Map containing sample information
+      - "*.json":
+          type: file
+          description: Every number above, machine-readable
+          pattern: "*.json"
+  - versions:
+      - "versions.yml":
+          type: file
+          description: File containing software versions
+          pattern: "versions.yml"
+
+authors:
+  - "@mikessh"
+maintainers:
+  - "@mikessh"

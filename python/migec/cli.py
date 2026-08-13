@@ -47,7 +47,21 @@ def checkout(
         help="Second mate. When given, the tag is looked for in either mate and the pair is "
         "swapped so R1 always carries it.",
     ),
-    barcodes: Path = typer.Option(..., "--barcodes", "-b", help="MIGEC-style barcode table."),
+    barcodes: Optional[Path] = typer.Option(
+        None, "--barcodes", "-b", help="MIGEC-style barcode table. Use this OR --bc-pattern."
+    ),
+    bc_pattern: Optional[str] = typer.Option(
+        None,
+        "--bc-pattern",
+        help="One pattern for one sample, inline, instead of a barcode table -- which is what a "
+        "positional chemistry needs and what umi_tools, umitools and mgatk all take. "
+        "`N` is a UMI position, `X` a cell barcode position: 10x 5' is "
+        "XXXXXXXXXXXXXXXXNNNNNNNNNN with --max-offset 0. ⚠ umi_tools writes the cell barcode as "
+        "`C`, which is cytosine here -- see the error you get if you paste one.",
+    ),
+    sample_id: str = typer.Option(
+        "sample", "--sample", help="Sample name for --bc-pattern. Ignored with --barcodes."
+    ),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
     threads: int = typer.Option(
         0,
@@ -83,6 +97,10 @@ def checkout(
 
     if trim not in ("pattern", "none"):
         raise typer.BadParameter("--trim must be 'pattern' or 'none'")
+    if (barcodes is None) == (bc_pattern is None):
+        raise typer.BadParameter("give exactly one of --barcodes and --bc-pattern")
+    if bc_pattern is not None:
+        barcodes = _inline_sheet(bc_pattern, sample_id, out_dir)
     summary = run(
         reads,
         barcodes,
@@ -247,6 +265,30 @@ def subsample(
 
     summary = run(reads, output, keep_percent=keep, by_cell=not by_umi_only)
     typer.echo(format_report(summary))
+
+
+def _inline_sheet(pattern: str, sample_id: str, out_dir: Path) -> Path:
+    """Write a one-row barcode table for `--bc-pattern`, after refusing an ambiguous one.
+
+    ⛔ umi_tools spells a cell-barcode position `C`, and `C` is cytosine in this grammar. Pasting
+    a umi_tools pattern would compile -- into a pattern demanding a run of literal cytosines,
+    which matches nothing and looks like a bad library rather than a bad flag. Refuse it and say
+    what to write instead.
+    """
+    import re
+
+    run_of_c = max((len(m) for m in re.findall(r"C+", pattern)), default=0)
+    if run_of_c >= 4 and "X" not in pattern.upper():
+        raise typer.BadParameter(
+            f"--bc-pattern {pattern!r} contains a run of {run_of_c} literal C. In this grammar C "
+            f"is cytosine, not a cell barcode -- umi_tools spells it that way, migec spells it X. "
+            f"Write {pattern.replace('C', 'X')!r} if you meant a cell barcode, or keep the C's "
+            f"and add --max-offset if you really do mean a run of cytosines."
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "bc_pattern.txt"
+    path.write_text(f"{sample_id}\t{pattern}\n")
+    return path
 
 
 def _not_yet(name: str, milestone: str) -> int:
