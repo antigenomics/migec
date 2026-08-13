@@ -87,8 +87,8 @@ Where to go
 
    installation
    examples
-   layouts
+   Layouts <layouts>
    commands
-   downstream
+   Downstream <downstream>
    method
    reference
