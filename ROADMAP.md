@@ -127,7 +127,13 @@ scientific claim and is validated before any throughput work.
 - [x] Paired-end input; strand normalisation (tag searched in either mate, pair swapped)
 - [x] Multi-core, byte-identical output at any thread count; compression on the workers
 - [x] Speed and memory reported per run; `tests/benchmark/` regressions
-- [ ] Dual-end barcodes; `.mig` bucket output, which is also what bounds the UMI counters
+- [x] **Dual-end barcodes** — column 3 of the sheet is MIGEC's slave pattern, on the other mate,
+      extending the UMI rather than starting a new one. MAGERI's `NNNNNNNNNNNNtgact` /
+      `agtcaNNNNNNNNNNNN` gives a 24 nt UMI; 2000/2000 assigned. Both halves or nothing
+- [x] **`--max-offset`**, because a positional chemistry cannot be checked out without it. Also
+      fixed: the acceptance bar was charged for the offsets a read *could* hold rather than the
+      ones actually scanned, so an anchored 5 nt handle (10 bits) was billed 12.6 bits and refused
+- [ ] `.mig` bucket output, which is also what bounds the UMI counters
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
   threads ✅; >1 M reads/s at 16 threads ✅

@@ -85,16 +85,20 @@ private:
 // Whole-file, so the pybind boundary is crossed once per run rather than once per read.
 py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2,
                          const std::vector<std::string>& sample_ids,
-                         const std::vector<std::string>& patterns, const std::string& out_prefix,
+                         const std::vector<std::string>& patterns,
+                          const std::vector<std::string>& slaves, const std::string& out_prefix,
                          const std::string& trim, int min_umi_quality, bool write_unmatched,
-                         int threads) {
+                         int threads, int max_offset) {
     if (sample_ids.size() != patterns.size()) {
         throw MigecError("run_checkout: sample_ids and patterns have different lengths");
     }
     PatternSet set;
-    for (size_t i = 0; i < patterns.size(); ++i) set.add(sample_ids[i], patterns[i]);
+    for (size_t i = 0; i < patterns.size(); ++i) {
+        set.add(sample_ids[i], patterns[i], i < slaves.size() ? slaves[i] : std::string());
+    }
 
     CheckoutParams params;
+    params.match.max_offset = max_offset;
     params.min_umi_quality = min_umi_quality;
     if (trim == "none") {
         params.trim = TrimMode::kNone;
@@ -350,9 +354,11 @@ PYBIND11_MODULE(_core, m) {
 
     m.def("run_checkout", &py_run_checkout, py::arg("in_path"), py::arg("in_path2") = std::string(),
           py::arg("sample_ids") = std::vector<std::string>(),
-          py::arg("patterns") = std::vector<std::string>(), py::arg("out_prefix") = std::string(),
+          py::arg("patterns") = std::vector<std::string>(),
+          py::arg("slaves") = std::vector<std::string>(), py::arg("out_prefix") = std::string(),
           py::arg("trim") = "pattern", py::arg("min_umi_quality") = 0,
           py::arg("write_unmatched") = false, py::arg("threads") = 0,
+          py::arg("max_offset") = -1,
           "Demultiplex a FASTQ (or an R1/R2 pair) by barcode pattern, extract and trim the UMI, "
           "and write one gzipped FASTQ per sample with RX/QX/BC tags in the header. Returns a "
           "summary dict including the per-sample coverage histogram, UMI composition, correction "

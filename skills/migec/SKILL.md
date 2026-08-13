@@ -43,6 +43,15 @@ S2	aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 UMI runs need not be contiguous — `NNNNtNNNNtNNNN` gives one 12 nt UMI. `migec sheet barcodes.txt`
 prints what each row extracts without running anything.
 
+`X`/`x` is a **cell barcode** position, captured separately (migec's one extension to the dialect;
+`X` is not IUPAC, so published tables keep their exact meaning). Column 3 is the **slave** pattern,
+on the other mate, extending the UMI — `S1<TAB>NNNNNNNNNNNNtgact<TAB>agtcaNNNNNNNNNNNN` is a 24 nt
+dual-end UMI. ⛔ Both halves must match or the read is unmatched.
+
+⚠ **A short handle needs `--max-offset 0`.** Five bases are 10 bits; the acceptance bar is
+`log2(offsets × patterns / α)`, which is 12.6 bits over a free scan of a 77 nt read and 6.6 when
+anchored. A free scan refusing it is correct — `TGACT` occurs by chance every kilobase.
+
 ⚠ `N` always means UMI, never IUPAC "any base". Use `.` for an uncaptured wildcard.
 
 ## Commands

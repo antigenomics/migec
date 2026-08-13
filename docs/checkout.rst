@@ -193,3 +193,41 @@ A pattern position whose mismatch rate sits far above the median is dropped befo
 polymorphic, or the pattern is wrong about it, and either way it is not measuring the instrument.
 ``checkout.pattern_positions.tsv`` shows every position and whether it was used;
 ``checkout.quality_calibration.tsv`` is the per-Q table.
+
+
+Dual-end barcodes
+-----------------
+
+Column 3 of a MIGEC barcode table is the *slave* barcode: a second pattern on the other mate whose
+captured positions **extend** the UMI rather than starting a new one. MAGERI's design, quoted from
+its Methods, is twelve bases at each end of the molecule:
+
+.. code-block:: text
+
+   S1	NNNNNNNNNNNNTGACT	AGTCANNNNNNNNNNNN
+
+.. code-block:: bash
+
+   migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ --max-offset 0
+
+⛔ **Both halves must match** or the read is unmatched. Accepting the master alone would emit 12 nt
+UMIs beside 24 nt ones, and every collision estimate downstream would then be computed over two
+barcode spaces at once.
+
+``--max-offset``: where the pattern may start
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``-1`` scans the whole read; ``0`` anchors the pattern at the first base. A dual-end design needs
+``0``, and the reason is not convenience:
+
+A five-base handle like ``TGACT`` is worth 10 bits. The acceptance bar is a Bonferroni bound over
+the offsets scanned — ``log2(offsets × patterns / α)`` — which over a 77 nt read is 12.6 bits. So a
+free scan **correctly refuses** it: ``TGACT`` occurs by chance about every kilobase and cannot be
+placed. Anchored at offset 0 the bar is 6.6 bits, the handle clears it, and the placement is
+determined by the chemistry rather than by the sequence.
+
+.. note::
+
+   The bound is charged for the offsets **actually scanned**. Billing an anchored scan for the
+   sixty offsets it never tries refuses every read of a design that is perfectly well determined —
+   which is what it did until this was fixed.

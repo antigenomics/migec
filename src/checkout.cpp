@@ -230,7 +230,25 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
         }
     }
 
-    const PatternMatch& m = a.match;
+    // The slave barcode, on the other mate. Both halves or nothing: a dual-end design that
+    // accepts a read on the master alone emits half-length UMIs next to full-length ones, and
+    // every collision estimate downstream is then computed over two barcode spaces at once.
+    PatternMatch m = a.match;
+    if (patterns_.has_slave(static_cast<size_t>(a.sample))) {
+        if (!paired) {
+            throw MigecError("checkout: sample '" + patterns_.samples()[static_cast<size_t>(a.sample)] +
+                             "' declares a slave barcode, which needs a second mate to match "
+                             "against -- run checkout with both R1 and R2");
+        }
+        const PatternMatch sm = patterns_.slave(static_cast<size_t>(a.sample))
+                                    .match(mate_seq, mate_qual, params_.match);
+        if (!sm.found) {
+            ++counters_.unmatched;
+            return out;
+        }
+        m.umi += sm.umi;
+        m.umi_qual += sm.umi_qual;
+    }
     if (params_.reject_umi_n &&
         m.umi.find_first_not_of("ACGTacgt") != std::string::npos) {
         ++counters_.bad_umi;
@@ -511,12 +529,12 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         if (it == stats.sample_ids.end()) {
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
-            stats.umi_counts.emplace_back(patterns.pattern(i).umi_length());
+            stats.umi_counts.emplace_back(patterns.umi_length(i));
         } else {
             file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
             // The rows would otherwise write UMIs of two lengths into one counter, and the
             // composition, the collision statistics and the correction would all be nonsense.
-            if (patterns.pattern(i).umi_length() != stats.umi_counts[file_of[i]].length()) {
+            if (patterns.umi_length(i) != stats.umi_counts[file_of[i]].length()) {
                 throw MigecError("checkout: sample '" + ids[i] +
                                  "' is declared with two different UMI lengths");
             }

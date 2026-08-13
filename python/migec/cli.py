@@ -67,6 +67,13 @@ def checkout(
         help="Drop reads whose worst UMI base is below this Phred. 0 (default) keeps everything: "
         "a low-quality UMI base is a reason to be less certain, not to discard the molecule.",
     ),
+    max_offset: int = typer.Option(
+        -1,
+        "--max-offset",
+        help="Where the pattern may start. -1 scans the whole read; 0 anchors it at the first "
+        "base. Positional chemistries need 0 -- a short anchor like a 5 nt dual-end handle occurs "
+        "by chance every kilobase, so a free scan cannot place it and correctly refuses to.",
+    ),
     write_unmatched: bool = typer.Option(
         False, "--write-unmatched", help="Also write reads that matched no pattern."
     ),
@@ -85,6 +92,7 @@ def checkout(
         min_umi_quality=min_umi_quality,
         write_unmatched=write_unmatched,
         threads=threads,
+        max_offset=max_offset,
     )
     typer.echo(format_report(summary))
     typer.echo(f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition}}.tsv")

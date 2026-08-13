@@ -6,6 +6,44 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### Cell barcodes, whitelists, cell calling, dual-end barcodes, and what the Phred is worth
+
+**`X`/`x` is a cell-barcode position** in the pattern grammar — the one extension to MIGEC's
+dialect, chosen because `X` is not a IUPAC symbol so no published table can contain one. `checkout`
+writes `CB:Z:`/`CY:Z:`; `refine` keys on cell+UMI concatenated, because the same UMI in two cells is
+two molecules and a UMI-only table would correct them against each other.
+
+**`refine --cell-whitelist`** snaps a barcode to the list that was actually synthesised. The
+load-bearing part is the competing hypothesis: without "this barcode is not on the list and was
+read correctly", every hopped or undeclared barcode is absorbed into its nearest entry at posterior
+1.0. Its prior is measured from barcodes at distance ≥2 from every entry — and it is a prior on
+*this barcode*, the off-list read share divided by the distinct off-list barcodes.
+
+**Cell calling** with OrdMag, the knee reported beside it and a warning when they disagree past 3×.
+Exactly 500 of 20,500 on a synthetic droplet library. EmptyDrops-style rescue is Cell Ranger's job
+and is deliberately not reproduced.
+
+**Dual-end barcodes**: column 3 of the sheet is MIGEC's slave pattern, on the other mate, extending
+the UMI. MAGERI's `NNNNNNNNNNNNtgact` / `agtcaNNNNNNNNNNNN` gives a 24 nt UMI. Both halves must
+match or the read is unmatched.
+
+**`--max-offset`**, and the bug it exposed: the acceptance bar is a Bonferroni bound over offsets,
+and it was charging for the offsets a read *could* hold rather than the ones actually scanned. A
+5 nt dual-end handle is 10 bits and was billed 12.6, so an anchored scan refused every read of a
+design that is perfectly well determined. A *free* scan refusing it is correct — `TGACT` occurs by
+chance every kilobase.
+
+**What the reported Phred is worth**, measured against the pattern's own constant bases: slope 1.04
+over 46.3 M bases on `SRR1763769`. ⛔ The fit's intercept (3.9e-3) is the **synthesised primer's**
+defect rate, not a sequencing floor — it is even across all 23 anchor positions with none
+polymorphic, and agrees with the independently measured 0.55% one-base-short rate. Reported, never
+applied.
+
+**The MIG-size FDR threshold**, measured rather than derived, and reported rather than applied.
+⚠ A count-ratio criterion reports zero residual at 1–3 reads/UMI, which is where it is worst;
+payload agreement is what still works there. 5.25% of 1-read molecules at 1.23 reads/barcode
+against 0% at 4.62.
+
 ### `migec refine`: the stage that decides how many molecules there were
 
 Reads checkout's tagged FASTQ, folds error-child barcodes into their parents using all three

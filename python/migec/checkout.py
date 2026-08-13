@@ -23,6 +23,7 @@ def run(
     min_umi_quality: int = 0,
     write_unmatched: bool = False,
     threads: int = 0,
+    max_offset: int = -1,
 ) -> dict:
     """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`."""
     rows: list[SampleRow] = read_barcodes(barcodes)
@@ -34,16 +35,19 @@ def run(
         "" if reads2 is None else str(reads2),
         [r.sample_id for r in rows],
         [r.pattern for r in rows],
+        [r.slave or "" for r in rows],
         str(out) + "/",
         trim,
         min_umi_quality,
         write_unmatched,
         threads,
+        max_offset,
     )
     summary["input"] = str(reads)
     summary["input2"] = "" if reads2 is None else str(reads2)
     summary["barcodes"] = str(barcodes)
     summary["patterns"] = {r.sample_id: r.pattern for r in rows}
+    summary["slaves"] = {r.sample_id: r.slave for r in rows if r.slave}
 
     _write_tables(out, summary)
     (out / "checkout.json").write_text(json.dumps(summary, indent=2, default=str))

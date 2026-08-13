@@ -244,6 +244,13 @@ correction is written up in `project/review-algorithms.md`.
   library the count-only residual is 0 and the full one is 1,294.
 - **The MIG-size FDR threshold is reported, never applied** (2026-08-13). Measured residual, not
   derived. 5.25% of 1-read molecules at 1.23 reads/barcode, 0% at 4.62.
+- **Dual-end barcodes work (2026-08-13)**: column 3 of the sheet is the slave pattern, on the
+  other mate, extending the UMI. ⛔ Both halves or nothing -- accepting the master alone emits
+  12 nt UMIs beside 24 nt ones and every collision estimate is then over two spaces at once.
+- ⛔ **The acceptance bar is charged for the offsets ACTUALLY SCANNED.** It was using the offsets a
+  read could hold, so `--max-offset 0` still paid `log2(61/α)` = 12.6 bits and a 5 nt dual-end
+  handle (10 bits) was refused on every read. A free scan refusing it is correct -- `TGACT` occurs
+  by chance every kilobase -- but an anchored one must not.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
   (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

@@ -6,9 +6,18 @@ verbatim -- tab or whitespace separated, ``#`` comments, one row per sample::
     S1<TAB>aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN
     S2<TAB>aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 
-Column 3 onwards (slave barcode, R1/R2 paths) are accepted and ignored for now; paired-end
-handling lands with the paired checkout. Several rows may share a sample id, which is how a
-sample sequenced with more than one tag is declared.
+Column 3 is MIGEC's *slave* barcode: a second pattern that sits on the other mate, whose captured
+positions **extend** the UMI rather than starting a new one. That is how a 24 nt dual-end UMI is
+declared::
+
+    S1<TAB>NNNNNNNNNNNNtgact<TAB>agtcaNNNNNNNNNNNN
+
+Both halves must match or the read is unmatched -- accepting the master alone would emit
+half-length UMIs next to full-length ones, and every collision estimate downstream would then be
+computed over two barcode spaces at once.
+
+Columns 4-5 (R1/R2 paths) are accepted and ignored. Several rows may share a sample id, which is
+how a sample sequenced with more than one tag is declared.
 """
 
 from __future__ import annotations

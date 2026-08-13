@@ -208,3 +208,37 @@ TEST_CASE("a near-tie placement is ambiguous, not silently resolved by the prune
     CHECK(clear.offset == 0);
     CHECK(clear.margin > 5.0);
 }
+
+TEST_CASE("the acceptance bar is charged for the offsets actually scanned") {
+    // MAGERI's dual-end handle: five bases, 10 bits. Enough against one offset and not against
+    // sixty -- so billing an anchored scan for a scan it never performs refuses every read of a
+    // design that is perfectly well determined.
+    const BarcodePattern p = BarcodePattern::compile("NNNNNNNNNNNNTGACT");
+    const std::string seq = "ACGTACGTACGTTGACT" + std::string(60, 'A');
+    const std::string qual(seq.size(), char_from_phred(35));
+
+    MatchParams free_scan;
+    CHECK_FALSE(p.match(seq, qual, free_scan).found);
+
+    MatchParams anchored;
+    anchored.max_offset = 0;
+    const PatternMatch m = p.match(seq, qual, anchored);
+    CHECK(m.found);
+    CHECK(m.umi == "ACGTACGTACGT");
+    CHECK(p.default_min_score(seq.size(), 1, 0.01, 0) <
+          p.default_min_score(seq.size(), 1, 0.01, -1));
+}
+
+TEST_CASE("a slave pattern extends the UMI rather than starting a new one") {
+    PatternSet set;
+    set.add("S1", "NNNNNNNNNNNNTGACT", "AGTCANNNNNNNNNNNN");
+    CHECK(set.has_slave(0));
+    CHECK(set.pattern(0).umi_length() == 12);
+    CHECK(set.slave(0).umi_length() == 12);
+    CHECK(set.umi_length(0) == 24);
+
+    PatternSet plain;
+    plain.add("S2", "NNNNNNNNNNNNTGACT");
+    CHECK_FALSE(plain.has_slave(0));
+    CHECK(plain.umi_length(0) == 12);
+}

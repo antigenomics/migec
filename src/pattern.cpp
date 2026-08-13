@@ -117,10 +117,14 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
     return p;
 }
 
-double BarcodePattern::default_min_score(size_t read_length, size_t n_patterns,
-                                         double alpha) const {
-    const size_t n_offsets =
-        read_length >= mask_.size() ? read_length - mask_.size() + 1 : 1;
+double BarcodePattern::default_min_score(size_t read_length, size_t n_patterns, double alpha,
+                                         int max_offset) const {
+    size_t n_offsets = read_length >= mask_.size() ? read_length - mask_.size() + 1 : 1;
+    // The offsets actually SCANNED, not the ones the read could hold. A positional chemistry
+    // anchors at offset 0, and a five-base dual-end handle carries 10 bits -- enough against one
+    // offset and not against sixty, so billing it for a scan it never performs would refuse every
+    // read of a design that is perfectly well determined.
+    if (max_offset >= 0) n_offsets = std::min(n_offsets, static_cast<size_t>(max_offset) + 1);
     return std::log2(static_cast<double>(n_offsets) * static_cast<double>(n_patterns) / alpha);
 }
 
@@ -140,7 +144,7 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
 
     const double min_score = params.min_score >= 0.0
                                  ? params.min_score
-                                 : default_min_score(seq.size());
+                                 : default_min_score(seq.size(), 1, 0.01, params.max_offset);
     const auto& calib = params.quality_calibration;
     // ponytail: the calibrated path rebuilds its table per read (~300 log2, ~8 us). Nothing
     // supplies a calibration yet -- it arrives from the .mig header in M2 -- and when it does the
@@ -255,9 +259,15 @@ void BarcodePattern::calibrate(std::string_view seq, std::string_view qual, int 
     }
 }
 
-void PatternSet::add(std::string sample_id, std::string_view spec) {
+void PatternSet::add(std::string sample_id, std::string_view spec, std::string_view slave) {
     samples_.push_back(std::move(sample_id));
     patterns_.push_back(BarcodePattern::compile(spec));
+    if (slave.empty()) {
+        slave_of_.push_back(-1);
+    } else {
+        slave_of_.push_back(static_cast<int>(slaves_.size()));
+        slaves_.push_back(BarcodePattern::compile(slave));
+    }
 }
 
 PatternSet::Assignment PatternSet::assign(std::string_view seq, std::string_view qual,
@@ -274,7 +284,9 @@ PatternSet::Assignment PatternSet::assign(std::string_view seq, std::string_view
         // Per pattern, because the Bonferroni bound counts the offsets *this* pattern is scanned
         // over, and patterns in one sheet need not be the same length.
         if (params.min_score < 0.0) {
-            per_pattern.min_score = patterns_[i].default_min_score(seq.size(), patterns_.size());
+            per_pattern.min_score =
+                patterns_[i].default_min_score(seq.size(), patterns_.size(), 0.01,
+                                              params.max_offset);
         }
         PatternMatch m = patterns_[i].match(seq, qual, per_pattern);
         if (!m.found) continue;

@@ -96,7 +96,11 @@ public:
     //     min_score = log2( n_offsets * n_patterns / alpha )
     // This is a starting point, not gospel -- reads are not i.i.d. uniform ACGT (shared primers,
     // composition bias), so calibrate against shuffled decoy patterns on real data.
-    double default_min_score(size_t read_length, size_t n_patterns = 1, double alpha = 0.01) const;
+    // `max_offset` must be the one the scan will actually use: anchoring the pattern at the read
+    // start is what makes a short handle placeable at all, and charging it for offsets it never
+    // tries would keep refusing it.
+    double default_min_score(size_t read_length, size_t n_patterns = 1, double alpha = 0.01,
+                             int max_offset = -1) const;
 
 private:
     std::string spec_;
@@ -112,9 +116,17 @@ private:
 // One pattern per sample, as read from a barcode metadata table. Assignment picks the best-scoring
 // sample and requires it to beat the runner-up sample by min_margin -- otherwise the read is
 // ambiguous and is counted rather than arbitrarily assigned.
+// One or two patterns per sample. The second -- MIGEC calls it the *slave* barcode, and it is
+// column 3 of the published tables -- sits on the other mate, and its captured positions extend
+// the UMI rather than starting a new one. That is how a 24 nt dual-end UMI is written as
+// `NNNNNNNNNNNNtgact` and `agtcaNNNNNNNNNNNN`: twelve bases from each end of the molecule.
+//
+// ⛔ Both must match. A dual-end design that accepts a read on the master alone silently emits
+// half-length UMIs alongside full-length ones, and every collision estimate downstream is then
+// computed over two different barcode spaces at once.
 class PatternSet {
 public:
-    void add(std::string sample_id, std::string_view spec);
+    void add(std::string sample_id, std::string_view spec, std::string_view slave = {});
 
     struct Assignment {
         int sample = -1;  // index into samples(); -1 = unassigned
@@ -128,10 +140,18 @@ public:
     size_t size() const { return patterns_.size(); }
     const std::vector<std::string>& samples() const { return samples_; }
     const BarcodePattern& pattern(size_t i) const { return patterns_[i]; }
+    bool has_slave(size_t i) const { return slave_of_[i] >= 0; }
+    const BarcodePattern& slave(size_t i) const { return slaves_[static_cast<size_t>(slave_of_[i])]; }
+    // Total captured UMI length for a sample: master plus slave.
+    int umi_length(size_t i) const {
+        return patterns_[i].umi_length() + (has_slave(i) ? slave(i).umi_length() : 0);
+    }
 
 private:
     std::vector<std::string> samples_;
     std::vector<BarcodePattern> patterns_;
+    std::vector<BarcodePattern> slaves_;
+    std::vector<int> slave_of_;  // index into slaves_, or -1
 };
 
 }  // namespace migec
