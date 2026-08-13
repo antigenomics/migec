@@ -235,6 +235,91 @@ RefineStats refine(const RefineRequest& request) {
         std::fclose(fh);
     }
 
+    // ---------------------------------------------------------------- cell calling
+    if (stats.cell_length > 0) {
+        // Molecules per cell, after correction. Molecules, never reads: a cell is a set of
+        // captured molecules, and read depth is amplification.
+        std::vector<std::pair<uint64_t, uint32_t>> per_cell;  // (cell key, molecules)
+        {
+            // A barcode packs MSB-first, so base 0 of the CELL is in the top bits and the whole
+            // key occupies bits 63 down to 64-2L. The cell is therefore the top 2*cell_length
+            // bits -- not "everything above the UMI", which is only the same thing when cell and
+            // UMI happen to fill all 32 bases.
+            const int shift = 64 - 2 * stats.cell_length;
+            uint64_t current = 0;
+            uint32_t n = 0;
+            bool started = false;
+            // entries are sorted by the packed key, and the cell occupies the HIGH bits, so a
+            // cell's molecules are already contiguous -- no grouping pass and no map.
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (correction.corrected[i] == 0) continue;
+                const uint64_t cell_key = entries[i].key >> shift;
+                if (!started || cell_key != current) {
+                    if (started) per_cell.emplace_back(current, n);
+                    current = cell_key;
+                    n = 0;
+                    started = true;
+                }
+                ++n;
+            }
+            if (started) per_cell.emplace_back(current, n);
+        }
+        stats.cells_observed = per_cell.size();
+
+        std::vector<uint32_t> sizes;
+        sizes.reserve(per_cell.size());
+        for (const auto& kv : per_cell) sizes.push_back(kv.second);
+        std::sort(sizes.begin(), sizes.end(), std::greater<uint32_t>());
+
+        if (!sizes.empty()) {
+            // OrdMag: the 99th percentile of the top `expect_cells`, over ten.
+            const size_t top = std::min<size_t>(static_cast<size_t>(std::max(1, request.expect_cells)),
+                                                sizes.size());
+            const size_t at = static_cast<size_t>(0.01 * static_cast<double>(top));
+            const uint32_t robust_max = sizes[std::min(at, top - 1)];
+            stats.cell_threshold = std::max<uint32_t>(1, robust_max / 10);
+
+            // The knee, reported next to it rather than instead of it: the rank furthest from the
+            // chord joining the first and last points of the log-log curve. It is a description of
+            // the data; OrdMag is the rule that makes the call, and when the two disagree badly
+            // that is worth seeing.
+            if (sizes.size() > 2) {
+                const double x0 = 0.0, y0 = std::log10(static_cast<double>(sizes.front()));
+                const double x1 = std::log10(static_cast<double>(sizes.size()));
+                const double y1 = std::log10(static_cast<double>(sizes.back()));
+                double best = -1.0;
+                for (size_t i = 1; i + 1 < sizes.size(); ++i) {
+                    const double x = std::log10(static_cast<double>(i + 1));
+                    const double y = std::log10(static_cast<double>(sizes[i]));
+                    const double d = std::fabs((y1 - y0) * x - (x1 - x0) * y + x1 * y0 - y1 * x0);
+                    if (d > best) {
+                        best = d;
+                        stats.knee_rank = i + 1;
+                        stats.knee_molecules = sizes[i];
+                    }
+                }
+            }
+            for (uint32_t v : sizes) {
+                if (v >= stats.cell_threshold) {
+                    ++stats.cells_called;
+                    stats.molecules_in_called += v;
+                }
+            }
+        }
+
+        std::FILE* fh =
+            std::fopen((out_dir / (stats.sample_id + ".cells.tsv")).string().c_str(), "w");
+        if (!fh) throw MigecError("refine: cannot write the cell table");
+        std::fprintf(fh, "cell\tmolecules\tcalled\n");
+        for (const auto& kv : per_cell) {
+            std::fprintf(fh, "%s\t%u\t%d\n",
+                         unpack_barcode(kv.first << (64 - 2 * stats.cell_length),
+                                        stats.cell_length).c_str(),
+                         kv.second, kv.second >= stats.cell_threshold ? 1 : 0);
+        }
+        std::fclose(fh);
+    }
+
     // ---------------------------------------------------------------- diagnostics
     // Three tables, all drawn from what is already held. Plots are never made in here: a figure
     // has to be redrawable from a committed TSV.

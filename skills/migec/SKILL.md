@@ -137,6 +137,17 @@ any method. Report the molecule count next to the coverage histogram, never alon
 | `<sample>.fq.gz` | reads with `RX` corrected and `OX:Z:` = the original |
 | `<sample>.barcodes.tsv` | umi, reads, corrected reads, parent |
 | `refine.coverage.tsv` | molecules per power-of-two MIG size, after correction |
+| `<sample>.cells.tsv` | cell, molecules, called — OrdMag, only with cell barcodes |
+| `<sample>.rank.tsv` | the barcode-rank curve and its CDF, log-spaced ranks |
+| `<sample>.bins.tsv` | per MIG size: barcodes, reads, merged as error, payload entropy |
+
+⛔ **Cells are called on MOLECULES, never reads** — read depth is amplification. OrdMag
+(`--expect-cells`, default 3000) makes the call; the knee is reported beside it, and a disagreement
+past 3x is warned. EmptyDrops-style rescue is Cell Ranger's job and is not reproduced.
+
+⚠ **`fraction_erroneous` by MIG size is the diagnostic to read.** ~94% of singleton barcodes are
+error children, ~0.2% at 2-3 reads. A flat curve, or one rising at high counts, means correction is
+merging real molecules.
 
 ## assemble
 

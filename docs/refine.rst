@@ -105,6 +105,32 @@ to merge into and correctly stays put:
    missed correction only inflates a count, and the count is reported next to the coverage
    histogram that explains it. ``--min-posterior`` is where you move along that trade.
 
+Cell calling
+------------
+
+When the reads carry a cell barcode, ``refine`` counts **molecules per cell** — never reads, since
+read depth is amplification — and calls cells with **OrdMag**, Cell Ranger's original rule: take
+the 99th percentile of the top ``--expect-cells`` barcodes and keep everything within a tenth of
+it.
+
+.. code-block:: text
+
+   cells       500 called of 20,500 barcodes seen, at >= 59 molecules (OrdMag)
+               201,463 molecules in called cells (83.5% of all)
+               the curve breaks at rank 310 (357 molecules) -- the knee, for comparison
+
+The **knee** — the rank furthest from the chord joining the ends of the log-log curve — is reported
+*next to* the call, not instead of it. OrdMag is a rule; the knee is what the data says on its own.
+When they disagree by more than a factor of three the report says so, because one of them is
+describing a library the other is not.
+
+⛔ **EmptyDrops-style rescue of low-count cells is deliberately not reproduced.** It is Cell
+Ranger's job, and imitating it would make every comparison against their calls unreachable by
+construction rather than by measurement. The benchmark gate is written against recall of their
+cells, broken down by barcode rank — not a Jaccard we cannot reach.
+
+``<sample>.cells.tsv`` has one row per cell barcode: ``cell``, ``molecules``, ``called``.
+
 What it holds
 -------------
 
@@ -131,10 +157,20 @@ Output
 
 ============================== ====================================================
 ``<sample>.fq.gz``             the reads, ``RX`` corrected, ``OX`` = what it was
-``<sample>.barcodes.tsv``      umi, reads, corrected reads, parent
+``<sample>.barcodes.tsv``      cell, umi, reads, corrected reads, parent
+``<sample>.cells.tsv``         cell, molecules, called — only with cell barcodes
+``<sample>.rank.tsv``          the barcode-rank curve and its CDF, log-spaced ranks
+``<sample>.bins.tsv``          per MIG size: barcodes, reads, merged as error, entropy
 ``refine.coverage.tsv``        molecules per power-of-two MIG size, after correction
 ``refine.json``                all of it, machine-readable
 ============================== ====================================================
+
+``notebooks/refine_diagnostics.py`` draws all of them. Nothing is plotted inside the C++: a figure
+has to be redrawable from a committed TSV long after the run.
+
+The column worth reading first is ``fraction_erroneous`` in ``<sample>.bins.tsv``. About **94% of
+singleton barcodes are error children** and ~0.2% at 2–3 reads. A flat curve, or one rising at high
+counts, means correction is merging real molecules.
 
 A merged read keeps its original barcode in ``OX:Z:``. A correction nobody can audit is a
 correction nobody can check — and merges chain, so a read can end up two substitutions from where

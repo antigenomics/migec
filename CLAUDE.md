@@ -220,8 +220,13 @@ correction is written up in `project/review-algorithms.md`.
   the bucket, so a substitution in the top b/2 positions sends a barcode and its neighbour to
   different buckets and the pair can never be found. Two passes with the key rotated fixes it.
   Until then the table is whole and its size is reported, as checkout does with its counters.
-- Next: M3's remainder (three error-rate estimators, the FDR number, cell calling), then the M2
-  remainder (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
+- **Cell calling works (2026-08-13)**: molecules per cell (never reads), OrdMag with the knee
+  reported beside it and a warning past 3x disagreement. Exactly 500 of 20,500 on a synthetic
+  droplet library. ⚠ The cell key is the TOP `2*cell_length` bits of the packed barcode, not
+  "everything above the UMI" -- those coincide only when cell+UMI fill all 32 bases, and getting it
+  wrong silently shatters cells into fragments that still look like cells.
+- Next: M3's remainder (three error-rate estimators, the FDR number), then the M2 remainder
+  (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point

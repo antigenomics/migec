@@ -21,6 +21,7 @@ def run(
     use_payload: bool = True,
     payload_width: int = 32,
     min_posterior: float = 0.95,
+    expect_cells: int = 3000,
     gzip_level: int = 6,
 ) -> dict:
     """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`."""
@@ -28,7 +29,7 @@ def run(
     out.mkdir(parents=True, exist_ok=True)
     summary = _core.refine(
         str(reads), str(out), sample_id, use_quality, use_payload, payload_width,
-        min_posterior, gzip_level,
+        min_posterior, expect_cells, gzip_level,
     )
     summary["input"] = str(reads)
     summary["min_posterior"] = min_posterior
@@ -65,6 +66,18 @@ def format_report(summary: dict) -> str:
             else " (collision correction declined: the barcode space is saturated)"
         ),
         "",
+    ]
+    if s["cell_length"]:
+        lines += [
+            f"cells       {s['cells_called']:,} called of {s['cells_observed']:,} barcodes seen, "
+            f"at >= {s['cell_threshold']:,} molecules (OrdMag)",
+            f"            {s['molecules_in_called']:,} molecules in called cells "
+            f"({_pct(s['molecules_in_called'], max(s['molecules'], 1))} of all)",
+            f"            the curve breaks at rank {s['knee_rank']:,} "
+            f"({s['knee_molecules']:,} molecules) -- the knee, for comparison",
+            "",
+        ]
+    lines += [
         f"barcode error   {s['estimated_error']:.2e} per base, estimated from the "
         f"distance-1 excess",
         f"clonality       {s['payload_clonality']:.4f} of random barcode pairs carry the same "
@@ -90,6 +103,20 @@ def format_report(summary: dict) -> str:
         lines.append(f"{label:>12}{b['molecules']:>12,}{100 * b['molecules'] / total:>8.1f}%")
 
     warnings = []
+    # OrdMag is a rule, not a measurement, and the knee is what the data says on its own. When
+    # they disagree by more than a factor of three the rule is being applied to a curve it does
+    # not describe -- an over-loaded run, or ambient RNA, or simply the wrong --expect-cells.
+    if s["cell_length"] and s["cells_called"] and s["knee_rank"]:
+        ratio = max(s["cells_called"], s["knee_rank"]) / max(
+            min(s["cells_called"], s["knee_rank"]), 1
+        )
+        if ratio > 3:
+            warnings.append(
+                f"OrdMag calls {s['cells_called']:,} cells but the curve breaks at rank "
+                f"{s['knee_rank']:,}, a factor of {ratio:.1f}. One of them is describing a "
+                f"different library -- check --expect-cells and the rank plot before trusting "
+                f"either"
+            )
     singletons = next((b["molecules"] for b in s["coverage"] if b["min_reads"] == 1), 0)
     # The count ratio is the evidence a deep library has and a shallow one does not. Below ~3
     # reads/UMI most of what correction can do is done by the quality and the payload, and most

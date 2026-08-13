@@ -255,3 +255,107 @@ def test_the_rank_curve_is_log_spaced_and_monotone(tmp_path):
     assert reads == sorted(reads, reverse=True), "barcodes must be ranked by depth"
     assert fractions == sorted(fractions)
     assert fractions[-1] == pytest.approx(1.0, abs=1e-6)
+
+
+def _droplets(path, n_cells, cell_molecules, n_ambient, ambient_molecules, seed=0):
+    """A 10x-shaped library: a few hundred real cells over a swamp of ambient barcodes."""
+    import gzip
+    import random
+
+    rng = random.Random(seed)
+    out, i = [], 0
+    def emit(cb, n):
+        nonlocal i
+        for _ in range(n):
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            pay = "".join(rng.choice("ACGT") for _ in range(60))
+            for _ in range(2):
+                out.append(
+                    f"@r{i} RX:Z:{umi}\tQX:Z:{'I' * 12}\tCB:Z:{cb}\tCY:Z:{'I' * 16}\t"
+                    f"BC:Z:S1\n{pay}\n+\n{'I' * 60}\n"
+                )
+                i += 1
+    real = []
+    for _ in range(n_cells):
+        cb = "".join(rng.choice("ACGT") for _ in range(16))
+        real.append(cb)
+        emit(cb, rng.randint(*cell_molecules))
+    for _ in range(n_ambient):
+        emit("".join(rng.choice("ACGT") for _ in range(16)), rng.randint(*ambient_molecules))
+    with gzip.open(path, "wt") as fh:
+        fh.write("".join(out))
+    return set(real)
+
+
+def test_cells_are_called_off_the_molecule_curve(tmp_path):
+    """500 real cells at 200-600 molecules, 20,000 ambient barcodes at 1-3. OrdMag has to find the
+    500 and nothing else."""
+    reads = tmp_path / "d.fq.gz"
+    real = _droplets(reads, 500, (200, 600), 20_000, (1, 3), seed=0)
+    s = run(reads, tmp_path / "ref", expect_cells=500)
+
+    assert s["cells_observed"] == 20_500
+    assert s["cells_called"] == 500
+    assert s["cell_threshold"] > 3, "the threshold must sit above the ambient barcodes"
+
+    rows = [
+        line.split("\t")
+        for line in (tmp_path / "ref" / "S1.cells.tsv").read_text().splitlines()[1:]
+    ]
+    assert len(rows) == s["cells_observed"]
+    called = {r[0] for r in rows if r[2] == "1"}
+    # Exactly the cells that were put in: no ambient barcode called, no real cell missed.
+    assert called == real
+
+
+def test_the_knee_is_reported_next_to_the_call_not_instead_of_it(tmp_path):
+    """OrdMag makes the call; the knee describes the curve. Both are reported so a disagreement is
+    visible rather than resolved silently."""
+    reads = tmp_path / "d.fq.gz"
+    _droplets(reads, 400, (300, 900), 10_000, (1, 2), seed=1)
+    s = run(reads, tmp_path / "ref", expect_cells=400)
+    assert 0 < s["knee_rank"] <= s["cells_observed"]
+    assert s["knee_molecules"] > 0
+    # On a library with a clean separation the two agree to well within the factor of three the
+    # report warns at.
+    assert max(s["knee_rank"], s["cells_called"]) < 3 * min(s["knee_rank"], s["cells_called"])
+
+
+def test_expect_cells_being_wrong_does_not_move_the_call_much(tmp_path):
+    """OrdMag takes the 99th percentile of the top N, so over-stating N by 400x still lands the
+    index inside the real cells. That robustness is the reason the rule is worth having, and it
+    is worth a test rather than an assumption."""
+    reads = tmp_path / "d.fq.gz"
+    real = _droplets(reads, 500, (200, 600), 20_000, (1, 3), seed=0)
+    tight = run(reads, tmp_path / "tight", expect_cells=500)
+    loose = run(reads, tmp_path / "loose", expect_cells=200_000)
+    assert tight["cells_called"] == len(real)
+    assert loose["cells_called"] == pytest.approx(len(real), rel=0.02)
+
+
+def test_a_disagreement_between_ordmag_and_the_knee_is_reported(tmp_path):
+    """The call is a rule and the knee is what the data says on its own. When they part company
+    the report has to say so rather than presenting the rule's answer alone."""
+    summary = {
+        "reads": 1000, "barcodes": 100, "merged": 0, "merged_reads": 0, "merged_by_payload": 0,
+        "molecules": 100, "molecules_corrected": 100.0, "saturated": False,
+        "estimated_error": 1e-3, "payload_clonality": 0.01, "wall_seconds": 1.0,
+        "peak_rss_bytes": 1 << 20, "table_bytes": 1 << 10, "coverage": [],
+        "cell_length": 16, "cells_observed": 10_000, "cells_called": 5_000,
+        "molecules_in_called": 90, "cell_threshold": 2, "knee_rank": 300,
+        "knee_molecules": 40, "min_posterior": 0.95,
+    }
+    report = format_report(summary)
+    assert "OrdMag calls" in report
+    assert "16.7" in report  # 5000 / 300
+    summary["cells_called"] = 320  # now they agree
+    assert "OrdMag calls" not in format_report(summary)
+
+
+def test_a_bulk_library_has_no_cells_to_call(tmp_path):
+    build(tmp_path, n_molecules=2_000, coverage=5.0, umi_len=12, seed=8)
+    s = run(tmp_path / "co" / "S1.fq.gz", tmp_path / "ref")
+    assert s["cell_length"] == 0
+    assert s["cells_observed"] == 0
+    assert s["cells_called"] == 0
+    assert not (tmp_path / "ref" / "S1.cells.tsv").exists()

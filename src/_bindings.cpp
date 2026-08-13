@@ -469,7 +469,7 @@ PYBIND11_MODULE(_core, m) {
         "refine",
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
-           int gzip_level) {
+           int expect_cells, int gzip_level) {
             RefineRequest req;
             req.input = input;
             req.output_dir = out_dir;
@@ -478,6 +478,7 @@ PYBIND11_MODULE(_core, m) {
             req.use_payload = use_payload;
             req.payload_width = payload_width;
             req.correction.min_posterior = min_posterior;
+            req.expect_cells = expect_cells;
             req.gzip_level = gzip_level;
             RefineStats st;
             {
@@ -499,6 +500,12 @@ PYBIND11_MODULE(_core, m) {
             d["saturated"] = st.saturated;
             d["umi_length"] = st.umi_length;
             d["cell_length"] = st.cell_length;
+            d["cells_observed"] = st.cells_observed;
+            d["cells_called"] = st.cells_called;
+            d["molecules_in_called"] = st.molecules_in_called;
+            d["cell_threshold"] = st.cell_threshold;
+            d["knee_rank"] = st.knee_rank;
+            d["knee_molecules"] = st.knee_molecules;
             d["table_bytes"] = st.table_bytes;
             d["wall_seconds"] = st.wall_seconds;
             d["peak_rss_bytes"] = peak_rss_bytes();
@@ -516,7 +523,7 @@ PYBIND11_MODULE(_core, m) {
         py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
         py::arg("use_quality") = true, py::arg("use_payload") = true,
         py::arg("payload_width") = 32, py::arg("min_posterior") = 0.95,
-        py::arg("gzip_level") = 6,
+        py::arg("expect_cells") = 3000, py::arg("gzip_level") = 6,
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
         "correction can be audited.");

@@ -136,6 +136,13 @@ def refine(
         "less: a wrong merge deletes a molecule and nothing downstream can tell, while a missed "
         "correction only inflates a count.",
     ),
+    expect_cells: int = typer.Option(
+        3000,
+        "--expect-cells",
+        help="Cells expected, for the OrdMag call: the 99th percentile of the top this many "
+        "barcodes, over ten. Ignored without cell barcodes. EmptyDrops-style rescue of low-count "
+        "cells is Cell Ranger's job and is deliberately not reproduced.",
+    ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
     ),
@@ -151,7 +158,7 @@ def refine(
 
     summary = run(
         reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
-        use_payload=not no_payload, min_posterior=min_posterior,
+        use_payload=not no_payload, min_posterior=min_posterior, expect_cells=expect_cells,
     )
     typer.echo(format_report(summary))
 

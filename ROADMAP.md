@@ -189,7 +189,12 @@ model has to use the evidence that survives at one read:
       neighbour for the top b/2 positions, so correction cannot be bucketed naively. The fix is two
       passes with the key rotated, so every pair shares a bucket in at least one. Until then the
       table is held whole and its size is reported
-- [ ] Cell calling (OrdMag + knee), QC tables and plots
+- [x] **Cell calling (OrdMag + knee)** and the QC tables. Molecules per cell, never reads; the
+      knee reported next to the call and a warning when they disagree by more than 3x. On 500 real
+      cells over 20,000 ambient barcodes it calls exactly the 500. `<sample>.cells.tsv`
+- [x] **QC tables**: `<sample>.rank.tsv` (barcode-rank curve + CDF, log-spaced),
+      `<sample>.bins.tsv` (per MIG size: barcodes, reads, fraction merged as error, payload
+      entropy), drawn by `notebooks/refine_diagnostics.py`
 - Gate: estimated ε within 20% of injected **at 1–3 reads/UMI, not only at 7**; ≥95% of no-parent
   3–5-read MIGs retained (already ≥99% at every depth measured)
 

@@ -42,6 +42,13 @@ struct RefineRequest {
     // tell two molecules apart -- two random sequences differ at ~24 of 32 -- and short enough
     // that the table stays small.
     int payload_width = 32;
+    // Cell calling, when the reads carry a cell barcode. OrdMag, which is Cell Ranger's original
+    // rule: take the 99th percentile of the top `expect_cells` barcodes by molecule count and
+    // keep everything within a tenth of it. ⛔ EmptyDrops-style rescue of low-count cells is
+    // deliberately NOT reproduced -- it is Cell Ranger's job, and pretending to match it would
+    // make every comparison against their calls unreachable by construction rather than by
+    // measurement.
+    int expect_cells = 3000;
     // Turn the evidence off, to measure what the count ratio alone would have done.
     bool use_quality = true;
     bool use_payload = true;
@@ -62,6 +69,13 @@ struct RefineStats {
     bool saturated = false;
     int umi_length = 0;
     int cell_length = 0;
+    // Cell calling. All zero on a bulk library, which has no cells to call.
+    uint64_t cells_observed = 0;
+    uint64_t cells_called = 0;
+    uint64_t molecules_in_called = 0;
+    uint32_t cell_threshold = 0;   // molecules a cell needs, from OrdMag
+    uint64_t knee_rank = 0;        // where the curve breaks, reported next to the threshold
+    uint32_t knee_molecules = 0;
     std::string sample_id;
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.
