@@ -7,4 +7,5 @@ dependencies:
   - pip
   - python>=3.10
   - pip:
-      - migec>=2.0.0
+      # Pre-release until 2.0.0 final; conda's pip honours the explicit version.
+      - migec==2.0.0a1

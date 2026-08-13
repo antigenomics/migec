@@ -22,7 +22,7 @@ process MIGEC {
     label 'process_medium'
 
     conda "${moduleDir}/environment.yml"
-    container "migec:2.0.0"
+    container "migec:2.0.0a1"
 
     input:
     tuple val(meta), path(reads)
@@ -43,16 +43,23 @@ process MIGEC {
 
     script:
     def prefix   = task.ext.prefix ?: "${meta.id}"
-    def pattern  = meta.bc_pattern ?: params.migec_bc_pattern
-    def rs       = meta.read_structure ?: params.migec_read_structure
-    def rs2      = meta.read_structure2 ?: params.migec_read_structure2
+    // getOrDefault throughout, never a bare params read. A module must run when its own
+    // nextflow.config was not includeConfig'd -- a bare read emits "Access to undefined
+    // parameter" on every one, which is a WARN normally and a hard failure under strict mode.
+    def pattern  = meta.bc_pattern ?: params.getOrDefault('migec_bc_pattern', null)
+    def rs       = meta.read_structure ?: params.getOrDefault('migec_read_structure', null)
+    def rs2      = meta.read_structure2 ?: params.getOrDefault('migec_read_structure2', null)
     def layout   = rs ? "--read-structure '${rs}'" + (rs2 ? " --read-structure2 '${rs2}'" : '')
                       : "--bc-pattern '${pattern}'"
-    def offset   = meta.max_offset != null ? meta.max_offset : params.migec_max_offset
-    def payload  = meta.payload_mate ?: params.migec_payload_mate
+    def offset   = meta.max_offset != null ? meta.max_offset
+                                           : params.getOrDefault('migec_max_offset', -1)
+    def payload  = meta.payload_mate ?: params.getOrDefault('migec_payload_mate', 1)
+    def cells    = params.getOrDefault('migec_expect_cells', 3000)
+    def rt       = params.getOrDefault('migec_rt_error', 1e-4)
     def r1       = reads instanceof List ? reads[0] : reads
     def r2       = (reads instanceof List && reads.size() > 1) ? reads[1] : ''
-    def wl       = params.migec_cell_whitelist ? "--cell-whitelist ${params.migec_cell_whitelist}" : ''
+    def whitelist = params.getOrDefault('migec_cell_whitelist', null)
+    def wl       = whitelist ? "--cell-whitelist ${whitelist}" : ''
     // `checkout` writes <sample>_R1/_R2 when paired and <sample> when not.
     def stage    = r2 ? "co/${prefix}_R${payload}.fq.gz" : "co/${prefix}.fq.gz"
     """
@@ -61,20 +68,20 @@ process MIGEC {
         --sample ${prefix} \\
         --max-offset ${offset} \\
         --threads ${task.cpus} \\
-        ${params.migec_checkout_args ?: ''} \\
+        ${params.getOrDefault('migec_checkout_args', '')} \\
         -o co/
 
     migec refine ${stage} \\
         --sample ${prefix} \\
-        --expect-cells ${params.migec_expect_cells} \\
+        --expect-cells ${cells} \\
         ${wl} \\
-        ${params.migec_refine_args ?: ''} \\
+        ${params.getOrDefault('migec_refine_args', '')} \\
         -o ref/
 
     migec assemble ref/${prefix}.fq.gz \\
         --sample ${prefix} \\
-        --rt-error ${params.migec_rt_error} \\
-        ${params.migec_assemble_args ?: ''} \\
+        --rt-error ${rt} \\
+        ${params.getOrDefault('migec_assemble_args', '')} \\
         -o asm/
 
     # Flat, so the emit globs above do not have to know the stage layout.

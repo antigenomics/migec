@@ -76,7 +76,11 @@ workflow {
     MIGEC.out.consensus.view { meta, f -> "consensus: ${meta.id} -> ${f.name}" }
 }
 NF
+    # A stub runs no command, so it must not build the module's conda environment to do it --
+    # that is minutes of solver for a test whose whole point is that it touches nothing.
+    printf 'conda.enabled = false\nprocess.conda = null\n' > "$WORK/stub.config"
     ( cd "$WORK" && NXF_ANSI_LOG=false timeout 600 nextflow run main.nf -stub-run \
+        -c "$WORK/stub.config" \
         --r1 "$WORK/r1.fq.gz" \
         --migec_bc_pattern 'NNNNNNNNNNNNcagtggtatcaacgcagagt' \
         --outdir "$WORK/nf_out" -work-dir "$WORK/work" ) \
@@ -90,7 +94,7 @@ echo "== migec"
 if ! command -v migec >/dev/null; then
     # Never a bare `pip install`: a compute node may have no route to PyPI, and a job that stalls
     # for its whole time limit reports nothing at all.
-    timeout 120 python3 -m pip install --quiet --user --timeout 10 --retries 1 'migec>=2.0.0' \
+    timeout 120 python3 -m pip install --quiet --user --timeout 10 --retries 1 --pre 'migec>=2.0.0a1' \
         || echo "pip could not install migec (no route to PyPI, or not yet published)"
 fi
 if ! command -v migec >/dev/null; then
