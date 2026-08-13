@@ -1,0 +1,55 @@
+name: migec_assemble
+description: Collapse each molecule's reads into one consensus sequence.
+keywords:
+  - umi
+  - barcode
+  - consensus
+  - repseq
+  - single-cell
+tools:
+  - migec:
+      description: UMI barcode extraction, correction and consensus assembly.
+      homepage: https://github.com/antigenomics/migec
+      documentation: https://antigenomics.github.io/migec/
+      licence: ['GPL-3.0-or-later']
+input:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - reads:
+        type: file
+        description: A tagged FASTQ from migec/checkout or migec/refine.
+        pattern: '*.{fq,fastq}{,.gz}'
+output:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - consensus:
+        type: file
+        description: One FASTQ record per molecule, barcode in the name and in SAM tags.
+        pattern: '*.consensus.fq.gz'
+    - molecules:
+        type: file
+        description: 'Per molecule: reads, support, length, quality, error, linkage.'
+        pattern: '*.mig.tsv'
+    - qc:
+        type: file
+        description: Groups per MIG size.
+        pattern: 'assemble.coverage.tsv'
+    - report:
+        type: file
+        description: Everything above, machine-readable.
+        pattern: 'assemble.json'
+    - versions:
+        type: file
+        description: Software versions used by this module.
+        pattern: 'versions.yml'
+authors:
+  - '@mikessh'
+# Scales with: one bucket per worker. Output is byte-identical at any thread count.

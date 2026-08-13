@@ -25,7 +25,10 @@ def run(
     cell_whitelist: str | Path = "",
     min_whitelist_posterior: float = 0.975,
     target_fdr: float = 0.05,
-    gzip_level: int = 6,
+    gzip_level: int = _core.GZIP_LEVEL,
+    threads: int = 0,
+    limit_reads: int = 0,
+    limit_umis: int = 0,
 ) -> dict:
     """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`."""
     out = Path(out_dir)
@@ -33,7 +36,7 @@ def run(
     summary = _core.refine(
         str(reads), str(out), sample_id, use_quality, use_payload, payload_width,
         min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior, target_fdr,
-        gzip_level,
+        gzip_level, threads, limit_reads, limit_umis,
     )
     summary["input"] = str(reads)
     summary["min_posterior"] = min_posterior
@@ -110,7 +113,9 @@ def format_report(summary: dict) -> str:
         f"                -- payload agreement is worth about "
         f"{_worth(s['payload_clonality'])} here",
         "",
-        f"{_dur(s['wall_seconds'])}, three passes over the reads",
+        f"{_dur(s['wall_seconds'])} = {_dur(s['table_seconds'])} table + "
+        f"{_dur(s['correct_seconds'])} correction + {_dur(s['rewrite_seconds'])} rewrite, "
+        f"on {s['threads']} threads",
         f"peak RSS {_bytes(s['peak_rss_bytes'])} of which the barcode table "
         f"{_bytes(s['table_bytes'])}",
         "",
@@ -128,6 +133,12 @@ def format_report(summary: dict) -> str:
         lines.append(f"{label:>12}{b['molecules']:>12,}{100 * b['molecules'] / total:>8.1f}%")
 
     warnings = []
+    if s.get("limited"):
+        warnings.append(
+            "the intake was limited (--limit-read / --limit-umi), so every number here describes "
+            "the FIRST reads of the file rather than the library. Nothing measured under a limit "
+            "-- error rate, occupancy, molecule count -- transfers to the whole run"
+        )
     # OrdMag is a rule, not a measurement, and the knee is what the data says on its own. When
     # they disagree by more than a factor of three the rule is being applied to a curve it does
     # not describe -- an over-loaded run, or ambient RNA, or simply the wrong --expect-cells.

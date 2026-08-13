@@ -6,6 +6,45 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## 2.0.0a3 — 2026-08-13
 
+**Every stage threads now, and the first fix was not a thread.** `refine` and `assemble` were the
+pipeline's bottleneck at ~200 k reads/s against checkout's 1.06 M. The measurement said why: zlib
+at its default level 6 spent **1.78 s of refine's 2.14 s run** compressing an intermediate that the
+next stage decompresses immediately. Level 1 costs 21% more bytes and gave 3x on its own. Then the
+parallelism:
+
+| stage | before | after (16 threads) |
+|---|---|---|
+| `checkout` | 1,056,472 | 1,056,472 |
+| `refine` | 222,017 | **1,012,368** |
+| `assemble` | 202,977 | **1,434,573** |
+
+`refine --threads` splits the neighbourhood scan, which is a pure function of the barcode table --
+it reads no union-find state -- so it parallelises exactly, and the merges it finds are applied
+serially afterwards in the original smallest-first order. The result is identical, not merely
+equivalent. `assemble --threads` gives each worker its own bucket; the buckets are independent by
+construction because the partition is on the barcode.
+
+**Never: `-t` still changes nothing but the wall clock, on all three stages.** That is why the
+bucket count is a constant floor of 16 rather than a function of `--threads` -- if `-t` chose how
+finely the input was cut, it would choose the gzip member boundaries too, and two runs would
+produce byte-different files holding identical records. Asserted three ways: in C++ per stage
+(`tests/cpp/test_parallel_stages.cpp`), at the CLI over a full three-stage chain
+(`tests/synthetic/test_thread_invariance.py`), and under the **thread sanitizer**, which reports
+no data race across 104 test cases and 224,116 assertions -- with the instrumentation proven to
+fire on a deliberate race in the same helper.
+
+**`--limit-read N` and `--limit-umi N`** on every stage: stop after N reads, or after N distinct
+barcodes. For getting an answer out of a 400 GB run in a minute. Never: a limited run is not a
+sample, and says so in its own report -- the first N reads of a FASTQ are one corner of one
+flowcell. `subsample` remains the sampler.
+
+**The nextflow integration is rebuilt as three modules and a subworkflow**
+(`integrations/nextflow/`), nf-core layout, with `meta.yml` and a `stub:` for each. One process
+meant one resource label for three stages with different shapes and no resume between them: a
+failed assemble re-ran the whole demultiplex. `refine` now carries `process_high_memory` because
+its memory is set by distinct barcodes and by nothing else, and every stage passes `task.cpus`,
+which is safe precisely because the output does not depend on it.
+
 **The pre-amplification error floor is named, not guessed.** `--rt-error` takes a fidelity class:
 
 ```bash

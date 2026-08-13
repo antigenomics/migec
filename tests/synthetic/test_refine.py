@@ -340,6 +340,8 @@ def test_a_disagreement_between_ordmag_and_the_knee_is_reported(tmp_path):
         "reads": 1000, "barcodes": 100, "merged": 0, "merged_reads": 0, "merged_by_payload": 0,
         "molecules": 100, "molecules_corrected": 100.0, "saturated": False,
         "estimated_error": 1e-3, "payload_clonality": 0.01, "wall_seconds": 1.0,
+        "table_seconds": 0.3, "correct_seconds": 0.4, "rewrite_seconds": 0.3,
+        "threads": 4, "limited": False,
         "peak_rss_bytes": 1 << 20, "table_bytes": 1 << 10, "coverage": [],
         "cell_length": 16, "cells_observed": 10_000, "cells_called": 5_000,
         "molecules_in_called": 90, "cell_threshold": 2, "knee_rank": 300,

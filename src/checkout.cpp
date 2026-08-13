@@ -328,29 +328,6 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
 
 namespace {
 
-// A complete gzip member for `in`. Concatenated members are themselves a valid gzip stream (RFC
-// 1952 s2.2), which is what lets each worker compress its own chunk and the writer merely append
-// the bytes. That matters more than it sounds: zlib runs at ~7 MB/s on random DNA at level 6 and
-// ~137 MB/s at level 1, so compression left on the serial path caps checkout at a fraction of what
-// the matcher can do, however many threads are matching.
-void gzip_member(std::string_view in, std::string& out, int level) {
-    z_stream zs{};
-    // 15 + 16: a 32 kB window with a gzip wrapper rather than a zlib one.
-    if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-        throw MigecError("checkout: deflateInit2 failed");
-    }
-    out.resize(deflateBound(&zs, static_cast<uLong>(in.size())) + 32);
-    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
-    zs.avail_in = static_cast<uInt>(in.size());
-    zs.next_out = reinterpret_cast<Bytef*>(out.data());
-    zs.avail_out = static_cast<uInt>(out.size());
-    const int rc = deflate(&zs, Z_FINISH);
-    const size_t produced = out.size() - zs.avail_out;
-    deflateEnd(&zs);
-    if (rc != Z_STREAM_END) throw MigecError("checkout: deflate failed");
-    out.resize(produced);
-}
-
 // Appends already-compressed bytes. Deliberately not FastqWriter: that one owns the compression,
 // and here the compression has already happened on a worker thread.
 struct BlockFile {
@@ -410,10 +387,15 @@ Chunk::Rec append_record(Chunk& c, const FastqRecord& r) {
     return o;
 }
 
-size_t read_chunk(FastqReader& r1, FastqReader* r2, size_t n, Chunk& c) {
+size_t read_chunk(FastqReader& r1, FastqReader* r2, size_t n, Chunk& c, uint64_t limit,
+                  uint64_t& seen) {
     c.clear();
     FastqRecord a, b;
-    while (c.a.size() < n && r1.next(a)) {
+    // The read limit is applied HERE, at the intake, rather than by stopping the workers: a chunk
+    // is the unit of both parallelism and output order, so cutting inside one would make the last
+    // chunk's length depend on the thread count.
+    while (c.a.size() < n && (!limit || seen < limit) && r1.next(a)) {
+        ++seen;
         if (r2) {
             if (!r2->next(b)) throw MigecError("checkout: R2 ended before R1");
             Chunk::Rec ra = append_record(c, a);
@@ -425,21 +407,6 @@ size_t read_chunk(FastqReader& r1, FastqReader* r2, size_t n, Chunk& c) {
         }
     }
     return c.a.size();
-}
-
-void emit(std::string& dst, std::string_view name, std::string_view comment, std::string_view seq,
-          std::string_view qual) {
-    dst += '@';
-    dst += name;
-    if (!comment.empty()) {
-        dst += ' ';
-        dst += comment;
-    }
-    dst += '\n';
-    dst += seq;
-    dst += "\n+\n";
-    dst += qual;
-    dst += '\n';
 }
 
 struct Worker {
@@ -490,8 +457,8 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
         CheckoutPair r = w.co->process_pair(s1, q1, s2, q2, w.scratch);
         if (!r.ok) {
             if (write_unmatched) {
-                emit(w.un1, n1, m1, s1, q1);
-                if (paired) emit(w.un2, n2, m2, s2, q2);
+                append_fastq(w.un1, n1, m1, s1, q1);
+                if (paired) append_fastq(w.un2, n2, m2, s2, q2);
             }
             continue;
         }
@@ -503,8 +470,8 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
         // When the mates were swapped the names travel with them.
         std::string_view name1 = n1, name2 = n2;
         if (r.normalised && paired) std::swap(name1, name2);
-        emit(w.out1[s], name1, tags, r.seq1, r.qual1);
-        if (paired) emit(w.out2[s], name2, tags, r.seq2, r.qual2);
+        append_fastq(w.out1[s], name1, tags, r.seq1, r.qual1);
+        if (paired) append_fastq(w.out2[s], name2, tags, r.seq2, r.qual2);
         w.umis.emplace_back(static_cast<uint32_t>(s), pack_barcode(r.umi));
     }
 
@@ -588,6 +555,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     std::vector<Chunk> chunks(static_cast<size_t>(nthreads));
     for (Chunk& c : chunks) c.arena.reserve(chunk * 256);
 
+    uint64_t seen = 0;
     FastqReader r1(request.r1);
     std::unique_ptr<FastqReader> r2;
     if (paired) r2 = std::make_unique<FastqReader>(request.r2);
@@ -595,7 +563,9 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     for (;;) {
         size_t filled = 0;
         for (; filled < chunks.size(); ++filled) {
-            if (read_chunk(r1, r2.get(), chunk, chunks[filled]) == 0) break;
+            if (read_chunk(r1, r2.get(), chunk, chunks[filled], request.limit_reads, seen) == 0) {
+                break;
+            }
         }
         if (filled == 0) break;
 
@@ -636,7 +606,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         if (filled < chunks.size()) break;  // hit EOF part-way through the round
     }
 
-    if (r2) {
+    if (r2 && !(request.limit_reads && seen >= request.limit_reads)) {
         FastqRecord leftover;
         if (r2->next(leftover)) throw MigecError("checkout: R1 ended before R2");
     }

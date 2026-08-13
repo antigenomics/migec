@@ -17,9 +17,10 @@ count. `scripts/spikein_ratio.py` computes the published spike-in validation met
 `scripts/compare_calib.py` scores UMI grouping against Calib by adjusted Rand index with splitting
 and merging reported separately.
 
-**Throughput and footprint**: 1.06 M reads/s end to end and 1.68 M matching at 16 threads (2 M
-single-end 129 nt reads, four patterns, `scripts/benchmark_threads.py`), output byte-identical at
-any `-t`; ~22 bytes per distinct UMI against a hash map's ~48.
+**Throughput and footprint**: every stage threads and every stage is byte-identical at any `-t` --
+checkout 1.06 M reads/s end to end (1.68 M matching), refine 1.01 M, assemble 1.43 M, all at 16
+threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
+as well as by comparison at 1..16 threads.
 The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
 
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the

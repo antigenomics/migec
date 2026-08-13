@@ -1,0 +1,51 @@
+name: migec_checkout
+description: Find the barcode in each read, extract sample/cell/UMI, trim, and demultiplex.
+keywords:
+  - umi
+  - barcode
+  - consensus
+  - repseq
+  - single-cell
+tools:
+  - migec:
+      description: UMI barcode extraction, correction and consensus assembly.
+      homepage: https://github.com/antigenomics/migec
+      documentation: https://antigenomics.github.io/migec/
+      licence: ['GPL-3.0-or-later']
+input:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - reads:
+        type: file
+        description: Input FASTQ, single or a pair.
+        pattern: '*.{fq,fastq}{,.gz}'
+output:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - reads:
+        type: file
+        description: Tagged FASTQ per sample, RX/QX/CB/BC in the header.
+        pattern: '*.fq.gz'
+    - qc:
+        type: file
+        description: Coverage, composition, barcode space, quality calibration, trimming.
+        pattern: 'checkout.*.tsv'
+    - report:
+        type: file
+        description: Everything above, machine-readable.
+        pattern: 'checkout.json'
+    - versions:
+        type: file
+        description: Software versions used by this module.
+        pattern: 'versions.yml'
+authors:
+  - '@mikessh'
+# Scales with: reads. Output is byte-identical at any thread count.

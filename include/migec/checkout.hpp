@@ -192,6 +192,9 @@ private:
 // The whole-file driver.
 
 struct CheckoutRequest {
+    // Stop after this many input reads; 0 reads all of them. A smoke test, never a sample: the
+    // first N reads of a FASTQ are one corner of one flowcell. `subsample` is the sampler.
+    uint64_t limit_reads = 0;
     std::string r1;                  // input FASTQ, plain or gzipped
     std::string r2;                  // empty for single-end
     std::string out_prefix;          // "<prefix><sample>_R1.fq.gz", or "<prefix><sample>.fq.gz"

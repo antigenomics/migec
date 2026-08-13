@@ -141,7 +141,14 @@ migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ -t 8
 migec refine out/S1.fq.gz -o ref/                    # correct barcode errors
 migec assemble ref/S1.fq.gz -o cons/                 # one consensus per molecule
 migec subsample out/S1.fq.gz -o small.fq.gz --keep 1 # a fixture that is still a library
+migec plot out/                                      # QC figures from the tables just written
 ```
+
+Every stage takes `-t/--threads` (one per core by default) and `--limit-read N` / `--limit-umi N`,
+which stop the intake after N reads or N distinct barcodes. Limits are for getting an answer out of
+a 400 GB run in a minute. Never a sample: the first N reads of a FASTQ are one corner of one
+flowcell, so a limited run reports that it was limited and nothing measured under one transfers to
+the library. `subsample` is the sampler.
 
 ```
 reads       2,000,000
@@ -433,9 +440,22 @@ barcode, still bounded by the bucket rather than the library.
 
 ### Speed and memory are reported, not assumed
 
-`--threads` defaults to one per core and **the output is byte-identical whatever it is set to** —
-reads are matched in chunks and written back in input order, so `-t` changes the wall clock and
-nothing else.
+`--threads` defaults to one per core on **all three stages**, and **the output is byte-identical
+whatever it is set to** — checkout matches in chunks and writes them back in input order, refine
+scans the barcode neighbourhood in parallel and applies the merges it finds serially, and assemble
+gives each worker its own bucket and concatenates them in bucket order. `-t` changes the wall clock
+and nothing else, which is asserted per stage in C++, at the CLI, and under the thread sanitizer.
+
+| stage | 1 thread | 16 threads | bound by |
+|---|---|---|---|
+| `checkout` | 202,717 | **1,056,472** | reads |
+| `refine` | 605,611 | **1,012,368** | distinct barcodes |
+| `assemble` | 569,379 | **1,434,573** | reads, then the largest bucket |
+
+reads/s on the same 500 k-read sample. Two of those used to be 222,017 and 202,977, and the first
+fix was not a thread: **zlib at its default level 6 was 83% of refine's wall clock**, compressing
+an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes and gave 3x
+before a single thread was added. Measure the stage before parallelising it.
 
 | threads | reads/s | matching reads/s | peak RSS |
 |---|---|---|---|
@@ -501,8 +521,8 @@ distinct molecules. Both are reported; only the collision form feeds any decisio
 [nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands you FASTQ pairs. SLURM is
 the pipeline's business, not the module's: it declares `label` and `task.cpus` and nothing more.
 
-Note: Only `checkout` threads. `refine` and `assemble` are single-threaded by construction, so ask for
-the cores `checkout` can use and no more.
+All three stages thread, and each is byte-identical at any `-t`, so a retry with different cores
+cannot change a result -- which is what makes an escalating `errorStrategy 'retry'` safe here.
 
 ## Documentation
 

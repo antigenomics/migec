@@ -60,6 +60,7 @@ if(MIGEC_TESTS)
     tests/cpp/test_checkout_run.cpp
     tests/cpp/test_consensus.cpp
     tests/cpp/test_whitelist.cpp
+    tests/cpp/test_parallel_stages.cpp
   )
   target_link_libraries(migec_tests PRIVATE migec_core)
   target_include_directories(migec_tests PRIVATE tests/cpp)

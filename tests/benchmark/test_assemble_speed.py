@@ -69,7 +69,7 @@ def test_throughput(corpus):
     assert rate > 20_000, f"assemble throughput collapsed to {rate:,.0f} reads/s"
 
 
-def _peak_rss_in_a_fresh_process(path, out, bucket_bits):
+def _peak_rss_in_a_fresh_process(path, out, bucket_bits, threads=1):
     """peak_rss_bytes() is a process high-water mark, so two runs in one interpreter cannot be
     compared -- the second inherits the first's peak. Each configuration gets its own process."""
     import json
@@ -78,31 +78,61 @@ def _peak_rss_in_a_fresh_process(path, out, bucket_bits):
 
     code = (
         "import json;from migec import _core;"
-        f"s=_core.assemble({str(path)!r},{str(out)!r},'S1',1e-4,9.61,False,1,1,{bucket_bits});"
-        "print(json.dumps({'rss':s['peak_rss_bytes'],'groups':s['groups'],"
-        "'molecules':s['molecules']}))"
+        f"s=_core.assemble({str(path)!r},{str(out)!r},'S1',1e-4,9.61,False,False,1,1,"
+        f"{bucket_bits},{threads});"
+        "print(json.dumps({'rss':s['peak_rss_bytes'],'groups':s['groups'],'reads':s['reads'],"
+        "'molecules':s['molecules'],'buckets':s['buckets']}))"
     )
     return json.loads(subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                                      check=True).stdout)
 
 
-def test_peak_memory_is_the_bucket_budget_not_the_library(corpus, tmp_path):
-    """The claim that justifies the whole partition: nothing scales with the input.
+def _four_times(path, tmp_path):
+    """The same corpus, four times over, so the library grows and the partition does not."""
+    import gzip
+    import shutil
 
-    One bucket holds the library; sixteen hold a sixteenth. If raising the bucket count does not
-    lower peak RSS, the partition is decorative and a real run will be killed by the OOM killer.
+    out = tmp_path / "four.fq.gz"
+    if not out.exists():
+        with gzip.open(out, "wb", compresslevel=1) as dst:
+            for _ in range(4):
+                with gzip.open(path, "rb") as src:
+                    shutil.copyfileobj(src, dst)
+    return out
+
+
+def test_peak_memory_is_the_partition_not_the_library(corpus, tmp_path):
+    """The claim that justifies the whole partition: RSS does not follow the input size.
+
+    Note: what is resident is one bucket per WORKER, not one bucket. Pass 2 used to be serial, so
+    the old form of this test compared bucket counts -- but `bucket_bits=0` has always meant
+    "choose", so with the partition now floored at 16 that comparison was 16 buckets against 16
+    and asserted nothing. Four times the reads at a fixed thread count is the claim, and it is the
+    one a run gets killed for breaking.
     """
     d, path = corpus
-    one = _peak_rss_in_a_fresh_process(path, tmp_path / "mem1", 0)
-    many = _peak_rss_in_a_fresh_process(path, tmp_path / "mem16", 4)
-    print(f"\n   1 bucket:  {one['rss'] / 2**20:6.0f} MB"
-          f"\n  16 buckets: {many['rss'] / 2**20:6.0f} MB "
-          f"({one['rss'] / max(many['rss'], 1):.2f}x less)")
-    assert many["rss"] < one["rss"], "more buckets did not lower peak RSS"
-    # The resident part is the bucket, and it is roughly a sixteenth. The floor is the interpreter
-    # plus the extension, which is why this is not asserted at 16x.
-    assert many["rss"] < 0.75 * one["rss"]
-    # ...and the answer is identical either way.
+    thin = _peak_rss_in_a_fresh_process(path, tmp_path / "thin", 4, threads=1)
+    fat = _peak_rss_in_a_fresh_process(_four_times(path, tmp_path), tmp_path / "fat", 4, threads=1)
+    print(f"\n  {thin['reads']:>9,} reads: {thin['rss'] / 2**20:6.0f} MB"
+          f"\n  {fat['reads']:>9,} reads: {fat['rss'] / 2**20:6.0f} MB "
+          f"({fat['rss'] / max(thin['rss'], 1):.2f}x for 4x the reads)")
+    assert fat["reads"] == 4 * thin["reads"]
+    # 4x the library, nothing like 4x the memory. Loose on purpose: it is here to catch the
+    # library being held, not to police bytes.
+    assert fat["rss"] < 2.0 * thin["rss"]
+
+
+def test_threads_cost_memory_and_the_run_says_how_much(corpus, tmp_path):
+    """One bucket per worker, so RSS rises with -t. It is bounded and it is reported; a user who
+    cannot afford it lowers -t, which is exactly the knob that cannot change the answer."""
+    d, path = corpus
+    one = _peak_rss_in_a_fresh_process(path, tmp_path / "t1", 4, threads=1)
+    many = _peak_rss_in_a_fresh_process(path, tmp_path / "t8", 4, threads=8)
+    print(f"\n  16 buckets, 1 thread: {one['rss'] / 2**20:6.0f} MB"
+          f"\n  16 buckets, 8 threads: {many['rss'] / 2**20:6.0f} MB")
+    assert many["rss"] >= one["rss"]
+    # Bounded: eight workers do not cost eight times one, because the bucket is not all of it.
+    assert many["rss"] < 8 * one["rss"]
     assert (one["groups"], one["molecules"]) == (many["groups"], many["molecules"])
 
 
@@ -179,17 +209,18 @@ def test_shallow_throughput(shallow_corpus):
 def test_shallow_memory_is_still_bounded_by_the_bucket(shallow_corpus, tmp_path):
     """The case that would break first if anything held the library: one distinct barcode per read.
 
-    A hash map keyed by barcode would be ~48 B x N_READS here. The bucket has to be what bounds it.
+    A hash map keyed by barcode would be ~48 B x N_READS here. The partition has to be what bounds
+    it, and a finer partition must not cost more than a coarse one at the same thread count.
     """
     d, path = shallow_corpus
-    one = _peak_rss_in_a_fresh_process(path, tmp_path / "s1", 0)
-    many = _peak_rss_in_a_fresh_process(path, tmp_path / "s16", 4)
-    print(f"\n  shallow  1 bucket:  {one['rss'] / 2**20:6.0f} MB"
-          f"\n  shallow 16 buckets: {many['rss'] / 2**20:6.0f} MB "
-          f"({one['rss'] / max(many['rss'], 1):.2f}x less), {many['groups']:,} groups")
-    assert many["rss"] < one["rss"]
-    assert many["rss"] < 0.75 * one["rss"]
-    assert (one["groups"], one["molecules"]) == (many["groups"], many["molecules"])
+    coarse = _peak_rss_in_a_fresh_process(path, tmp_path / "s1", 4, threads=1)
+    fine = _peak_rss_in_a_fresh_process(path, tmp_path / "s16", 7, threads=1)
+    print(f"\n  shallow  16 buckets, 1 thread: {coarse['rss'] / 2**20:6.0f} MB"
+          f"\n  shallow 128 buckets, 1 thread: {fine['rss'] / 2**20:6.0f} MB "
+          f"({coarse['rss'] / max(fine['rss'], 1):.2f}x), {fine['groups']:,} groups")
+    assert fine["rss"] <= 1.05 * coarse["rss"], "a finer partition cost more memory, not less"
+    assert (coarse["groups"], coarse["molecules"]) == (fine["groups"], fine["molecules"])
+    many = fine
     # Per distinct barcode, at the finest partition. The sorted (key, count) array in checkout is
     # ~22 B; assemble additionally holds the payload of one bucket, so this is looser -- it is here
     # to catch a hash map reappearing, not to police bytes.

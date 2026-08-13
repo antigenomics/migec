@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "migec/fastq.hpp"
 #include "migec/umi_stats.hpp"
 #include "migec/whitelist.hpp"
 
@@ -58,15 +59,25 @@ struct RefineRequest {
     double target_fdr = 0.05;
     std::string cell_whitelist;
     WhitelistParams whitelist;
+    // Stop early: a smoke test, never a sample. See IntakeLimit.
+    IntakeLimit limit;
     // Turn the evidence off, to measure what the count ratio alone would have done.
     bool use_quality = true;
     bool use_payload = true;
-    int gzip_level = 6;
+    // Level 1, not zlib's default 6. Measured on refine's own output: level 6 spent 1.78 s of a
+    // 2.14 s run compressing 500,000 reads -- 83% of the wall clock -- against 0.34 s at level 1
+    // for 21% more bytes. Read payload is close to incompressible (checkout measured 7 MB/s at
+    // level 6 against 137 at level 1 on random DNA), so the extra CPU buys almost nothing, and
+    // this file is an intermediate that the next stage decompresses immediately.
+    int gzip_level = 1;
 };
 
 struct RefineStats {
     uint64_t reads = 0;
     uint64_t reads_without_umi = 0;
+    // True when --limit-read or --limit-umi stopped the intake: every number below then describes
+    // a prefix of the file, not the library.
+    bool limited = false;
     uint64_t barcodes = 0;          // distinct, before correction
     uint64_t merged = 0;            // barcodes folded into a parent
     uint64_t merged_reads = 0;
@@ -98,6 +109,13 @@ struct RefineStats {
     // MIG size histogram after correction, power-of-two bins.
     std::vector<uint64_t> size_histogram;
     double wall_seconds = 0.0;
+    // The three passes, separately, because they scale with different things and only one of them
+    // threads. `table` and `rewrite` stream the reads; `correct` walks the barcode neighbourhood
+    // and is the part `--threads` speeds up. Reporting one number would hide which to fix next.
+    double table_seconds = 0.0;
+    double correct_seconds = 0.0;
+    double rewrite_seconds = 0.0;
+    int threads = 1;
 };
 
 RefineStats refine(const RefineRequest& request);

@@ -4,6 +4,8 @@
 
 # cmake out-of-tree build, and scikit-build-core's build/{wheel_tag}
 build/
+# the thread-sanitizer build; see docs/performance.rst for how to make one
+build-tsan/
 # setup.sh creates this
 .venv/
 # intermediate record files; regenerate with `migec checkout`

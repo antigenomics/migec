@@ -251,6 +251,14 @@ struct CorrectionParams {
     double payload_same_fraction = 0.05;
     // Random barcode pairs sampled to measure that. 0 disables payload evidence.
     int payload_null_samples = 20000;
+    // Threads for the neighbourhood scan; 0 means one per core.
+    //
+    // Never: this must not change a single merge. The scan is a pure function of the barcode table
+    // and the evidence -- it reads no union-find state -- so it parallelises exactly, and the
+    // decisions it produces are APPLIED serially afterwards in the same smallest-first order as
+    // before. Splitting the apply as well would be a different algorithm: merges chain, and which
+    // root a child lands on depends on which merges happened before it.
+    int threads = 0;
 };
 
 // What a barcode's own reads say about it, beyond how many there are. Both fields are optional

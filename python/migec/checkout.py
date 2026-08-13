@@ -24,6 +24,7 @@ def run(
     write_unmatched: bool = False,
     threads: int = 0,
     max_offset: int | None = None,
+    limit_reads: int = 0,
 ) -> dict:
     """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`.
 
@@ -52,6 +53,7 @@ def run(
         write_unmatched,
         threads,
         max_offset,
+        limit_reads,
     )
     summary["input"] = str(reads)
     summary["input2"] = "" if reads2 is None else str(reads2)

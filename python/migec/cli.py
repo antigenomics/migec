@@ -112,6 +112,13 @@ def checkout(
     write_unmatched: bool = typer.Option(
         False, "--write-unmatched", help="Also write reads that matched no pattern."
     ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
 ) -> None:
     """Demultiplex by barcode pattern, extract and trim UMIs, write QC tables."""
     from migec.checkout import format_report, run
@@ -169,6 +176,7 @@ def checkout(
         write_unmatched=write_unmatched,
         threads=threads,
         max_offset=max_offset,
+        limit_reads=limit_read,
     )
     typer.echo(format_report(summary))
     typer.echo(
@@ -279,6 +287,25 @@ def refine(
         "is REPORTED, never applied: a molecule seen three times with no plausible parent is "
         "information, and cutting it discards real sequence.",
     ),
+    threads: int = typer.Option(
+        0, "--threads", "-t",
+        help="Worker threads for the neighbourhood scan and the read rewrite; 0 uses one per "
+        "core. The output is byte-identical whatever this is: the scan is a pure function of the "
+        "barcode table, and the merges it finds are applied serially afterwards.",
+    ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
+    limit_umi: int = typer.Option(
+        0,
+        "--limit-umi",
+        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
+        "these are the barcodes that happen to appear first, not a sample of them.",
+    ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
     ),
@@ -295,7 +322,8 @@ def refine(
     summary = run(
         reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
         use_payload=not no_payload, min_posterior=min_posterior, expect_cells=expect_cells,
-        cell_whitelist=cell_whitelist or "", target_fdr=target_fdr,
+        cell_whitelist=cell_whitelist or "", target_fdr=target_fdr, threads=threads,
+        limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
 
@@ -332,6 +360,25 @@ def assemble(
         "molecule COUNTS (expression, clonotype abundance) rather than error-free sequence. "
         "Incompatible with --contig, whose reads tile the molecule and share no exact sequence.",
     ),
+    threads: int = typer.Option(
+        0, "--threads", "-t",
+        help="Workers for the consensus pass; 0 uses one per core. Buckets are the unit of work "
+        "and there are always at least 16 of them, so the output is byte-identical whatever this "
+        "is -- bucket order is barcode order, and the bucket count does not depend on -t.",
+    ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
+    limit_umi: int = typer.Option(
+        0,
+        "--limit-umi",
+        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
+        "these are the barcodes that happen to appear first, not a sample of them.",
+    ),
     min_reads: int = typer.Option(
         1,
         "--min-reads",
@@ -356,7 +403,7 @@ def assemble(
         )
     summary = run(
         reads, out_dir, sample_id=sample_id, rt_floor=rt_floor, contig=contig, fast=fast,
-        min_reads=min_reads,
+        min_reads=min_reads, threads=threads, limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
 

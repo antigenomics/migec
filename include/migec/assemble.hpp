@@ -22,15 +22,28 @@
 #include <vector>
 
 #include "migec/consensus.hpp"
+#include "migec/fastq.hpp"
 #include "migec/umi_stats.hpp"
 
 namespace migec {
 
-// Resident bytes a bucket is allowed before the partition is split further. 1 GiB holds roughly
-// 4 M 150 nt reads with their qualities and record overhead, which is a bucket that sorts in
-// under a second and leaves room for the rest of a laptop.
+// Resident bytes the consensus pass is allowed IN TOTAL, across every worker. 1 GiB holds roughly
+// 4 M 150 nt reads with their qualities and record overhead.
+//
+// Never: this is a total, not a per-bucket allowance. Pass 2 holds one bucket per WORKER, so a
+// per-bucket budget would silently multiply by the thread count -- 16 GiB on a 16-core machine,
+// for a design whose whole claim is that nothing scales with the library. The partition is sized
+// so that `kBucketConcurrency` buckets fit inside the budget together.
 inline constexpr uint64_t kBucketBudgetBytes = 1ull << 30;
+// Workers the budget is divided by. A CONSTANT, deliberately, and not `--threads`: the bucket
+// count has to be a property of the input alone or `-t` would move the gzip member boundaries and
+// two runs would differ byte-wise while holding identical records. Past this many threads the
+// resident set does grow -- it is one bucket each -- and `peak_rss_bytes` says so on every run.
+inline constexpr int kBucketConcurrency = 16;
 inline constexpr int kMaxBucketBits = 8;  // 256 open temp files is already more than polite
+// ...and at least 16 buckets, always, because pass 2 runs one worker per bucket and a single
+// bucket cannot be shared. Fixed rather than derived from -t: see choose_bucket_bits().
+inline constexpr int kMinBucketBits = 4;
 // Bytes shared across ALL open bucket writers while partitioning. Each writer accumulates a block
 // before compressing it, so a fixed per-writer block size would make pass 1 cost grow with the
 // bucket count -- which is backwards, since more buckets exist precisely to use less memory. The
@@ -57,12 +70,24 @@ struct AssembleRequest {
     std::string output_dir;
     std::string sample_id;   // taken from the BC tag when empty
     ConsensusParams consensus;
-    int gzip_level = 6;
+    // Level 1, not zlib's default 6. Measured on refine's own output: level 6 spent 1.78 s of a
+    // 2.14 s run compressing 500,000 reads -- 83% of the wall clock -- against 0.34 s at level 1
+    // for 21% more bytes. Read payload is close to incompressible (checkout measured 7 MB/s at
+    // level 6 against 137 at level 1 on random DNA), so the extra CPU buys almost nothing, and
+    // this file is an intermediate that the next stage decompresses immediately.
+    int gzip_level = 1;
     // Molecules below this are still assembled and still written -- a molecule seen three times
     // is information. Raise it only with a reason.
     uint32_t min_reads = 1;
-    // 0 means "choose from the input size".
+    // Stop early: a smoke test, never a sample. See IntakeLimit.
+    IntakeLimit limit;
+    // 0 means "choose from the input size", but never fewer than there are threads to run them:
+    // the buckets ARE the unit of parallelism in pass 2.
     int bucket_bits = 0;
+    // Workers for the consensus pass; 0 uses one per core. Never: the output is byte-identical at
+    // any thread count -- buckets are written to their own temporary files and concatenated in
+    // bucket order, and bucket order is key order.
+    int threads = 0;
 };
 
 struct AssembleStats {
@@ -80,6 +105,9 @@ struct AssembleStats {
     // are still counted as reads of their molecule.
     uint64_t groups_capped = 0;
     uint64_t reads_over_cap = 0;
+    // True when --limit-read or --limit-umi stopped the intake, so every number below describes a
+    // prefix of the file rather than the library.
+    bool limited = false;
     int umi_length = 0;
     int cell_length = 0;
     int buckets = 0;
@@ -103,7 +131,10 @@ struct AssembleStats {
     BarcodeSpace space;
     double expected_molecules_per_group = 1.0;
     double wall_seconds = 0.0;
+    // Pass 1 is a serial stream over the reads; pass 2 is the parallel one. Reported separately
+    // because only the second scales, so their ratio is what says whether more cores would help.
     double partition_seconds = 0.0;
+    int threads = 1;
 };
 
 AssembleStats assemble(const AssembleRequest& request);

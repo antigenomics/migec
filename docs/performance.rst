@@ -112,6 +112,85 @@ tabulates into 1.2 kB. It was 90% of runtime before it did.
    ``fwrite`` of already-compressed blocks, and the per-sample statistics. At 16 threads on this
    machine the statistics are the larger of the two walls.
 
+refine and assemble
+-------------------
+
+Both used to be single-threaded, and both were the pipeline's bottleneck at ~200 k reads/s. The
+first fix was not a thread:
+
+.. list-table::
+   :header-rows: 1
+
+   * - stage
+     - 1 thread
+     - 16 threads
+     - bound by
+   * - ``checkout``
+     - 202,717
+     - 1,056,472
+     - reads
+   * - ``refine``
+     - 605,611
+     - 1,012,368
+     - distinct barcodes
+   * - ``assemble``
+     - 569,379
+     - 1,434,573
+     - reads, then the largest bucket
+
+reads/s on the same 500 k-read sample.
+
+**zlib at its default level 6 was 83% of refine's wall clock** -- 1.78 s of a 2.14 s run,
+compressing an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes
+(8.4 MB against 7.0) and gave 3x before a single thread was added. checkout had measured the same
+thing about its own output; the default had simply never been carried across.
+
+**refine** then parallelises the neighbourhood scan, which is a *pure function* of the barcode
+table -- it reads no union-find state -- and applies the merges it finds serially afterwards, in
+the original smallest-first order. The result is identical rather than merely equivalent, because
+merges chain: which root a child lands on depends on what happened before it.
+
+**assemble** gives each worker its own bucket. The buckets are independent by construction, since
+the partition is on the barcode itself, so a worker owns its output files and its counters and
+takes no lock at all. The per-bucket outputs are concatenated in bucket order, and bucket order is
+key order, so the consensus FASTQ comes out sorted by barcode whatever order the buckets finished
+in.
+
+.. warning::
+
+   The bucket count is a fixed floor of 16, deliberately **not** a function of ``--threads``. If
+   ``-t`` chose how finely the input was cut it would choose the gzip member boundaries too, and
+   two runs at different thread counts would produce byte-different files holding identical
+   records. This is what makes ``-t`` free to vary between retries.
+
+Asserted three ways: per stage in C++ (``tests/cpp/test_parallel_stages.cpp``), at the CLI over a
+full three-stage chain (``tests/synthetic/test_thread_invariance.py``), and under the thread
+sanitizer:
+
+.. code-block:: bash
+
+   cmake -S . -B build-tsan -DMIGEC_TESTS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+         -DCMAKE_CXX_FLAGS="-fsanitize=thread -g"
+   cmake --build build-tsan -j && ./build-tsan/migec_tests
+
+104 test cases, 224,116 assertions, no data race reported -- and the instrumentation was proven to
+fire by handing the same helper a deliberately unsynchronised counter.
+
+Stopping early
+--------------
+
+``--limit-read N`` stops the intake after N reads; ``--limit-umi N`` stops it once N distinct
+barcodes have been seen, bringing all of their reads with them. Both exist to get an answer out of
+a 400 GB run in a minute.
+
+.. warning::
+
+   A limit is not a sample. The first N reads of a FASTQ are one corner of one flowcell and the
+   first N barcodes are the ones that sort early, so nothing measured under a limit -- error rate,
+   occupancy, molecule count -- describes the library. Every limited run says so in its own
+   report. :doc:`subsample` is the sampler: it takes whole barcodes by hash, so the MIG size
+   distribution survives.
+
 Memory
 ------
 

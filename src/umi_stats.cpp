@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "migec/parallel.hpp"
 #include "migec/types.hpp"
 
 namespace migec {
@@ -509,8 +510,23 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         return m[a].key < m[b].key;  // total order, so the result is reproducible
     });
 
-    for (auto it = order.rbegin(); it != order.rend(); ++it) {
-        const size_t child_idx = *it;
+    // ------------------------------------------------------------------ scan, in parallel
+    //
+    // Every child's best parent is a pure function of the table and the evidence: the loop below
+    // reads `m`, `evidence`, `size_pmf` and the constants above, and NOTHING it writes is read by
+    // another child. So the scan -- which is all of the cost, 3L binary searches and a payload
+    // comparison per barcode -- parallelises exactly, and the answer is identical at any thread
+    // count. The decisions are applied afterwards, serially, in the original order.
+    struct Decision {
+        size_t parent = static_cast<size_t>(-1);
+        double posterior = 0.0;
+    };
+    std::vector<Decision> decisions(n_entries);
+
+    parallel_for(n_entries, params.threads, [&](size_t k, int) {
+        // Smallest MIG first, as the serial walk did. The order does not matter to the scan --
+        // that is the point -- but keeping it means the two versions can be diffed.
+        const size_t child_idx = order[n_entries - 1 - k];
         const uint64_t child = m[child_idx].key;
         const uint32_t c_child = m[child_idx].count;
         size_t best_parent = static_cast<size_t>(-1);
@@ -607,6 +623,20 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
                 }
             }
         }
+        decisions[child_idx] = {best_parent, best_post};
+    });
+
+    // ------------------------------------------------------------------ apply, serially
+    //
+    // In the original order, because merges CHAIN: a child folds into a parent that has itself
+    // already folded into someone else, and which root it lands on depends on what happened
+    // before it. This part is cheap -- a union-find update per merged barcode -- and making it
+    // parallel would change the answer, not the wall clock.
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        const size_t child_idx = *it;
+        const uint32_t c_child = m[child_idx].count;
+        const size_t best_parent = decisions[child_idx].parent;
+        const double best_post = decisions[child_idx].posterior;
 
         if (best_post >= params.min_posterior && best_parent != static_cast<size_t>(-1)) {
             if (m[best_parent].count <= c_child) ++res.merged_by_payload;

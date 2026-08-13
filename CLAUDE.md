@@ -326,6 +326,26 @@ correction is written up in `project/review-algorithms.md`.
   but the per-sample counters and the memory figure were one sample's. Fixed; the published table
   is re-measured and now comes from `scripts/benchmark_threads.py`, which writes the TSV the
   figure is drawn from.
+- **All three stages thread (2026-08-13, 2.0.0a3).** refine 222k -> 1.01M reads/s, assemble
+  203k -> 1.43M, checkout unchanged at 1.06M. Never: the FIRST fix was not a thread -- zlib level 6
+  was 83% of refine's wall clock compressing an intermediate the next stage immediately
+  decompresses. Level 1 is now the default for every stage's output and gave 3x on its own.
+  Measure before parallelising.
+- **Never: `-t` changes nothing but the wall clock, on every stage.** refine parallelises the
+  neighbourhood SCAN (a pure function of the barcode table -- it reads no union-find state) and
+  applies the merges serially in the original order, so the result is identical, not equivalent.
+  assemble gives each worker a bucket and concatenates in bucket order. Never: the bucket count is a
+  fixed floor of 16 and must NOT depend on `--threads` -- if it did, `-t` would choose the gzip
+  member boundaries and two runs would differ byte-wise while holding identical records.
+- **Note: the race audit is a build, not a claim**: `cmake -S . -B build-tsan -DMIGEC_TESTS=ON
+  -DCMAKE_CXX_FLAGS="-fsanitize=thread -g"`. 104 cases, 224,116 assertions, no race -- and the
+  instrumentation was proven to fire on a deliberate unsynchronised counter in `parallel_for`
+  before the clean run was believed.
+- **`--limit-read` / `--limit-umi` on every stage (2.0.0a3).** Never: a limit is not a sample and the
+  report says so -- the first N reads are one corner of one flowcell. `subsample` is the sampler.
+- **Note: `migec sort` was asked for and measured instead.** assemble's partition pass is 0.26 s of
+  a 0.34 s run at 1.4 M reads/s; a separate sort would add a whole read+write to save part of
+  that. It stays unexposed until a benchmark says otherwise.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
   (`.mig` bucket output from checkout, i7xi5, bit-parallel matcher), then `--rt-error auto`.
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the

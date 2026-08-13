@@ -1,0 +1,12 @@
+name: migec
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  # gnuplot is what `migec plot` draws with. Not a Python dependency and not required by the
+  # pipeline stages -- without it the .gp scripts are still written and the figures are not.
+  - gnuplot
+  - pip
+  - pip:
+      - migec==2.0.0a3

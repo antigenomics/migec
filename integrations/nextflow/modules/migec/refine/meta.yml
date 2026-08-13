@@ -1,0 +1,67 @@
+name: migec_refine
+description: Correct barcode errors, call cells, and rewrite the reads with the corrected barcode.
+keywords:
+  - umi
+  - barcode
+  - consensus
+  - repseq
+  - single-cell
+tools:
+  - migec:
+      description: UMI barcode extraction, correction and consensus assembly.
+      homepage: https://github.com/antigenomics/migec
+      documentation: https://antigenomics.github.io/migec/
+      licence: ['GPL-3.0-or-later']
+input:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - reads:
+        type: file
+        description: A tagged FASTQ from migec/checkout.
+        pattern: '*.{fq,fastq}{,.gz}'
+output:
+    - meta:
+        type: map
+        description: >
+          Groovy Map with the sample id and any per-sample migec keys (bc_pattern, preset,
+          read_structure, payload_mate, expect_cells, rt_error, contig, fast). Per-sample keys
+          win over the params defaults, so one run can mix chemistries.
+    - reads:
+        type: file
+        description: 'Reads with the corrected barcode; the original is kept in OX:Z:.'
+        pattern: '*.fq.gz'
+    - barcodes:
+        type: file
+        description: 'Barcode table: reads, corrected reads, parent.'
+        pattern: '*.barcodes.tsv'
+    - bins:
+        type: file
+        description: Residual error-child rate by MIG size. Reported, never applied.
+        pattern: '*.bins.tsv'
+    - rank:
+        type: file
+        description: Barcode rank curve, for the cell-calling knee.
+        pattern: '*.rank.tsv'
+    - cells:
+        type: file
+        description: Molecules per cell and whether it was called. Droplet data only.
+        pattern: '*.cells.tsv'
+    - qc:
+        type: file
+        description: Coverage after correction.
+        pattern: 'refine.*.tsv'
+    - report:
+        type: file
+        description: Everything above, machine-readable.
+        pattern: 'refine.json'
+    - versions:
+        type: file
+        description: Software versions used by this module.
+        pattern: 'versions.yml'
+authors:
+  - '@mikessh'
+# Scales with: distinct barcodes. Output is byte-identical at any thread count.

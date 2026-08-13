@@ -71,14 +71,17 @@ def run(
     contig: bool = False,
     fast: bool = False,
     min_reads: int = 1,
-    gzip_level: int = 6,
+    gzip_level: int = _core.GZIP_LEVEL,
+    threads: int = 0,
+    limit_reads: int = 0,
+    limit_umis: int = 0,
 ) -> dict:
     """Assemble consensuses from a checkout-tagged FASTQ into `out_dir`."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     summary = _core.assemble(
         str(reads), str(out), sample_id, rt_floor, linkage_threshold, contig, fast, min_reads,
-        gzip_level
+        gzip_level, 0, threads, limit_reads, limit_umis,
     )
     summary["input"] = str(reads)
     summary["rt_floor"] = rt_floor
@@ -124,7 +127,8 @@ def format_report(summary: dict) -> str:
         f"{s['molecules'] / max(s['groups'], 1):.2f} recovered",
         "",
         f"{_dur(s['wall_seconds'])} = {_dur(s['partition_seconds'])} partitioning into "
-        f"{s['buckets']} bucket(s) + {_dur(s['wall_seconds'] - s['partition_seconds'])} consensus",
+        f"{s['buckets']} bucket(s), serial + "
+        f"{_dur(s['wall_seconds'] - s['partition_seconds'])} consensus on {s['threads']} threads",
         f"peak RSS {_bytes(s['peak_rss_bytes'])} -- one bucket is resident at a time",
         "",
         f"mean emitted quality  Q{s['mean_quality']:.1f}  "
@@ -154,6 +158,12 @@ def format_report(summary: dict) -> str:
         lines.append(f"{label:>12}{b['groups']:>12,}{100 * b['groups'] / total:>8.1f}%")
 
     warnings = []
+    if s.get("limited"):
+        warnings.append(
+            "the intake was limited (--limit-read / --limit-umi), so every number here describes "
+            "the FIRST reads of the file rather than the library. Nothing measured under a limit "
+            "-- error rate, occupancy, molecule count -- transfers to the whole run"
+        )
     singletons = next((b["groups"] for b in s["coverage"] if b["min_reads"] == 1), 0)
     if singletons > 0.5 * total:
         warnings.append(
