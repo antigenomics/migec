@@ -169,6 +169,16 @@ def main() -> None:
     print("\nNote: molecule sampling only. Measured against a certified dilution series the real\n"
           "      spread was ~2x this (CV 1.6-2.2x Poisson over 5-80 ng), the balance being library\n"
           "      prep -- so treat the limit above as a floor, not a promise.")
+    # Never: THE THIRD REGIME IS NOT MODELLED HERE AT ALL. Systematic, position-specific bias --
+    # 2-colour chemistry's dark-G being the clearest example -- does not average out with more
+    # molecules, so extra evidence makes the ARTIFACT significant just as it makes a real variant
+    # significant. Measured on a 0%-certified arm at fixed input, going from 3.3x to 10x took a
+    # false call at one hotspot from 0/3 replicates to 3/3 at 0.66% VAF. No molecule count fixes
+    # that; only a per-position background model from known negatives does.
+    print("Never: this models sampling and the random per-molecule floor, NOT systematic\n"
+          "       position-specific artifact. On 2-colour chemistry a dark-G bias produced\n"
+          "       reproducible 0.4-1.4% false calls that got EASIER to call with more molecules.\n"
+          "       Below ~1% on such data, a panel of normals is not optional. See docs/detection.rst.")
 
     print()
     lod = r["lod_pooled"] if a.sites > 1 else r["lod_one_site"]

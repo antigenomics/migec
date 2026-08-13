@@ -18,38 +18,70 @@ molecule, not ``N``. Only more input DNA, or more tracked sites, raises the evid
     python scripts/detection_limit.py --input-ng 50 --sites 30 --rt-error duplex   # MRD
     python scripts/detection_limit.py --from-json asm/assemble.json --sites 5
 
-The two regimes
----------------
+The three regimes
+-----------------
 
-Everything below is one of two situations, and knowing which you are in tells you what to buy:
+Everything below is one of three situations, and knowing which you are in tells you what to buy.
+The third is the one that surprises people, because the usual lever makes it worse.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 22 26 26 26
 
    * -
      - molecule-limited
      - floor-limited
+     - artifact-limited
    * - what binds
      - too few molecules cover the site
-     - the chemistry makes the same error
+     - the chemistry errs at random, per molecule
+     - the chemistry errs *systematically*, at this base
    * - symptom
      - the variant is absent from the library
-     - the variant is indistinguishable from background
+     - the variant is as common as background
+     - a reproducible false call at a fixed position
    * - fix
-     - more input DNA, or track more sites
+     - more input DNA, or more tracked sites
      - a lower floor: proofreading enzyme, or **duplex**
+     - a **per-position background model** from known negatives
    * - what does **not** help
-     - sequencing deeper, a better caller
-     - sequencing deeper, more input DNA, a better caller
+     - deeper sequencing, a better caller
+     - deeper sequencing, more input, a better caller
+     - **more molecules** -- see below
 
-The crossover is at ``VAF = p/3`` -- the frequency at which a true variant molecule is as rare as
-the chemistry's own false ones. At the default RT floor of 1e-4 that is **3.3e-5**, and no amount
-of input DNA reaches below it.
+The molecule/floor crossover is at ``VAF = p/3``, the frequency at which a true variant molecule is
+as rare as the chemistry's own false ones. At the default RT floor of 1e-4 that is **3.3e-5**, and
+no amount of input DNA reaches below it.
 
 Never: **an assay designed past its floor spends money on sequencing that cannot work.** A 50 ng,
 30-site MRD panel has enough molecules for 6.9e-6 -- but on a single-strand protocol the floor sits
 at 3.3e-5, five times higher. The molecules promise something the chemistry cannot deliver.
+
+Never: **more molecules makes an artifact easier to call, not harder.** Measured on the
+0%-certified arm at fixed 20 ng input, varying only sequencing depth:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 26 28 28
+
+   * - depth
+     - molecules per site
+     - artifact called in
+     - VAF reported
+   * - 3.3x
+     - ~8,000
+     - 0 of 3 replicates
+     - --
+   * - 10x
+     - ~12,000
+     - **3 of 3 replicates**
+     - **0.66%**
+
+The bias is present at both depths. What changes is the statistical power to call it: a systematic
+error does not average out with more molecules, so the extra evidence that makes a real variant
+significant makes the artifact significant too. At 20 ng and 10x the 0.125% arm read 0.17%
+(detected in 1 of 3) while the **true negative read 0.66% in 3 of 3** -- the negative outscoring
+the positive. Below the artifact level, the ranking is meaningless without a background model.
 
 ctDNA
 -----
