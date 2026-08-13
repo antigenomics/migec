@@ -128,6 +128,57 @@ Never: quoting the panel *average* would have said 20 ng was sufficient. It is n
 that happens to sit on the weakest amplicon -- and which amplicon a patient's variant sits on is
 not something you get to choose.
 
+What input actually buys: precision, not accuracy
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Running the full chain -- ``assemble`` consensus, ``minimap2 -y``, LoFreq on the inferred panel --
+over the undiluted arm recovers **PIK3CA H1047R** (``3:179234297 A>G``), and the certified 1%
+dilution comes back at **0.92%** across three replicates. Across a 16x range of DNA input the point
+estimate does not move; only its scatter does:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 8 16 14 16 18 16
+
+   * - input
+     - n
+     - mean VAF
+     - SD
+     - CV observed
+     - CV if Poisson
+     - excess
+   * - 5 ng
+     - 8
+     - 3.72%
+     - 0.73 pp
+     - 0.196
+     - 0.119
+     - **1.6x**
+   * - 20 ng
+     - 9
+     - 3.54%
+     - 0.38 pp
+     - 0.108
+     - 0.055
+     - **2.0x**
+   * - 80 ng
+     - 6
+     - 3.60%
+     - 0.27 pp
+     - 0.074
+     - 0.033
+     - **2.2x**
+
+The assay is **unbiased** -- 3.5-3.7% at every input -- and precision improves roughly as
+``1/sqrt(N)``. That is the practical meaning of a molecule count: more DNA does not give you a
+different answer, it gives you a more certain one.
+
+Never: **the observed scatter is consistently about twice the Poisson prediction.** Molecule
+sampling explains only half of it; the rest is library preparation and PCR efficiency. So the limit
+of detection computed by ``scripts/detection_limit.py`` is a *floor*, not a field estimate -- a
+real assay will do worse, and validating against a dilution series is the only way to know by how
+much.
+
 .. code-block:: bash
 
     migec assemble rf/S1.fq.gz -o as/

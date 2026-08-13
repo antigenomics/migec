@@ -160,6 +160,16 @@ def main() -> None:
     print(f"{'false molecules from floor':<26}{r['background_per_site']:>16.2f}"
           f"{r['background_pooled']:>18.2f}")
 
+    # Never: THIS IS A POISSON FLOOR, NOT A FIELD ESTIMATE. Molecule sampling is the only variance
+    # modelled here, and measured against a certified dilution series it explains about half of
+    # what is actually seen: the observed VAF coefficient of variation ran 1.6x, 2.0x and 2.2x the
+    # Poisson prediction at 5, 20 and 80 ng. The rest is library prep and PCR efficiency. The
+    # excess is reported rather than folded in, because a silent fudge factor would be
+    # indistinguishable from a measurement.
+    print("\nNote: molecule sampling only. Measured against a certified dilution series the real\n"
+          "      spread was ~2x this (CV 1.6-2.2x Poisson over 5-80 ng), the balance being library\n"
+          "      prep -- so treat the limit above as a floor, not a promise.")
+
     print()
     lod = r["lod_pooled"] if a.sites > 1 else r["lod_one_site"]
     bg = r["vaf_equals_background"]
