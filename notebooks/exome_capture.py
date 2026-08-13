@@ -171,6 +171,32 @@ def _(mo):
 
         `docs/downstream.rst` has the measured tag-survival table, and `docs/variants.rst` covers
         which variant caller composes with this and which replaces a stage of it.
+
+        ## On a real exome, the mean is meaningless
+
+        An exome spreads its molecules over ~200,000 targets, so **the distribution is everything**.
+        A "100x mean" exome routinely has thousands of targets in the single digits, and a variant
+        in one of those is undetectable however good the caller is. The number to compute is
+        molecules **per target**, and for that you need the capture BED.
+
+        Target definitions do not need a vendor login --
+        [AstraZeneca-NGS/reference_data](https://github.com/AstraZeneca-NGS/reference_data/tree/master/hg38)
+        ships hg38 BEDs for Agilent V2-V6, IDT V1, MedExome, NGv3 and a canonical CDS set:
+
+        ```bash
+        curl -sLO https://raw.githubusercontent.com/AstraZeneca-NGS/reference_data/master/hg38/bed/Exome-IDT_V1.bed
+
+        # Never: those are `chr1`-style. An Ensembl reference is `1`, and intersecting the two
+        # returns ZERO rather than an error -- a silent, clean-looking negative.
+        sed 's/^chr//' Exome-IDT_V1.bed > Exome-IDT_V1.ensembl.bed
+
+        # molecules per target: one consensus record is one molecule, so count distinct MI
+        bedtools multicov -bams S1.bam -bed Exome-IDT_V1.ensembl.bed > per_target.tsv
+        ```
+
+        Then read the **low** quantiles, not the mean. `scripts/detection_limit.py` turns a
+        per-target molecule count into a limit of detection, and `docs/detection.rst` explains
+        which of the two regimes -- molecule-limited or floor-limited -- your assay is in.
         """
     )
     return

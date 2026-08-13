@@ -93,6 +93,41 @@ So for ctDNA: count molecules **per target**, quote the weakest target rather th
 never read a library total as on-target depth. Precisely when input is scarce -- the case that
 matters -- the total is most misleading.
 
+How much plasma DNA do you need?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Combining the measured per-target molecule counts with the arithmetic above answers the question
+people actually ask, for this panel, at 95% detection and three supporting molecules:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 30 26 28
+
+   * - input
+     - molecules at the **weakest** target
+     - limit of detection
+     - detects 0.125%?
+   * - 5 ng
+     - 796
+     - **0.79%**
+     - no -- six times too high
+   * - 20 ng
+     - 3,529
+     - **0.18%**
+     - no -- marginally too high
+   * - 80 ng
+     - ~24,000
+     - **0.026%**
+     - yes, with room to spare
+
+The reference material is certified at 0.125%, 0.25% and 1%, so **only the 80 ng arm can call the
+lowest of those at every target in the panel**. Solving for the threshold: ~5,000 molecules at the
+weakest target are needed for 0.125%, which on this panel means roughly **30 ng of input**.
+
+Never: quoting the panel *average* would have said 20 ng was sufficient. It is not, for a variant
+that happens to sit on the weakest amplicon -- and which amplicon a patient's variant sits on is
+not something you get to choose.
+
 .. code-block:: bash
 
     migec assemble rf/S1.fq.gz -o as/
