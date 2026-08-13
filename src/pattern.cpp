@@ -59,20 +59,27 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
     p.spec_ = std::string(spec);
     p.mask_.reserve(spec.size());
     p.weight_.reserve(spec.size());
-    p.is_umi_.reserve(spec.size());
+    p.capture_.reserve(spec.size());
 
     for (char c : spec) {
         if (c == 'N' || c == 'n') {
             p.mask_.push_back(0);
             p.weight_.push_back(0.0f);
-            p.is_umi_.push_back(1);
+            p.capture_.push_back(1);
             ++p.umi_length_;
+            continue;
+        }
+        if (c == 'X' || c == 'x') {
+            p.mask_.push_back(0);
+            p.weight_.push_back(0.0f);
+            p.capture_.push_back(2);
+            ++p.cell_length_;
             continue;
         }
         if (c == '.') {
             p.mask_.push_back(0);
             p.weight_.push_back(0.0f);
-            p.is_umi_.push_back(0);
+            p.capture_.push_back(0);
             continue;
         }
         const uint8_t m = iupac_mask(c);
@@ -85,7 +92,7 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
         // weight, not a gate: MIGEC treated lowercase as "matches anything", which threw away the
         // evidence entirely.
         p.weight_.push_back(c >= 'a' && c <= 'z' ? 0.5f : 1.0f);
-        p.is_umi_.push_back(0);
+        p.capture_.push_back(0);
         ++p.scored_;
     }
 
@@ -99,6 +106,12 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
     if (p.umi_length_ > kMaxBarcodeLen) {
         throw MigecError("pattern: \"" + std::string(spec) + "\" captures a " +
                          std::to_string(p.umi_length_) + " nt UMI; the packed representation holds " +
+                         std::to_string(kMaxBarcodeLen));
+    }
+    if (p.cell_length_ > kMaxBarcodeLen) {
+        throw MigecError("pattern: \"" + std::string(spec) + "\" captures a " +
+                         std::to_string(p.cell_length_) +
+                         " nt cell barcode; the packed representation holds " +
                          std::to_string(kMaxBarcodeLen));
     }
     return p;
@@ -204,11 +217,20 @@ PatternMatch BarcodePattern::match(std::string_view seq, std::string_view qual,
     out.payload_begin = static_cast<int>(best_off + plen);
     out.umi.reserve(static_cast<size_t>(umi_length_));
     out.umi_qual.reserve(static_cast<size_t>(umi_length_));
+    out.cell.reserve(static_cast<size_t>(cell_length_));
+    out.cell_qual.reserve(static_cast<size_t>(cell_length_));
     for (size_t i = 0; i < plen; ++i) {
-        if (!is_umi_[i]) continue;
-        out.umi.push_back(seq[static_cast<size_t>(best_off) + i]);
-        out.umi_qual.push_back(qual.empty() ? char_from_phred(30)
-                                            : qual[static_cast<size_t>(best_off) + i]);
+        const uint8_t what = capture_[i];
+        if (!what) continue;
+        const char base = seq[static_cast<size_t>(best_off) + i];
+        const char q = qual.empty() ? char_from_phred(30) : qual[static_cast<size_t>(best_off) + i];
+        if (what == 1) {
+            out.umi.push_back(base);
+            out.umi_qual.push_back(q);
+        } else {
+            out.cell.push_back(base);
+            out.cell_qual.push_back(q);
+        }
     }
     return out;
 }

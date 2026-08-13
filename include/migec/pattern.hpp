@@ -11,6 +11,11 @@
 //               expected and should not by itself reject the read.
 //   N or n      a UMI position. Captured, never scored. Non-contiguous runs concatenate, so
 //               NNNNtNNNNtNNNN yields one 12 nt UMI.
+//   X or x      a CELL BARCODE position. Captured into a separate barcode, never scored. This is
+//               the one extension to MIGEC's dialect, and `X` was chosen because it is not a
+//               IUPAC symbol -- so no published MIGEC table can contain one and every existing
+//               table keeps its exact meaning. `C` would have been the 10x convention and is a
+//               base here, which would have silently reinterpreted real barcode tables.
 //   .           a wildcard: neither scored nor captured.
 //
 // Acceptance is a quality-aware log-likelihood ratio, not a mismatch count. For a scored position
@@ -58,6 +63,8 @@ struct PatternMatch {
     int payload_begin = 0;   // first base after the matched pattern -- where trimming leaves you
     std::string umi;
     std::string umi_qual;
+    std::string cell;        // empty unless the pattern has X positions
+    std::string cell_qual;
 };
 
 class BarcodePattern {
@@ -70,6 +77,7 @@ public:
 
     size_t size() const { return mask_.size(); }
     int umi_length() const { return umi_length_; }
+    int cell_length() const { return cell_length_; }
     int scored_positions() const { return scored_; }
     const std::string& spec() const { return spec_; }
 
@@ -83,8 +91,10 @@ private:
     std::string spec_;
     std::vector<uint8_t> mask_;    // IUPAC mask per position, 0 for UMI/wildcard
     std::vector<float> weight_;    // 1.0 upper, 0.5 lower, 0 for unscored
-    std::vector<uint8_t> is_umi_;
+    // 0 = not captured, 1 = UMI, 2 = cell barcode.
+    std::vector<uint8_t> capture_;
     int umi_length_ = 0;
+    int cell_length_ = 0;
     int scored_ = 0;
 };
 

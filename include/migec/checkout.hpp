@@ -61,6 +61,8 @@ struct CheckoutRead {
     int sample = -1;
     std::string umi;
     std::string umi_qual;
+    std::string cell;       // empty unless the pattern captured X positions
+    std::string cell_qual;
     // Views into the input read, after trimming.
     std::string_view seq;
     std::string_view qual;
@@ -79,6 +81,8 @@ struct CheckoutPair {
     int sample = -1;
     std::string umi;
     std::string umi_qual;
+    std::string cell;
+    std::string cell_qual;
     // Views into `scratch`, valid until the next call with the same scratch.
     std::string_view seq1, qual1, seq2, qual2;
     bool normalised = false;  // the mates were swapped, or the single read was rc'd
@@ -110,7 +114,8 @@ public:
     // `minimap2 -y` copy the comment verbatim into the SAM record and it has to be conformant
     // there. `sample` may be empty.
     static std::string header_tags(const std::string& umi, const std::string& umi_qual,
-                                   const std::string& sample);
+                                   const std::string& sample, const std::string& cell = {},
+                                   const std::string& cell_qual = {});
 
 private:
     const PatternSet& patterns_;

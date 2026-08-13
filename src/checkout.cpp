@@ -38,7 +38,8 @@ Checkout::Checkout(const PatternSet& patterns, CheckoutParams params)
 }
 
 std::string Checkout::header_tags(const std::string& umi, const std::string& umi_qual,
-                                  const std::string& sample) {
+                                  const std::string& sample, const std::string& cell,
+                                  const std::string& cell_qual) {
     // RX/QX are the SAM standard tags for a UMI and its qualities (fgbio, Picard and umi_tools all
     // read RX). BC is the sample barcode. Tabs between tags, one space before the first -- that is
     // what makes the comment survive `bwa mem -C` into a valid SAM record.
@@ -50,6 +51,17 @@ std::string Checkout::header_tags(const std::string& umi, const std::string& umi
         if (!umi_qual.empty()) {
             out += "\tQX:Z:";
             out += umi_qual;
+        }
+    }
+    // CB/CY are the SAM standard tags for a cell barcode and its qualities, which is what Cell
+    // Ranger, STARsolo and alevin all write and every downstream tool reads.
+    if (!cell.empty()) {
+        if (!out.empty()) out += "\t";
+        out += "CB:Z:";
+        out += cell;
+        if (!cell_qual.empty()) {
+            out += "\tCY:Z:";
+            out += cell_qual;
         }
     }
     if (!sample.empty()) {
@@ -67,6 +79,8 @@ CheckoutRead Checkout::process(std::string_view seq, std::string_view qual) {
     out.sample = p.sample;
     out.umi = std::move(p.umi);
     out.umi_qual = std::move(p.umi_qual);
+    out.cell = std::move(p.cell);
+    out.cell_qual = std::move(p.cell_qual);
     out.seq = p.seq1;
     out.qual = p.qual1;
     out.score = p.score;
@@ -162,6 +176,8 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     out.sample = a.sample;
     out.umi = m.umi;
     out.umi_qual = m.umi_qual;
+    out.cell = m.cell;
+    out.cell_qual = m.cell_qual;
     out.seq1 = seq.substr(begin, end - begin);
     out.qual1 = qual.empty() ? std::string_view() : qual.substr(begin, end - begin);
     // The mate is passed through whole. Trimming it would need its own tag, and dual-end barcodes
@@ -359,7 +375,8 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
 
         // Rows sharing a sample id share one output file and one UMI counter.
         const size_t s = file_of[static_cast<size_t>(r.sample)];
-        tags = Checkout::header_tags(r.umi, r.umi_qual, ids[static_cast<size_t>(r.sample)]);
+        tags = Checkout::header_tags(r.umi, r.umi_qual, ids[static_cast<size_t>(r.sample)],
+                                     r.cell, r.cell_qual);
         // When the mates were swapped the names travel with them.
         std::string_view name1 = n1, name2 = n2;
         if (r.normalised && paired) std::swap(name1, name2);

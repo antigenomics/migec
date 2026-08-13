@@ -468,6 +468,7 @@ PYBIND11_MODULE(_core, m) {
             d["payload_clonality"] = st.payload_clonality;
             d["saturated"] = st.saturated;
             d["umi_length"] = st.umi_length;
+            d["cell_length"] = st.cell_length;
             d["table_bytes"] = st.table_bytes;
             d["wall_seconds"] = st.wall_seconds;
             d["peak_rss_bytes"] = peak_rss_bytes();

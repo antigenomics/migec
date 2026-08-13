@@ -8,6 +8,13 @@
 // are streamed three times instead. The table is the same allocation checkout already carries, and
 // it is bounded by the number of distinct barcodes rather than by the number of reads.
 //
+// When the reads carry a cell barcode the key is the CONCATENATION of cell and UMI, because a
+// molecule is the whole barcode: the same UMI in two cells is two molecules, and correcting one
+// against the other would merge them. Concatenating also means a 1-substitution neighbour is found
+// whether the substitution landed in the cell barcode or in the UMI, which is the right
+// neighbourhood -- both are real errors. ⚠ It is NOT a substitute for whitelisting a 10x cell
+// barcode against the known list; that is a separate mechanism and is not implemented yet.
+//
 // ⚠ Correction is not bucketable by a plain range partition. A range partition on the top b bits
 // puts a barcode and its 1-substitution neighbours in the same bucket for every position EXCEPT
 // the top b/2, and a neighbour that crosses a bucket boundary can never be found. Doing it in
@@ -54,6 +61,7 @@ struct RefineStats {
     double payload_clonality = 0.0;
     bool saturated = false;
     int umi_length = 0;
+    int cell_length = 0;
     std::string sample_id;
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.
