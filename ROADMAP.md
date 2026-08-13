@@ -246,7 +246,7 @@ model has to use the evidence that survives at one read:
       `RX`/`CB`/`MI` into a valid sorted BAM on 600/600 records; `arda amplicon` reads the
       consensus directly and its AIRR `sequence_id` **is** the molecule id; `salmon` and `kallisto`
       quantify it plainly. STAR unverified — the brew arm64 build reads 0 reads from any FASTQ
-- [x] `plot` — fifteen QC panels drawn with gnuplot from the tables the stages already write, and
+- [x] `plot` — sixteen QC panels drawn with gnuplot from the tables the stages already write, and
       `assets/` holds the pipeline figure (graphviz) and the example panels the README shows
 - [x] **Overrepresented k-mers in `suggest`** — exact counts in a flat 4^8 array, measured against
       the reads' own composition, stitched back into the sequence they came from. Run on a stage's

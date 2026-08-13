@@ -77,7 +77,7 @@ costs time and memory. Never: the cap applies to the reads that are *consensed*,
 that are *counted*. `cD` and the table's `reads` column stay the molecule's true depth, because
 capping a count would flatten the abundance of exactly the most-amplified molecules.
 
-**`migec plot`: fifteen QC panels, drawn with gnuplot from the tables the stages already wrote.**
+**`migec plot`: sixteen QC panels, drawn with gnuplot from the tables the stages already wrote.**
 UMI PWM and information content, barcode quality and its calibration, coverage, trimming, barcode
 space, the `suggest` cycle trace, overrepresented k-mers, the cell rank curve, consensus quality,
 error and layout, and thread scaling. It reads no reads and computes nothing, so a figure can be

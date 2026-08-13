@@ -298,7 +298,7 @@ migec plot out/                       # every panel whose table is in out/
 migec plot cons/ -o figs/ --format pdf
 ```
 
-Fifteen panels — UMI PWM and information content, barcode quality and its calibration, MIG size
+Sixteen panels — UMI PWM and information content, barcode quality and its calibration, MIG size
 coverage, trimming, barcode space, the `suggest` cycle trace, overrepresented k-mers, the cell
 rank curve, consensus quality, error, layout, and thread scaling. Every one is a gnuplot script
 over a TSV a stage already wrote, so a figure can be redrawn from the table next to it long after

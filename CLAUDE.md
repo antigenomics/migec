@@ -300,7 +300,7 @@ correction is written up in `project/review-algorithms.md`.
   moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
   missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
   sourced from the pipeline, not fitted to the data. In `SOURCES.md`.
-- **`migec plot` works (2026-08-13, 2.0.0a3)**: fifteen gnuplot panels over the TSVs the stages
+- **`migec plot` works (2026-08-13, 2.0.0a3)**: sixteen gnuplot panels over the TSVs the stages
   already write, ColorBrewer Dark2, A/C/G/T always the same four colours. Never: it computes nothing
   — a figure that cannot be redrawn from a committed table is a figure that will disagree with the
   report. gnuplot is **not** a Python dependency; without it the `.gp` scripts are still written,
