@@ -180,3 +180,71 @@ def test_exactly_one_of_barcodes_and_bc_pattern(tmp_path):
         r = runner.invoke(app, ["checkout", "reads.fq", "-o", str(tmp_path / "o"), *args])
         assert r.exit_code != 0
         assert "exactly one" in r.output
+
+
+# ------------------------------------------------- fgbio read structures (TSO500, 10x)
+
+
+def test_read_structure_translates_the_platforms(tmp_path):
+    from migec.sheet import from_read_structure
+
+    assert from_read_structure("5M5S+T") == "NNNNN....."          # TSO500
+    assert from_read_structure("16B10M+T") == "X" * 16 + "N" * 10  # 10x 5'
+    assert from_read_structure("8M+T") == "N" * 8
+    assert from_read_structure("5m5s+t") == "NNNNN....."           # case-insensitive
+
+
+def test_read_structure_refuses_what_it_cannot_size(tmp_path):
+    from migec.sheet import from_read_structure
+
+    # An unbounded barcode has no length for the collision arithmetic to use.
+    with pytest.raises(ValueError, match="unbounded"):
+        from_read_structure("5M+M")
+    with pytest.raises(ValueError, match="last segment"):
+        from_read_structure("+T5M")
+    with pytest.raises(ValueError, match="fgbio read structure"):
+        from_read_structure("5Z")
+    with pytest.raises(ValueError, match="captures nothing"):
+        from_read_structure("+T")
+
+
+def test_tso500_read_structure_end_to_end(tmp_path):
+    """TSO500: 5 nt UMI, 5 nt spacer, then template -- on both mates, so the two halves
+    concatenate into one 10 nt molecule identifier."""
+    import gzip
+    import random
+
+    rng = random.Random(0)
+    truth = []
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        for i in range(300):
+            u1 = "".join(rng.choice("ACGT") for _ in range(5))
+            u2 = "".join(rng.choice("ACGT") for _ in range(5))
+            truth.append(u1 + u2)
+            s1 = u1 + "ACGTA" + "".join(rng.choice("ACGT") for _ in range(80))
+            s2 = u2 + "ACGTA" + "".join(rng.choice("ACGT") for _ in range(80))
+            f1.write(f"@r{i}\n{s1}\n+\n{'I' * len(s1)}\n")
+            f2.write(f"@r{i}\n{s2}\n+\n{'I' * len(s2)}\n")
+
+    r = runner.invoke(app, ["checkout", str(tmp_path / "r1.fq.gz"), str(tmp_path / "r2.fq.gz"),
+                            "--read-structure", "5M5S+T", "--read-structure2", "5M5S+T",
+                            "--sample", "TSO", "--max-offset", "0", "-o", str(tmp_path / "out")])
+    assert r.exit_code == 0, r.output
+
+    seen = []
+    with gzip.open(tmp_path / "out" / "TSO_R1.fq.gz", "rt") as fh:
+        for i, line in enumerate(fh):
+            if i % 4 == 0:
+                seen.append(next(f[5:] for f in line.split() if f.startswith("RX:Z:")))
+    assert len(seen) == 300
+    assert all(len(u) == 10 for u in seen), "both mates' UMIs, concatenated"
+    assert set(seen) == set(truth)
+
+
+def test_read_structure_and_bc_pattern_are_exclusive(tmp_path):
+    r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure", "5M5S+T",
+                            "--bc-pattern", "NNNNN", "-o", str(tmp_path / "o")])
+    assert r.exit_code != 0 and "not both" in r.output
+    r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure2", "5M5S+T",
+                            "-o", str(tmp_path / "o")])
+    assert r.exit_code != 0 and "needs --read-structure" in r.output

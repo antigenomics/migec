@@ -12,6 +12,9 @@ modules/local/migec/
 └── environment.yml
 ```
 
+Requires **DSL2**. It is the default from Nextflow 22.x; on an older runtime (Aldan-3 ships
+21.10.6) add `nextflow.enable.dsl = 2` at the top of your entry script.
+
 ```groovy
 include { MIGEC } from '../modules/local/migec/main'
 

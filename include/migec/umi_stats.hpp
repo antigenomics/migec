@@ -16,6 +16,7 @@
 #ifndef MIGEC_UMI_STATS_HPP
 #define MIGEC_UMI_STATS_HPP
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>

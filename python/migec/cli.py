@@ -59,6 +59,19 @@ def checkout(
         "XXXXXXXXXXXXXXXXNNNNNNNNNN with --max-offset 0. Note: umi_tools writes the cell barcode as "
         "`C`, which is cytosine here -- see the error you get if you paste one.",
     ),
+    read_structure: Optional[str] = typer.Option(
+        None,
+        "--read-structure",
+        help="An fgbio/Picard read structure instead of a pattern, which is what TSO500, fgbio "
+        "and samtools all speak. M is a UMI base, B a sample/cell barcode, S skipped, T template: "
+        "TSO500 is 5M5S+T and 10x 5' is 16B10M+T. Positional, so pair it with --max-offset 0.",
+    ),
+    read_structure2: Optional[str] = typer.Option(
+        None,
+        "--read-structure2",
+        help="Read structure for the second mate, when it carries barcode too. TSO500 puts a UMI "
+        "on both mates, and the two halves concatenate into one molecule identifier.",
+    ),
     sample_id: str = typer.Option(
         "sample", "--sample", help="Sample name for --bc-pattern. Ignored with --barcodes."
     ),
@@ -97,10 +110,26 @@ def checkout(
 
     if trim not in ("pattern", "none"):
         raise typer.BadParameter("--trim must be 'pattern' or 'none'")
+    from migec.sheet import from_read_structure
+
+    if read_structure is not None:
+        if bc_pattern is not None:
+            raise typer.BadParameter("give --bc-pattern or --read-structure, not both")
+        try:
+            bc_pattern = from_read_structure(read_structure)
+            slave = from_read_structure(read_structure2) if read_structure2 else None
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    else:
+        slave = None
+        if read_structure2 is not None:
+            raise typer.BadParameter("--read-structure2 needs --read-structure")
     if (barcodes is None) == (bc_pattern is None):
-        raise typer.BadParameter("give exactly one of --barcodes and --bc-pattern")
+        raise typer.BadParameter(
+            "give exactly one of --barcodes, --bc-pattern and --read-structure"
+        )
     if bc_pattern is not None:
-        barcodes = _inline_sheet(bc_pattern, sample_id, out_dir)
+        barcodes = _inline_sheet(bc_pattern, sample_id, out_dir, slave)
     summary = run(
         reads,
         barcodes,
@@ -267,7 +296,9 @@ def subsample(
     typer.echo(format_report(summary))
 
 
-def _inline_sheet(pattern: str, sample_id: str, out_dir: Path) -> Path:
+def _inline_sheet(
+    pattern: str, sample_id: str, out_dir: Path, slave: Optional[str] = None
+) -> Path:
     """Write a one-row barcode table for `--bc-pattern`, after refusing an ambiguous one.
 
     Never: umi_tools spells a cell-barcode position `C`, and `C` is cytosine in this grammar. Pasting
@@ -287,7 +318,8 @@ def _inline_sheet(pattern: str, sample_id: str, out_dir: Path) -> Path:
         )
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "bc_pattern.txt"
-    path.write_text(f"{sample_id}\t{pattern}\n")
+    row = f"{sample_id}\t{pattern}" + (f"\t{slave}" if slave else "")
+    path.write_text(row + "\n")
     return path
 
 

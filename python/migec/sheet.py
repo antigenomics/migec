@@ -101,3 +101,51 @@ def describe(rows: list[SampleRow]) -> str:
             fields.append(f"slave={r.slave}")
         out.append("\t".join(fields))
     return "\n".join(out)
+
+
+# fgbio/Picard read-structure syntax, which is what TSO500, fgbio and samtools all speak.
+_SEGMENT = __import__("re").compile(r"(\d+|\+)([MBTS])")
+
+
+def from_read_structure(structure: str) -> str:
+    """Translate an fgbio read structure into a migec pattern.
+
+    `5M5S+T` is TSO500: five UMI bases, a five-base spacer, then template. `16B10M+T` is 10x.
+    Both are positional, so both need `--max-offset 0`.
+
+        M  molecular barcode   -> N   captured as UMI
+        B  sample barcode      -> X   captured as cell barcode
+        S  skip                -> .   neither scored nor captured
+        T  template            -> the payload; the pattern ends here
+
+    The pattern stops at the first template segment, because everything after it is the read and
+    migec trims to exactly that point. `+` means "the rest of the read" and is only meaningful on
+    the last segment.
+    """
+    text = structure.strip().upper()
+    if not text:
+        raise ValueError("empty read structure")
+    segments = _SEGMENT.findall(text)
+    if not segments or "".join(a + b for a, b in segments) != text:
+        raise ValueError(
+            f"{structure!r} is not an fgbio read structure -- expected runs like 5M5S+T, "
+            f"where M is a UMI base, B a sample/cell barcode, S a skipped base and T template"
+        )
+    out = []
+    for i, (count, kind) in enumerate(segments):
+        if count == "+":
+            if i != len(segments) - 1:
+                raise ValueError(f"{structure!r}: '+' is only valid on the last segment")
+            if kind != "T":
+                raise ValueError(
+                    f"{structure!r}: '+{kind}' captures an unbounded barcode, which has no length "
+                    f"for the collision arithmetic to use. Give it a count."
+                )
+            break
+        if kind == "T":
+            break
+        out.append({"M": "N", "B": "X", "S": "."}[kind] * int(count))
+    pattern = "".join(out)
+    if not pattern:
+        raise ValueError(f"{structure!r} captures nothing before the template")
+    return pattern

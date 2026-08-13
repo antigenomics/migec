@@ -44,6 +44,10 @@ process MIGEC {
     script:
     def prefix   = task.ext.prefix ?: "${meta.id}"
     def pattern  = meta.bc_pattern ?: params.migec_bc_pattern
+    def rs       = meta.read_structure ?: params.migec_read_structure
+    def rs2      = meta.read_structure2 ?: params.migec_read_structure2
+    def layout   = rs ? "--read-structure '${rs}'" + (rs2 ? " --read-structure2 '${rs2}'" : '')
+                      : "--bc-pattern '${pattern}'"
     def offset   = meta.max_offset != null ? meta.max_offset : params.migec_max_offset
     def payload  = meta.payload_mate ?: params.migec_payload_mate
     def r1       = reads instanceof List ? reads[0] : reads
@@ -53,7 +57,7 @@ process MIGEC {
     def stage    = r2 ? "co/${prefix}_R${payload}.fq.gz" : "co/${prefix}.fq.gz"
     """
     migec checkout ${r1} ${r2} \\
-        --bc-pattern '${pattern}' \\
+        ${layout} \\
         --sample ${prefix} \\
         --max-offset ${offset} \\
         --threads ${task.cpus} \\
@@ -92,7 +96,7 @@ process MIGEC {
     touch ${prefix}.json
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        migec: \$(migec info | awk '/^migec  /{print \$2}')
+        migec: \$(migec info 2>/dev/null | awk '/^migec  /{print \$2}' || echo unknown)
     END_VERSIONS
     """
 }

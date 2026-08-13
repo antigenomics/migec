@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include <algorithm>
 #include <random>
 #include <string>
 

@@ -45,6 +45,7 @@ SAM-style tags, so ``bwa-meme``, ``minimap2`` and ``arda`` consume it directly.
    :maxdepth: 2
 
    installation
+   examples
    suggest
    checkout
    refine
