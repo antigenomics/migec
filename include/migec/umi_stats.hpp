@@ -237,7 +237,7 @@ struct CorrectionParams {
     // Posterior above which a child is merged into its parent.
     double min_posterior = 0.95;
     // A child can never be larger than this fraction of its parent, whatever the posterior says.
-    // ⚠ This gate is what makes a singleton-vs-singleton merge impossible, so it is lifted when
+    // Note: This gate is what makes a singleton-vs-singleton merge impossible, so it is lifted when
     // payload evidence is available: two barcodes whose reads agree on the molecule are one
     // molecule whatever their counts are.
     double max_child_fraction = 0.5;

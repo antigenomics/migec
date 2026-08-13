@@ -1,6 +1,6 @@
 """The subsample stage: build a smaller library that is still a library.
 
-⛔ Never a fraction of the reads. At four reads per molecule, ten thousand random reads give ten
+Never: Never a fraction of the reads. At four reads per molecule, ten thousand random reads give ten
 thousand molecules seen once each -- the MIG size distribution is gone and every consensus is a
 single read, so the fixture tests nothing it was built to test.
 """

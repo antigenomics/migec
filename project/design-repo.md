@@ -676,14 +676,14 @@ Every notebook's data cell calls `migec subsample`, and `docs/faq.rst` names `se
 
 ## 9. The four markdown files
 
-Markers used throughout (arda convention): 🚫 = never do this · ⚠️ = subtle caveat · ✅ = verified good. Each rule written as **rule + the incident that produced it**.
+Markers used throughout (arda convention):  = never do this ·  = subtle caveat · Done: = verified good. Each rule written as **rule + the incident that produced it**.
 
 **`CLAUDE.md`** (committed, authoritative)
 1. What this is (one paragraph) + explicit scope fence: *ends at consensus FASTQ; no aligner, no variant calling — that was MAGERI and it is out of scope*.
 2. Layout: `include/migec` / `src` / `python/migec` / `tests` tiers / `docs` / `notebooks`.
 3. Build, test, run: `./setup.sh`, `cmake -DMIGEC_TESTS=ON && ctest`, `pytest tests/unit tests/synthetic`, `RUN_BENCHMARK=1`, docs gate.
 4. Domain conventions: barcode grammar (uppercase seed / lowercase fuzzy / `N` = UMI); master vs slave; consensus header format; the phred/IUPAC acceptance rule.
-5. 🚫 Non-negotiables: never random-subsample reads (§8); never drop a no-parent low-coverage UMI (3–5 reads) — demote its quality instead; never report a consensus quality above the RT/PCR error floor; never reproduce the two v1 bugs (quality indexed from read start instead of match offset; the dangling-else that made low-quality mismatches uncountable).
+5.  Non-negotiables: never random-subsample reads (§8); never drop a no-parent low-coverage UMI (3–5 reads) — demote its quality instead; never report a consensus quality above the RT/PCR error floor; never reproduce the two v1 bugs (quality indexed from read start instead of match offset; the dangling-else that made low-quality mismatches uncountable).
 6. Data policy: MIGEC Experiment 1 raw reads must not leave aldan3 — derived/summary artifacts only.
 7. **Open loops / next steps** (kept current).
 8. Pointers: `ROADMAP.md`, `SOURCES.md`, upstream `seqtree`, `arda`.

@@ -56,7 +56,7 @@ def checkout(
         help="One pattern for one sample, inline, instead of a barcode table -- which is what a "
         "positional chemistry needs and what umi_tools, umitools and mgatk all take. "
         "`N` is a UMI position, `X` a cell barcode position: 10x 5' is "
-        "XXXXXXXXXXXXXXXXNNNNNNNNNN with --max-offset 0. ⚠ umi_tools writes the cell barcode as "
+        "XXXXXXXXXXXXXXXXNNNNNNNNNN with --max-offset 0. Note: umi_tools writes the cell barcode as "
         "`C`, which is cytosine here -- see the error you get if you paste one.",
     ),
     sample_id: str = typer.Option(
@@ -270,7 +270,7 @@ def subsample(
 def _inline_sheet(pattern: str, sample_id: str, out_dir: Path) -> Path:
     """Write a one-row barcode table for `--bc-pattern`, after refusing an ambiguous one.
 
-    ⛔ umi_tools spells a cell-barcode position `C`, and `C` is cytosine in this grammar. Pasting
+    Never: umi_tools spells a cell-barcode position `C`, and `C` is cytosine in this grammar. Pasting
     a umi_tools pattern would compile -- into a pattern demanding a run of literal cytosines,
     which matches nothing and looks like a bad library rather than a bad flag. Refuse it and say
     what to write instead.

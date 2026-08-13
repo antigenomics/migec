@@ -21,7 +21,7 @@ UMI layouts below are the **actual** masks from `mageri-paper/processing/*/[a-z]
 | # | name | accession / URL | chemistry + layout | UMI mask (verbatim) | runs | reads | gz GB | ground truth | licence | why |
 |---|---|---|---|---|---|---|---|---|---|---|
 | D1 | MIGEC spike-in (Shugay 2014 Exp. 2) | PRJNA239303, SRR1200517-20 | AMPLICON, PAIRED, 2×100 | MIGEC `barcodes.txt` grammar, adapter `GTGGTATCAACGCAGAG` in R2 | 4 | 140,113,372 | 19.2 | 3 IGH clonotypes, 99% → 0.05% | public SRA | canonical MIGEC regression; frequency-span truth |
-| D2 | MIGEC Experiment 1 (INTERNAL) | aldan3 `/projects/tcr_bcr_rnaseq/data_migec_exp1/{IGH_P41,TCR_Project25}_R{1,2}.fastq.gz` | MiSeq 2×150, SMART `GTGGTATCAACGCAGAG` | same `_nnn` family | 2 libs | n/a | 1.7 GB | **12 clonotypes** (5 TRA + 5 TRB, 50%→1%; 2 IGH), Suppl. Table 1a | ⛔ **raw reads never leave the cluster** | richest clonotype truth we have |
+| D2 | MIGEC Experiment 1 (INTERNAL) | aldan3 `/projects/tcr_bcr_rnaseq/data_migec_exp1/{IGH_P41,TCR_Project25}_R{1,2}.fastq.gz` | MiSeq 2×150, SMART `GTGGTATCAACGCAGAG` | same `_nnn` family | 2 libs | n/a | 1.7 GB | **12 clonotypes** (5 TRA + 5 TRB, 50%→1%; 2 IGH), Suppl. Table 1a | **Never: raw reads never leave the cluster** | richest clonotype truth we have |
 | D3 | MAGERI HD734 panel | PRJNA297719 / SRP064450 (`p126`, `p127`, `p92`) | HiSeq 2500, AMPLICON PAIRED 2×100 | **primer-embedded**, `meta/primers.txt`: e.g. `NNNNNNNNNNNNNNcataaTGCTTGCTctgatagga` — 14 nt UMI + `master_first` flag per primer | 20 | 423,702,111 | 34.7 | **29 variants with known frequency** in `benchmark_hd734/hd734_variant_metadata.txt` (0.01–0.167), × dilution ratio 1 or 0.1 from `sample_metadata.txt` | public SRA; metadata MIT-ish in repo | the only dataset exercising *primer-pattern* UMI extraction; low-frequency variant truth |
 | D4 | Duplex-seq ABL (Schmitt) | SRR1799908 ∈ PRJNA275267 / SRP054259 | HiSeq 2500, PAIRED 2×101, `library_strategy=OTHER` | `mask1: NNNNNNNNNNNNtgact`, `mask2: agtcaNNNNNNNNNNNN` → **12+12 = 24 nt dual-end UMI** | 1 (of 2) | 6,921,891 | ~3.2 | clonal human DNA; all non-SNP deviations are errors | public SRA | **the** dual-end / duplex-tag test case; MAGERI published output in repo for head-to-head |
 | D5 | HIV pol (Zhou), incl. 8E5 control | SRP052322 / PRJNA272736; `SRR1763767` (patient), **`SRR1763769` (8E5 clonal, residual-error control)** | MiSeq, AMPLICON **SINGLE**, 600 bp merged | `mask1: nNNNNNNNNca` → **8 nt UMI**, single-end | 13 | 24,572,019 | 5.4 | 8E5 = clonal virus ⇒ **direct residual-error-rate truth** | public SRA | primary consensus-accuracy readout; also tests single-end + short 8 nt UMI |
@@ -29,8 +29,8 @@ UMI layouts below are the **actual** masks from `mageri-paper/processing/*/[a-z]
 | D7 | 10x Connect GEX+VDJ, human PBMC | `10xgenomics.com/datasets/integrated-gex-and-vdj-analysis-of-connect-generated-library-from-human-pbm-cs-2-standard-6-0-1`, slug `SC5v2_humanPBMCs_5Kcells_Connect_single_channel` | Next GEM 5' v2, NovaSeq, R1 90 bp, R2 90 bp, i5 10 bp, i7 10 bp; CB 16 nt + UMI 10 nt in R1 | positional: CB `[0,16)`, UMI `[16,26)` | GEX+TCR+BCR | ~5k cells | ~40–60 | Cell Ranger 6.0.1 `filtered_feature_bc_matrix` + `molecule_info.h5` | **CC BY 4.0** | CB/UMI concordance reference |
 | D8 | 10x Connect, mouse PBMC | `.../connect-generated-library-from-mouse-pbm-cs-2-standard-6-0-1` | as D7 | as D7 | GEX+TCR+BCR | — | ~40–60 | as D7 | CC BY 4.0 | species sanity |
 | D9 | 10x Connect, mouse splenocytes | `.../connect-generated-library-from-mouse-splenocytes-2-standard-6-0-1` | as D7, 10,036 cells, 37,513 median reads/cell | as D7 | GEX+TCR+BCR | — | ~40–60 | as D7 | CC BY 4.0 | **cut from v1** |
-| D10 | 10x "melanoma" | `.../integrated-gex-totalseq-c-and-bcr-analysis-of-connect-generated-library-from-7k-melanoma-skin-samples-2-standard` | ⚠ **not the same family** — TotalSeq-C + BCR, not GEX+VDJ 6.0.1 | as D7 + feature-barcode | — | — | — | as D7 | CC BY 4.0 | **cut from v1** (adds a feature-barcode read structure for no extra truth) |
-| D11 | 10x barcode whitelists | `737K-august-2016.txt` (5' v2 / 3' v2, 16 nt), `3M-february-2018.txt.gz` (3' v3) — inside `cellranger-x.y.z/lib/python/cellranger/barcodes/` | — | — | — | — | 0.02 / 0.05 | the inclusion list itself | ⛔ **10x proprietary, no redistribution** | whitelist / missing-barcode feature |
+| D10 | 10x "melanoma" | `.../integrated-gex-totalseq-c-and-bcr-analysis-of-connect-generated-library-from-7k-melanoma-skin-samples-2-standard` | **Note: not the same family** — TotalSeq-C + BCR, not GEX+VDJ 6.0.1 | as D7 + feature-barcode | — | — | — | as D7 | CC BY 4.0 | **cut from v1** (adds a feature-barcode read structure for no extra truth) |
+| D11 | 10x barcode whitelists | `737K-august-2016.txt` (5' v2 / 3' v2, 16 nt), `3M-february-2018.txt.gz` (3' v3) — inside `cellranger-x.y.z/lib/python/cellranger/barcodes/` | — | — | — | — | 0.02 / 0.05 | the inclusion list itself | **Never: 10x proprietary, no redistribution** | whitelist / missing-barcode feature |
 | D12 | Calib simulated benchmark | `github.com/vpc-ccg/calib`, `calib simulate` + `benchmark/` Makefile | configurable: barcode length 4/8/12, read length 75/150/250 | own | generated | 100k–2M molecules | 0 (generated) | **exact read→molecule map**; Calib scores it with `--output-accuracy-results` → **ARI** | MIT | **the only source of true grouping labels**; gives published cd-hit-est / starcode-umi / rainbow / du-novo / UMI-tools numbers for free |
 | D13 | MIGEC synthetic spike-in (ours) | derived from the **public** Suppl. Table 1a junctions of D2 | simulated 2×150 | MIGEC grammar | generated | 2M | 0.15 | 12 clonotypes at known frequencies | ours, CC BY 4.0 | **public stand-in for D2** — the truth *sequences* are published, only the reads are private |
 | D14 | IonTorrent 7mix | Dryad `dryad.103353/6/7/8` via `processing/iontorrent/get_data.sh` | IonTorrent, unpaired, indel-heavy | own | 4 files | — | ~1 | 7-variant mix | Dryad CC0 | **cut from v1** |
@@ -73,10 +73,10 @@ UMI layouts below are the **actual** masks from `mageri-paper/processing/*/[a-z]
 ```
 
 ### What must NOT go there
-- ⛔ **D2 raw reads** (any slice, any subsample) — cluster-only.
-- ⛔ **10x barcode whitelists** — Cell Ranger licence clause 3 forbids redistribution. `whitelists/README.md` carries only: filename, the path inside a Cell Ranger install, `sha256`, line count, and the fallback mirror URL. CI uses a **synthetic 100k-barcode whitelist** generated with a fixed seed, which tests the code path without shipping 10x IP.
-- ⛔ Anything > 200 MB in `ci/` — that tier is fetched on every realworld test run.
-- ⛔ Cell Ranger BAMs (multi-GB); store only the derived `cb_counts.parquet` (barcode, n_reads, n_umis) extracted on the machine that has the BAM.
+- **Never: D2 raw reads** (any slice, any subsample) — cluster-only.
+- **Never: 10x barcode whitelists** — Cell Ranger licence clause 3 forbids redistribution. `whitelists/README.md` carries only: filename, the path inside a Cell Ranger install, `sha256`, line count, and the fallback mirror URL. CI uses a **synthetic 100k-barcode whitelist** generated with a fixed seed, which tests the code path without shipping 10x IP.
+- Never: Anything > 200 MB in `ci/` — that tier is fetched on every realworld test run.
+- Never: Cell Ranger BAMs (multi-GB); store only the derived `cb_counts.parquet` (barcode, n_reads, n_umis) extracted on the machine that has the BAM.
 
 ### Subsampling rule (and a correction to the stated one)
 
@@ -337,7 +337,7 @@ aldan3 track add umi_data_stage /projects/umi_bench/publish
 aldan3 publish @umi_data_stage --repo isalgo/umi_data --type dataset \
     -m "v1.0.0 benchmark result tables"
 ```
-⚠ `aldan3 publish` uploads through the HF API path. Per §6 of CLAUDE.md, prefer the git mirror below for anything going into `~/hf/umi_data`; use `publish` only for the cluster-side note in `isalgo/datasets`.
+Note: `aldan3 publish` uploads through the HF API path. Per §6 of CLAUDE.md, prefer the git mirror below for anything going into `~/hf/umi_data`; use `publish` only for the cluster-side note in `isalgo/datasets`.
 
 ### 7b. HF mirror — create and populate (git only)
 

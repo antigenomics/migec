@@ -38,7 +38,7 @@ struct CheckoutParams {
 
 // What the reported Phred is actually worth, measured against the pattern's own constant bases.
 //
-// ⛔ The nominal `e = 10^(-q/10)` is not the error rate. RTA3 emits about four distinct Q values,
+// Never: The nominal `e = 10^(-q/10)` is not the error rate. RTA3 emits about four distinct Q values,
 // so the mapping is coarse to begin with, and it is wrong by an order of magnitude by cycle and
 // context -- which matters because every likelihood in this pipeline is computed from it.
 //
@@ -49,7 +49,7 @@ struct CheckoutParams {
 // separates two things. The SLOPE calibrates the instrument: 1.0 means the reported Phred is
 // exactly right, and it is what `error(q)` applies.
 //
-// ⛔ The INTERCEPT is NOT a sequencing floor, and using it as one would add a constant to every
+// Never: The INTERCEPT is NOT a sequencing floor, and using it as one would add a constant to every
 // base likelihood in the pipeline. The standard being measured against is a SYNTHESISED oligo,
 // and oligo synthesis carries roughly one defect per 200-500 bases -- so on a real primer the
 // intercept comes out at ~4e-3, which is the primer's own quality and not the instrument's.
@@ -57,7 +57,7 @@ struct CheckoutParams {
 // polymorphic), against an independently measured 0.55% rate of one-base-short barcodes from
 // failed couplings in the same oligo. Same order, same cause. It is reported as a diagnostic of
 // the primer and deliberately left out of `error()`.
-// ⚠ It only works if the "constant" bases really are constant. A pattern position that is 97%
+// Note: It only works if the "constant" bases really are constant. A pattern position that is 97%
 // conserved rather than 100% contributes 3% mismatch at every quality, and the fit reads that as a
 // quality-independent floor. So the counts are kept per POSITION as well, and a position whose
 // mismatch rate is far above its neighbours' is dropped before fitting -- it is polymorphic, or

@@ -210,7 +210,7 @@ its Methods, is twelve bases at each end of the molecule:
 
    migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ --max-offset 0
 
-⛔ **Both halves must match** or the read is unmatched. Accepting the master alone would emit 12 nt
+**Never: Both halves must match** or the read is unmatched. Accepting the master alone would emit 12 nt
 UMIs beside 24 nt ones, and every collision estimate downstream would then be computed over two
 barcode spaces at once.
 

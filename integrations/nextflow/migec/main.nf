@@ -2,7 +2,7 @@
 // One `checkout` -> `refine` -> `assemble` chain per sample; publishes to ${params.outdir}/migec/.
 // See ./README.md for wiring into nf-core/airrflow (or any pipeline that hands you FASTQ pairs).
 //
-// ⛔ THE BARCODE READ IS NOT ALWAYS THE PAYLOAD READ. On 10x the barcode read is 26 nt of cell
+// Never: THE BARCODE READ IS NOT ALWAYS THE PAYLOAD READ. On 10x the barcode read is 26 nt of cell
 // barcode and UMI and nothing else, and the whole cDNA is on the other mate -- so `checkout` is
 // given both, and `refine`/`assemble` then run on the mate that carries sequence. This module
 // picks that mate from `params.migec_payload_mate` rather than assuming R1, because assuming R1

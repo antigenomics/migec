@@ -37,10 +37,10 @@ date as they land.
 | Access | `aldan3 ls`, `aldan3 pull` (see `~/vcs/code/aldan3-client`) |
 | Provenance | experimental, unpublished |
 
-⛔ **Experiment 1 raw reads must not leave the cluster.** Only derived summaries (histograms,
+**Never: Experiment 1 raw reads must not leave the cluster.** Only derived summaries (histograms,
 error-rate tables, consensus statistics) may be published or uploaded to HuggingFace.
 
-⛔ `scratch/spikein/S1_R2_2M.fq` on aldan3 is **corrupt past record 1,742,617**. Do not use it.
+Never: `scratch/spikein/S1_R2_2M.fq` on aldan3 is **corrupt past record 1,742,617**. Do not use it.
 
 ### MAGERI (Shugay et al., PLoS Comput Biol 2017, doi:10.1371/journal.pcbi.1005480, PMID 28475621)
 
@@ -79,7 +79,7 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Layout | 5' v2: **R1 = 16 nt cell barcode + 10 nt UMI, exactly 26 nt and nothing else**; R2 = 90 nt cDNA; I1/I2 index reads present |
 | Pattern | `XXXXXXXXXXXXXXXXNNNNNNNNNN` with `--max-offset 0`. Purely positional — there is no constant sequence to anchor on, which is why the pattern grammar had to allow a scored-nothing pattern at a fixed offset |
 | Measured | 3,155,166 reads, **100% assigned**, 221,024 barcodes at 14.28 reads each, effective UMI length 9.97/10. refine on **R2** (the mate carrying the cDNA): 305,702 molecules, **813 cells** called by OrdMag, clonality 0.0014 |
-| ⚠ | refine and assemble take **R2**, not R1: trimming the pattern leaves R1 empty, so the payload evidence is vacuous there and the reported clonality comes out 1.0 saying so |
+| Note: | refine and assemble take **R2**, not R1: trimming the pattern leaves R1 empty, so the payload evidence is vacuous there and the reported clonality comes out 1.0 saying so |
 | Provenance | experimental (10x public) |
 | Regenerate the fixture | `migec checkout R1 R2 -b bc.txt -o co/ --max-offset 0` then `migec subsample co/PBMC_R2.fq.gz -o sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz --keep 1` |
 
@@ -104,9 +104,9 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Paper | Zhou, Jones, Mieczkowski & Swanstrom, *J Virol* 89(16):8540–8555, 2015, [doi:10.1128/JVI.00522-15](https://doi.org/10.1128/JVI.00522-15) — reports a residual error rate of ~1 in 10,000 |
 | Regenerate | `python scripts/quality_floor.py --reads SRR1763769_2.fastq.gz --out x2/ --window 180` (X2, the quality floor) and `python scripts/permutation_nulls.py --reads SRR1763769_2.fastq.gz --out x3/ --cycles 32 --window 180` (X3, the three permutation nulls) |
 | Identity | **HXB2 2,328-2,595 on the minus strand**, 268 nt, 2 mismatches (0.7% divergence) — covers *pol*: the 3' end of **protease** and the start of **RT**. Placed by `scripts/diagnose.py` against `K03455.1`, fetched from NCBI |
-| ⚠ headers | SRA-normalised to `@SRR1763769.N N/2`, so lane/tile/x/y are **gone**. Optical duplicates and index hopping are unmeasurable on this file — a property of the download, not a clean result |
+| Note: headers | SRA-normalised to `@SRR1763769.N N/2`, so lane/tile/x/y are **gone**. Optical duplicates and index hopping are unmeasurable on this file — a property of the download, not a clean result |
 | Provenance | experimental (ENA); the floor and its interval are derived |
-| ⚠ | ENA's metadata gives every run in the study the same title, so it does **not** identify which runs are controls. This is HIV plasma — a quasispecies — so the estimator restricts to monomorphic positions rather than assuming clonality. The library is also 49.6% occupied on its 9 nt barcode, which `checkout` flags as saturated; the measured floor is an upper bound. |
+| Note: | ENA's metadata gives every run in the study the same title, so it does **not** identify which runs are controls. This is HIV plasma — a quasispecies — so the estimator restricts to monomorphic positions rather than assuming clonality. The library is also 49.6% occupied on its 9 nt barcode, which `checkout` flags as saturated; the measured floor is an upper bound. |
 
 ### ctDNA UMI benchmark — Maruzani et al. 2024 (checked 2026-08-13)
 
@@ -118,7 +118,7 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Their benchmark | 303 COSMIC variants spiked at 0.005–0.075 VAF across 200x/450x/850x; six callers compared (Mutect2, bcftools, LoFreq, FreeBayes vs UMI-aware UMI-VarCal, UMIErrorCorrect) |
 | Provenance | experimental (SRA), human clinical; their spiked truth is derived |
 
-⛔ **Neither accession carries a recoverable UMI, so neither is a migec input.** Established from the
+**Never: Neither accession carries a recoverable UMI, so neither is a migec input.** Established from the
 data, not from the text:
 
 - Both are **aligned BAM submissions** (`NCBI:align:db:alignment_sorted`), so the Illumina headers
@@ -130,7 +130,7 @@ data, not from the text:
 - The paper says so too: the UMIs of the synthetic dataset were **generated in silico**, at 9 nt
   with Phred fixed to 37, assigned by Poisson (λ=1/2) to reads *sharing start and end positions*.
 
-⚠ That assignment rule bakes in the co-terminal assumption **X1 measured as false**
+Note: That assignment rule bakes in the co-terminal assumption **X1 measured as false**
 (`docs/fragmented.rst`: 7.8% of 10x groups overall, 0.3% at ≥6 reads). cfDNA has preferred cut
 sites so it is less wrong for a capture panel than for 3' GEX, but any comparison against their
 numbers inherits it.
@@ -149,14 +149,14 @@ comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
 | `.cluster` format | 9 TSV columns: `cluster_id, node_id, read_id, f_name, f_seq, f_qual, r_name, r_seq, r_qual` (verified against the upstream README, 2026-08-13) |
 | Truth used here | **our** simulator, `tests/synthetic/_sim.py`, which writes `truth_reads.tsv` (`read_id`, `molecule_id`). Calib's own simulator emits no read→molecule map |
 | Compared by | `scripts/compare_calib.py` — adjusted Rand index, plus split and merge fractions separately |
-| Storage | ⛔ do not store simulated reads — record the exact command and seed here instead |
+| Storage | Never: do not store simulated reads — record the exact command and seed here instead |
 | Provenance | derived (simulated) |
 
 ## HuggingFace — `isalgo/umi_data`
 
 A git + git-lfs mirror at `~/hf/umi_data`, written by committing and pushing **in the mirror**,
 one commit per change set. Never through the HTTP API — that writes remotely only, leaves the
-mirror silently stale, and lands one commit per call. ⚠ The repo is **public**.
+mirror silently stale, and lands one commit per call. Note: The repo is **public**.
 
 ```
 umi_data/
@@ -173,5 +173,5 @@ upstream and license), neither of which has been fetched yet.
 `migec subsample`) and `results/` (the derived tables behind every number the docs quote). Written
 through the local git+git-lfs mirror at `~/hf/umi_data`, never the HTTP API.
 
-⛔ Not in this dataset: aldan3 Experiment 1 raw reads, and anything regenerable by a one-line
+Never: Not in this dataset: aldan3 Experiment 1 raw reads, and anything regenerable by a one-line
 command (record the command here instead of storing gigabytes in LFS).

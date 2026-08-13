@@ -1,11 +1,11 @@
 // subsample: take ALL the reads of a fraction of the UMIs.
 //
-// ⛔ Never take a fraction of the READS. Ten thousand random reads of a library sequenced at four
+// Never: Never take a fraction of the READS. Ten thousand random reads of a library sequenced at four
 // reads per molecule gives ten thousand molecules seen once each, which is not a smaller version
 // of the library -- it is a different library, with the MIG size distribution destroyed and every
 // consensus reduced to a single read. Every fixture built that way silently tests nothing.
 //
-// ⛔ Nor the FIRST N distinct UMIs. A UMI with 100 reads appears in the first thousand reads about
+// Never: Nor the FIRST N distinct UMIs. A UMI with 100 reads appears in the first thousand reads about
 // a hundred times more often than a singleton does, so first-appearance order oversamples large
 // MIGs -- again destroying the distribution the fixture exists to show.
 //

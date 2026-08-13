@@ -119,7 +119,7 @@ whole difficulty.
                3,000 are further than one substitution from every entry -- which is what
                measures the off-list prior, 1.59e-05 per barcode
 
-⛔ **The posterior needs a background hypothesis.** Without one the model asserts "the true barcode
+**Never: The posterior needs a background hypothesis.** Without one the model asserts "the true barcode
 is one of these 737,000", so every observed barcode is assigned to *some* entry with posterior 1.0
 — an index-hopped read, an undeclared sample, free-floating ambient sequence, all silently absorbed
 into whichever entry happens to be nearest. With it, "this barcode is not on the list and was read
@@ -170,7 +170,7 @@ child of a surviving neighbour is one the posterior declined to merge:
    the counts say. Measured on the same library, the count-only estimator says 0 and the full one
    says 1,294.
 
-⛔ The MIG size threshold is **reported, never applied**. Every molecule is in the output whatever
+Never: The MIG size threshold is **reported, never applied**. Every molecule is in the output whatever
 it says: a molecule seen three times with no plausible parent is information, and cutting it
 discards real sequence. ``--target-fdr`` sets which size the report points at; filtering on it is
 a downstream decision, taken with the coverage histogram in view.
@@ -197,7 +197,7 @@ The **knee** — the rank furthest from the chord joining the ends of the log-lo
 When they disagree by more than a factor of three the report says so, because one of them is
 describing a library the other is not.
 
-⛔ **EmptyDrops-style rescue of low-count cells is deliberately not reproduced.** It is Cell
+**Never: EmptyDrops-style rescue of low-count cells is deliberately not reproduced.** It is Cell
 Ranger's job, and imitating it would make every comparison against their calls unreachable by
 construction rather than by measurement. The benchmark gate is written against recall of their
 cells, broken down by barcode rank — not a Jaccard we cannot reach.

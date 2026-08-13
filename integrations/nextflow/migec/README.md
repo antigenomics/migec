@@ -72,11 +72,11 @@ process {
 }
 ```
 
-⚠ `checkout` is the only stage that threads; `refine` and `assemble` are single-threaded by
+Note: `checkout` is the only stage that threads; `refine` and `assemble` are single-threaded by
 construction, so a 64-core allocation buys nothing after the first stage. Ask for the cores
 `checkout` can use and no more.
 
-⚠ **On a shared cluster, never run this on the login node.** Submit it.
+**Note: On a shared cluster, never run this on the login node.** Submit it.
 
 ## Without Nextflow
 

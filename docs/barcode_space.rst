@@ -20,7 +20,7 @@ None does. The usable space is set by the *collision* probability per position:
    m_j = \sum_a p_j(a)^2, \qquad S_\text{eff} = \frac{1}{\prod_j m_j},
    \qquad L_\text{eff} = -\sum_j \log_4 m_j
 
-⛔ This is Rényi-2 (collision) entropy, **not** Shannon. A sequence logo draws Shannon; the
+Never: This is Rényi-2 (collision) entropy, **not** Shannon. A sequence logo draws Shannon; the
 probability that two molecules coincide is :math:`\sum_a p_a^2`. Since :math:`H_2 \le H_1`, using
 Shannon overstates the usable space and *understates* collisions — the direction that silently
 merges distinct molecules. Both are reported; only the collision form feeds any decision.
@@ -126,7 +126,7 @@ distance 1. That is a measurement, and it can be checked against two predictions
    \varepsilon_\text{seq} = \left\langle 10^{-Q/10} \right\rangle
    \qquad \varepsilon_\text{pol} = \epsilon_\text{pol} \times n_\text{cycles}
 
-⚠ The first is the mean of the **probabilities**, not :math:`10^{-\bar{Q}/10}`. The function is
+Note: The first is the mean of the **probabilities**, not :math:`10^{-\bar{Q}/10}`. The function is
 convex, so the low-Q tail carries nearly all the error and averaging Q first hides it: half the
 bases at Q40 and half at Q10 is a 5% error rate, not the 0.3% that "mean Q25" suggests.
 

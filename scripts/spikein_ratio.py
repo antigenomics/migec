@@ -75,7 +75,7 @@ def iter_reads(path: str):
 def collect_junctions(path: str, parent: str, flank: int = 12) -> Counter:
     """Count junctions of the same length as `parent`, located by its conserved 3' anchor.
 
-    ⚠ Anchor on the 3' end only. The obvious approach — require both the first and last `flank`
+    Note: Anchor on the 3' end only. The obvious approach — require both the first and last `flank`
     bases of the parent — silently loses exactly what this script exists to measure: EHEB-V1
     differs from EHEB at position 4 and EHEB-V2 at positions 7-8, i.e. *inside* a 5' anchor. Both
     variants then report as zero and the metric looks perfect.

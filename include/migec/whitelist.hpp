@@ -1,7 +1,7 @@
 // Whitelist correction: snap an observed barcode to the list of barcodes that were actually
 // synthesised, when the evidence supports it.
 //
-// ⛔ The posterior needs a BACKGROUND hypothesis, and leaving it out is the failure this file
+// Never: The posterior needs a BACKGROUND hypothesis, and leaving it out is the failure this file
 // exists to prevent. Without it the model says "the true barcode is one of these 737,000", so
 // every observed barcode is assigned to *some* entry with posterior 1.0 -- an index-hopped read,
 // an undeclared sample, free-floating ambient sequence, all of it silently absorbed into whichever
@@ -34,7 +34,7 @@ struct WhitelistParams {
     double default_error = 1e-3;
     // Prior that the true barcode is NOT on the list. Negative means "measure it from the data".
     //
-    // ⚠ This is a prior on THIS barcode, not on the library. The whitelist prior is a share of
+    // Note: This is a prior on THIS barcode, not on the library. The whitelist prior is a share of
     // (1 - background) spread over every entry, so a 737,000-entry list gives each candidate
     // ~1e-6; a background quoted as "1% of the library is off-list" would then be four orders of
     // magnitude larger than any candidate and would win every time. The comparable quantity is

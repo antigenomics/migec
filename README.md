@@ -118,7 +118,7 @@ migec checkout R1.fq.gz R2.fq.gz --bc-pattern XXXXXXXXXXXXXXXXNNNNNNNNNN --max-o
 ```
 
 `X` is a cell-barcode position, `N` a UMI position — the interface `umi_tools`, `umitools` and
-`mgatk` all take. ⚠ `umi_tools` spells a cell barcode `C`, which is **cytosine** here; pasting one
+`mgatk` all take. Note: `umi_tools` spells a cell barcode `C`, which is **cytosine** here; pasting one
 is refused with the translation rather than compiled into a pattern that matches nothing.
 
 `--max-offset 0` is not a convenience. A 10x barcode has no constant sequence anywhere, so a free
@@ -126,7 +126,7 @@ scan cannot place it and correctly refuses; anchored, the placement is the chemi
 does not apply. On `sc5p_v2_hs_PBMC_1k` VDJ-T: **100% of 3,155,166 reads assigned**, 221,024
 barcodes at 14.28 reads each, 813 cells called.
 
-⚠ On such a chemistry `refine` and `assemble` take **R2**: the barcode read is 26 nt and nothing
+Note: On such a chemistry `refine` and `assemble` take **R2**: the barcode read is 26 nt and nothing
 else, so R1 has no payload at all.
 
 ### It corrects the barcodes, with the evidence that survives at one read
@@ -151,7 +151,7 @@ clonality       0.0100 of random barcode pairs carry the same payload anyway
                 -- payload agreement is worth about 100x odds towards the same molecule here
 ```
 
-⚠ At ~1 read per UMI **80% of barcode errors cannot be fixed by anyone** — the parent barcode was
+Note: At ~1 read per UMI **80% of barcode errors cannot be fixed by anyone** — the parent barcode was
 never sequenced. migec corrects a tenth of the rest and destroys no real molecule at any depth
 measured, which is the side to err on: a wrong merge deletes a molecule and nothing downstream can
 tell, while a missed correction only inflates a count. Every corrected read keeps what it was in an
@@ -187,7 +187,7 @@ gap, because 27.3% of 10x groups hold more than one and a single consensus over 
 sequence no read covers. Assembling a cell's full receptor and calling doublets is
 [arda](https://github.com/antigenomics/arda)'s job, not this one.
 
-⚠ Contig assembly needs a barcode that is not saturated: two fragments of two *different* molecules
+Note: Contig assembly needs a barcode that is not saturated: two fragments of two *different* molecules
 sharing a barcode have no sequence in common, which is exactly what two fragments of one look like.
 `assemble` runs the same birthday arithmetic on the barcodes it saw and reports how many molecules
 a group holds on average — above 1, the warning says so. See [docs/assemble.rst](docs/assemble.rst).
@@ -244,7 +244,7 @@ permutation puts at 1.04× — it is the read threshold, since a collided barcod
 molecules' reads and is over-represented among the MIGs big enough to show a split.
 
 The barcode error rate is estimated from the distance-1 excess and reported next to what the
-reported Phred and the polymerase predict. ⚠ The estimator has a working range: it recovers 0.92×
+reported Phred and the polymerase predict. Note: The estimator has a working range: it recovers 0.92×
 of an injected rate at 0.3% occupancy and 0.23× at 50%, always collapsing *downward*, so it is
 flagged unreliable past 5% neighbourhood occupancy rather than quietly believed.
 
@@ -363,7 +363,7 @@ distinct molecules. Both are reported; only the collision form feeds any decisio
 [nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands you FASTQ pairs. SLURM is
 the pipeline's business, not the module's: it declares `label` and `task.cpus` and nothing more.
 
-⚠ Only `checkout` threads. `refine` and `assemble` are single-threaded by construction, so ask for
+Note: Only `checkout` threads. `refine` and `assemble` are single-threaded by construction, so ask for
 the cores `checkout` can use and no more.
 
 ## Documentation

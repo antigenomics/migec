@@ -34,13 +34,13 @@ design that is perfectly well determined. A *free* scan refusing it is correct �
 chance every kilobase.
 
 **What the reported Phred is worth**, measured against the pattern's own constant bases: slope 1.04
-over 46.3 M bases on `SRR1763769`. ⛔ The fit's intercept (3.9e-3) is the **synthesised primer's**
+over 46.3 M bases on `SRR1763769`. Never: The fit's intercept (3.9e-3) is the **synthesised primer's**
 defect rate, not a sequencing floor — it is even across all 23 anchor positions with none
 polymorphic, and agrees with the independently measured 0.55% one-base-short rate. Reported, never
 applied.
 
 **The MIG-size FDR threshold**, measured rather than derived, and reported rather than applied.
-⚠ A count-ratio criterion reports zero residual at 1–3 reads/UMI, which is where it is worst;
+Note: A count-ratio criterion reports zero residual at 1–3 reads/UMI, which is where it is worst;
 payload agreement is what still works there. 5.25% of 1-read molecules at 1.23 reads/barcode
 against 0% at 4.62.
 
@@ -61,7 +61,7 @@ It holds the **barcode table**, never the reads — `(key, count)` plus the per-
 and a 32-base payload draft — and streams the reads three times instead. 2.2 MB of table for
 110,349 reads.
 
-⚠ **Correction is not bucketable by a plain range partition.** The top *b* bits of the key decide
+**Note: Correction is not bucketable by a plain range partition.** The top *b* bits of the key decide
 the bucket, so a substitution in the top *b*/2 positions sends a barcode and its neighbour to
 different buckets and the pair can never be found. Two passes with the key rotated fixes it; until
 then the table is held whole and its size is reported, exactly as `checkout` does with its counters.
@@ -105,7 +105,7 @@ nothing to merge into and correctly stays put:
 | 7.12 | 1.000 | 0.979 | 0.997 | 0.999 |
 | 13.30 | 1.000 | 0.983 | 0.999 | 1.000 |
 
-⚠ At ~1 read/UMI **80% of barcode errors are unfixable in principle**. Of the rest migec fixes 11%
+Note: At ~1 read/UMI **80% of barcode errors are unfixable in principle**. Of the rest migec fixes 11%
 and destroys no real molecule at any depth — which is the side to err on, because a wrong merge
 deletes a molecule and nothing downstream can tell, while a missed correction only inflates a count.
 
@@ -121,7 +121,7 @@ on disk.
 is sorted in RAM at a time. 531,365 reads/s; 121 MB at 16 buckets against 203 MB at one, asserted
 in `tests/benchmark/test_assemble_speed.py` — each configuration measured in its own process,
 because `peak_rss_bytes` is a process high-water mark and two runs in one interpreter cannot be
-compared. ⚠ The writer buffer budget is split *across* buckets rather than being per-bucket: a
+compared. Note: The writer buffer budget is split *across* buckets rather than being per-bucket: a
 fixed per-writer block made cutting the input finer cost *more* memory (238 MB at 16 buckets
 against 213 at one), which is backwards.
 
@@ -131,7 +131,7 @@ failure modes are independent and the emitted quality carries both. Default 1e-4
 nothing above ~Q38 is emitted.
 
 **Splitting a group uses X3's measured threshold**, 8.68, two-sided and Bonferroni'd within the
-group. ⚠ It implies a minimum group size: the strongest evidence a pair of columns can carry is
+group. Note: It implies a minimum group size: the strongest evidence a pair of columns can carry is
 `log10 C(n, n/2)`, so a 50/50 split needs about 34 reads before it can clear 8.68 at all. Below
 that the data cannot separate a subclone from two bad reads at a 1% false-positive rate.
 
@@ -141,7 +141,7 @@ exact seed matching, cut into overlap components by a union-find that carries ea
 and one consensus is emitted per component — never bridged across a gap, because 27.3% of groups
 hold more than one and a single consensus over those asserts sequence no read covers. This is one
 molecule's fragments and nothing more: full-length receptor assembly, doublet calling and
-contaminating-chain filtering are arda's job. ⚠ It also needs a barcode that is not saturated, so
+contaminating-chain filtering are arda's job. Note: It also needs a barcode that is not saturated, so
 `assemble` re-runs the birthday arithmetic on the barcodes it saw and reports
 `expected_molecules_per_group`.
 
@@ -162,7 +162,7 @@ The cause is measurable: **0.55% of reads carry a barcode one base short**, a co
 did not fire, and a frameshift is exactly a nearest-neighbour correlation, largest next to the
 anchor. `Π_j Σ_a p_j(a)²` stays; the 1.86× collision excess is the read threshold.
 
-⚠ The first version of this null reported 1.04× and **all of it was artefact**. Two defects, both
+Note: The first version of this null reported 1.04× and **all of it was artefact**. Two defects, both
 now guarded: an `N` counted as a fifth base let `m_j` fall to 0.2466 — below the mathematical floor
 of 1/4 — and printed an effective length of 9.01 nt for a 9 nt barcode; and the plug-in `Σ p̂²` is
 biased up by `(1 − Σp²)/n`, a bias that *grows* as the distribution spreads and so reads as
@@ -184,7 +184,7 @@ margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p
 nominal `p < 0.01` the derivation gives calls 30.62% of MIGs against 1.60% — a 19× over-call, every
 one of which would have become a spurious extra molecule.
 
-⚠ **A tail quantile is not a constant until its Monte Carlo error is smaller than the digits
+Note: A tail quantile is not a constant until its Monte Carlo error is smaller than the digits
 quoted.** This read 9.91, then 9.61, then 11.66 on reruns of ~8,000 randomisations. At 82,800 it is
 **8.68, bootstrap 95% CI [8.42, 9.14]**, and the interval is what the docs quote.
 
@@ -209,7 +209,7 @@ one base near 100%. `suggest` segments the per-cycle composition on that and pri
 pattern. On `SRR1763769`, with nothing supplied but the FASTQ, it recovered a 9 nt Primer ID
 followed by `CAGTTTAACTTTTGGGCCAT`, and checking that pattern out assigned 95.0% of reads.
 
-⚠ The pattern stops at the last *constant* run. Composition alone cannot tell a UMI from diverse
+Note: The pattern stops at the last *constant* run. Composition alone cannot tell a UMI from diverse
 payload — both are four flat lines at 25% — and what separates them is that a barcode is anchored
 and payload is not. A uniform run with nothing constant after it is reported in the note and left
 out, because claiming it would produce a pattern that matches everywhere.
@@ -228,7 +228,7 @@ the number that matters — their consensus is a mixture of templates and over-s
 it. `checkout` warns past 5%.
 
 **Error budget.** The distance-1 estimate is now printed next to what predicts it: `⟨10^(−Q/10)⟩`
-over the barcode bases plus `ε_pol × cycles`. ⚠ The Phred term is the mean of the *probabilities*,
+over the barcode bases plus `ε_pol × cycles`. Note: The Phred term is the mean of the *probabilities*,
 not `10^(−mean Q/10)` — the function is convex, so half at Q40 and half at Q10 is 5%, not the 0.3%
 "mean Q25" suggests.
 
@@ -238,12 +238,12 @@ derived in `docs/barcode_space.rst`, drawn in `notebooks/barcode_space.py`, test
 
 ### Two errors the checks found
 
-⛔ **The UMI error estimator was 3× low, everywhere.** Its expected-children term used ε where it
+**Never: The UMI error estimator was 3× low, everywhere.** Its expected-children term used ε where it
 had to use ε/3: a sequencing miscall has to land on one specific alternative base out of three, and
 using ε makes the expectation 3× too large and the solved rate 3× too small. Against an injected
 3·10⁻³ it returned 0.31× at every occupancy from 0.3% up. It now returns 0.92×.
 
-⛔ **...and it fails downward as the barcode space fills.** The estimator subtracts the coincidence
+**Never: ...and it fails downward as the barcode space fills.** The estimator subtracts the coincidence
 expectation from the observed distance-1 pair count; once most of a barcode's 3L neighbours are
 themselves real barcodes, that is a small difference of two large numbers. Measured against the
 same injected rate: 0.92× at 0.3% occupancy, 0.65× at 16%, 0.23× at 50%, 0.001× at 93%. The
@@ -260,7 +260,7 @@ probability, so more collisions than predicted is what a real synthesiser should
 
 A read of the checkout path start to finish, each finding reproduced before it was fixed.
 
-⛔ **Two barcode rows declaring the same sample destroyed the output.** A MIGEC barcode table
+**Never: Two barcode rows declaring the same sample destroyed the output.** A MIGEC barcode table
 writes a sample sequenced with more than one tag as several rows sharing the id — which
 `sheet.py` documents — and checkout opened one file per *row*, so both rows `fopen`ed the same
 path and interleaved two `FILE*` into it. The result was not a truncated FASTQ but a file that is
@@ -268,20 +268,20 @@ not a gzip stream at all, while the summary reported a clean run. Rows are now g
 output file, one UMI counter, one summary row, and rows disagreeing about the UMI length are an
 error rather than a counter holding two lengths at once.
 
-⛔ **An exception on a worker thread aborted the process.** It propagated out of the thread
+**Never: An exception on a worker thread aborted the process.** It propagated out of the thread
 function and hit `std::terminate` — SIGABRT with no message and no output flushed. Reachable
 today: `BarcodePattern::compile` accepted a pattern capturing more than 32 UMI bases, which threw
 from `pack_barcode` on a worker. Workers now capture and the driver rethrows on the caller's
 thread, and the length is checked where the pattern is compiled, so the error names the row that
 caused it.
 
-⚠ **The offset prune defeated the placement margin.** An offset was abandoned once it could no
+**Note: The offset prune defeated the placement margin.** An offset was abandoned once it could no
 longer reach the incumbent best — but a runner-up only has to reach `best − min_margin` to make
 the placement ambiguous. Those offsets were dropped silently and the margin came back as the full
 score, so a read with two placements 2.6 bits apart was reported as an unambiguous match at
 whichever came first. The bar now leaves the margin's worth of room.
 
-⚠ **The UMI error-rate estimator assumed a uniform base composition.** The distance-1 shell is
+**Note: The UMI error-rate estimator assumed a uniform base composition.** The distance-1 shell is
 `P_coll · Σ_j (1−m_j)/m_j`; the code used `3L · P_coll`, its `m_j = ¼` special case. On a skewed
 UMI that overstates the independent term and so *underestimates* the error rate — the direction
 that leaves errors uncorrected, and the same mistake as reaching for Shannon over Rényi.
@@ -312,7 +312,7 @@ R2 — so the extra work falls on reads that would otherwise be discarded. When 
 there the pair is swapped, so the output R1 always carries it; single-end input gets the same
 fallback against the reverse complement.
 
-⚠ This is not a convenience. Amplicon libraries are sequenced in both orientations, and a MIG
+Note: This is not a convenience. Amplicon libraries are sequenced in both orientations, and a MIG
 holding both orientations of one molecule loses half its reads at consensus while nothing upstream
 reports it. The flipped count is in the report and in `normalised`.
 
@@ -350,7 +350,7 @@ run, 8.8 GB against 19 GB. Sorted order is also what the range partition and the
 neighbourhood search both want. `CorrectionResult` is indexed in parallel with the entry array for
 the same reason, and the buffer grows with the data rather than costing a fixed ceiling per sample.
 
-⚠ 8.8 GB still does not fit a laptop, and the counters are **not yet partitioned**. The fix is the
+Note: 8.8 GB still does not fit a laptop, and the counters are **not yet partitioned**. The fix is the
 range partition, with `.mig` bucket output in M2. Until then checkout warns past 1 GB rather than
 letting you find out from the OOM killer.
 
@@ -389,7 +389,7 @@ and a dangling `else` that meant low-quality mismatches were never counted.
 RX/QX/BC tags, TAB-separated because `bwa mem -C` and `minimap2 -y` copy the comment verbatim into
 the SAM record.
 
-⚠ A read equidistant from two sample tags is reported as **ambiguous**, not assigned to one of
+Note: A read equidistant from two sample tags is reported as **ambiguous**, not assigned to one of
 them. That is a different diagnosis from "unmatched" — barcodes too close together versus a wrong
 pattern — and one counter cannot say both.
 
@@ -398,7 +398,7 @@ pattern — and one counter cannot say both.
 Coverage histogram in MIGEC's power-of-two bins, per-position base composition with Shannon
 entropy and information content for a logo, and the collision statistics.
 
-⛔ A logo draws Shannon entropy. The probability two molecules collide is the Rényi entropy of
+Never: A logo draws Shannon entropy. The probability two molecules collide is the Rényi entropy of
 order 2, `Π_j Σ_a p_j(a)²`. Since H₂ ≤ H₁, using Shannon overstates the usable barcode space and
 understates collisions — the direction that silently merges distinct molecules. Both are reported;
 only the collision form feeds the effective length, the correction, and the molecule count.
@@ -411,7 +411,7 @@ molecule), and the barcode belonging to another real molecule whose size is draw
 library's own MIG size distribution. An isolated low-coverage UMI has no parent and keeps its
 reads.
 
-⚠ The collision correction is declined above 90% occupancy rather than reported: the barcode space
+Note: The collision correction is declined above 90% occupancy rather than reported: the barcode space
 is estimated from the observed barcodes, so at saturation the estimate collapses onto the observed
 count and would report "no collisions" for the most collided library possible.
 
@@ -423,7 +423,7 @@ the worst *error* at the same substitution distance. Raw reads give V1/Err1 ≈ 
 2-substitution PCR error, so no abundance threshold can separate them — which is the entire
 justification for molecular barcoding.
 
-⚠ The junction is anchored on its 3′ end only. Requiring the 5′ end too looks more robust and is
+Note: The junction is anchored on its 3′ end only. Requiring the 5′ end too looks more robust and is
 catastrophically wrong: V1 differs at position 4 and V2 at 7–8, so both variants count as zero and
 the metric looks perfect.
 

@@ -121,7 +121,7 @@ private:
 // the UMI rather than starting a new one. That is how a 24 nt dual-end UMI is written as
 // `NNNNNNNNNNNNtgact` and `agtcaNNNNNNNNNNNN`: twelve bases from each end of the molecule.
 //
-// ⛔ Both must match. A dual-end design that accepts a read on the master alone silently emits
+// Never: Both must match. A dual-end design that accepts a read on the master alone silently emits
 // half-length UMIs alongside full-length ones, and every collision estimate downstream is then
 // computed over two different barcode spaces at once.
 class PatternSet {

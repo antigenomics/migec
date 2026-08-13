@@ -165,7 +165,7 @@ def test_bc_pattern_replaces_the_sheet(tmp_path):
 
 
 def test_a_umi_tools_pattern_is_refused_rather_than_misread(tmp_path):
-    """⛔ umi_tools spells a cell barcode `C`; here `C` is cytosine. Pasting one would compile
+    """Never: umi_tools spells a cell barcode `C`; here `C` is cytosine. Pasting one would compile
     into a pattern demanding literal cytosines, match nothing, and look like a bad library."""
     r = runner.invoke(app, ["checkout", "reads.fq", "--bc-pattern", "CCCCCCCCCCCCCCCCNNNNNNNNNN",
                             "-o", str(tmp_path / "out")])

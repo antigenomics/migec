@@ -327,7 +327,7 @@ samtools import -T '*' -1 cons/S1.R1.fq.gz -2 cons/S1.R2.fq.gz -o S1.ubam
 arda rnaseq run cons/S1.R1.fq.gz cons/S1.R2.fq.gz -o arda_out --prefix S1
 ```
 
-⚠ Document loudly: consensus output is **already deduplicated**. Running `umi_tools dedup` / `MarkDuplicates` / `fgbio GroupReadsByUmi` on it again collapses genuinely distinct molecules that happen to share a start position. The `RX`/`MI` tags are for traceability, not for a second dedup.
+Note: Document loudly: consensus output is **already deduplicated**. Running `umi_tools dedup` / `MarkDuplicates` / `fgbio GroupReadsByUmi` on it again collapses genuinely distinct molecules that happen to share a start position. The `RX`/`MI` tags are for traceability, not for a second dedup.
 
 ---
 

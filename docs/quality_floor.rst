@@ -69,15 +69,15 @@ errors into every read of a molecule:
    * - 1·10⁻⁴
      - 9.50·10⁻⁵
      - [7.4·10⁻⁵, 1.2·10⁻⁴]
-     - ✓
+     -
    * - 1·10⁻⁵
      - 9.62·10⁻⁶
      - [3.9·10⁻⁶, 2.0·10⁻⁵]
-     - ✓
+     -
    * - 0
      - 0
      - [0, 5.1·10⁻⁶]
-     - ✓ (bound)
+     -  (bound)
 
 It resolves the decade the project needs to settle. ``tests/synthetic/test_quality_floor.py`` keeps
 that true.

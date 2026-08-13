@@ -15,12 +15,12 @@ Why not a fraction of the reads
 
 .. warning::
 
-   ⛔ **Never subsample reads.** At 16 reads per molecule, keeping 0.5% of the *reads* gives
+   **Never: Never subsample reads.** At 16 reads per molecule, keeping 0.5% of the *reads* gives
    molecules seen once each: the MIG size distribution is destroyed and every consensus collapses
    to a single read. The file still looks like a FASTQ, the pipeline still runs, and every fixture
    built from it silently tests a library nobody has.
 
-   ⛔ **Nor the first N barcodes.** A UMI with 100 reads appears in the first thousand reads about a
+   **Never: Nor the first N barcodes.** A UMI with 100 reads appears in the first thousand reads about a
    hundred times more often than a singleton, so first-appearance order oversamples large MIGs —
    destroying the very distribution the fixture exists to show.
 

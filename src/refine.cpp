@@ -529,7 +529,7 @@ RefineStats refine(const RefineRequest& request) {
         // neighbour is one the posterior declined to merge. Counting those per bin gives a
         // residual false-molecule rate measured on this library rather than derived.
         //
-        // ⚠ "Much larger neighbour" alone is not the test. At 1-3 reads per UMI nothing is 20x
+        // Note: "Much larger neighbour" alone is not the test. At 1-3 reads per UMI nothing is 20x
         // anything, so a count-ratio criterion reports zero residual in precisely the regime where
         // the residual is worst -- the same trap the correction posterior itself fell into. The
         // payload is what still separates them at one read: a neighbour whose reads agree on the

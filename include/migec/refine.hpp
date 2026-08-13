@@ -12,10 +12,10 @@
 // molecule is the whole barcode: the same UMI in two cells is two molecules, and correcting one
 // against the other would merge them. Concatenating also means a 1-substitution neighbour is found
 // whether the substitution landed in the cell barcode or in the UMI, which is the right
-// neighbourhood -- both are real errors. ⚠ It is NOT a substitute for whitelisting a 10x cell
+// neighbourhood -- both are real errors. Note: It is NOT a substitute for whitelisting a 10x cell
 // barcode against the known list; that is a separate mechanism and is not implemented yet.
 //
-// ⚠ Correction is not bucketable by a plain range partition. A range partition on the top b bits
+// Note: Correction is not bucketable by a plain range partition. A range partition on the top b bits
 // puts a barcode and its 1-substitution neighbours in the same bucket for every position EXCEPT
 // the top b/2, and a neighbour that crosses a bucket boundary can never be found. Doing it in
 // buckets needs two passes with the key rotated, so that every pair shares a bucket in at least
@@ -45,14 +45,14 @@ struct RefineRequest {
     int payload_width = 32;
     // Cell calling, when the reads carry a cell barcode. OrdMag, which is Cell Ranger's original
     // rule: take the 99th percentile of the top `expect_cells` barcodes by molecule count and
-    // keep everything within a tenth of it. ⛔ EmptyDrops-style rescue of low-count cells is
+    // keep everything within a tenth of it. Never: EmptyDrops-style rescue of low-count cells is
     // deliberately NOT reproduced -- it is Cell Ranger's job, and pretending to match it would
     // make every comparison against their calls unreachable by construction rather than by
     // measurement.
     int expect_cells = 3000;
     // Snap cell barcodes to a list of the barcodes that were actually synthesised, before any of
     // the rest of this runs. Empty disables it.
-    // Residual-FDR target for the reported MIG size threshold. ⛔ The threshold is REPORTED, never
+    // Residual-FDR target for the reported MIG size threshold. Never: The threshold is REPORTED, never
     // applied: a molecule seen three times with no plausible parent is information, and cutting it
     // discards real sequence. Downstream may filter on it; refine does not.
     double target_fdr = 0.05;

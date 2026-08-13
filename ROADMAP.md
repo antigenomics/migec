@@ -24,7 +24,7 @@ The counters are not yet partitioned, which is the open memory item and lands wi
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
 scientific claim and is validated before any throughput work.
 
-## M0 — skeleton, format, simulator ✅
+## M0 — skeleton, format, simulator
 
 - [x] Archive the Groovy implementation on `legacy-v1` / `v1-final`, start master fresh
 - [x] `.mig` format frozen in `docs/formats.rst`, with a round-trip and truncation test
@@ -50,7 +50,7 @@ scientific claim and is validated before any throughput work.
       2026-08-13, on `SRR1763769` (2.12 M reads, HIV-1 Primer ID). **The floor is of order 1e-4,
       not 1e-6**: 1.54e-4 [1.36e-4, 1.74e-4] at MIGs of ≥80 reads, so no emitted quality above
       **~Q38** is supportable, and the 1e-6 guess is excluded by two orders of magnitude. Matches
-      the ~1 in 10,000 the source paper reports (doi:10.1128/JVI.00522-15). ⚠ The curve is still
+      the ~1 in 10,000 the source paper reports (doi:10.1128/JVI.00522-15). Note: The curve is still
       declining at 80 reads, so this is an upper bound: the 9 nt Primer ID puts the library at
       49.6% occupancy and `checkout` flags it `saturated`, so collided MIGs contribute mismatches
       counted here as error. Not the `p_floor + a/c` least-squares fit the plan specified — that
@@ -64,7 +64,7 @@ scientific claim and is validated before any throughput work.
       and **entirely nearest-neighbour**: every adjacent pair positive, every distant pair zero.
       Cause measured: **0.55% of reads carry a barcode one base short**, a coupling that did not
       fire, which frameshifts everything after it. `Π_j m_j` stays; the 1.86x collision excess is
-      the read threshold. ⚠ The first version reported 1.04x and all of it was artefact — N as a
+      the read threshold. Note: The first version reported 1.04x and all of it was artefact — N as a
       fifth base, and the plug-in `Σ p̂²` whose bias grows with k.
       (2) **97% of distance-1 pairs are chance** (844,243 observed, 817,358 under a column
       shuffle), and a size-preserving *count* shuffle over the fixed graph finds **~18,000 genuine
@@ -73,13 +73,13 @@ scientific claim and is validated before any throughput work.
       `checkout`'s analytic 8.0e-4 at 0.39x — M3 takes the permuted background. (3) **The split threshold is 8.68, not 2.00**: a curveball
       randomisation preserving both margins of the reads x positions minor-allele matrix puts the
       1% false-positive point 19x above the nominal `p < 0.01`, because a low-quality read carries
-      minor bases at many positions at once and mimics a linked subclone. ⚠ **bootstrap 95% CI
+      minor bases at many positions at once and mimics a linked subclone. Note: bootstrap 95% CI
       [8.42, 9.14]** over 82,800 randomisations; a tenth as many gave 9.61 and 11.66, so the
       interval is the number. (4) **Shallow libraries (1-3 reads/UMI) are a separate regime** and
       three of these results do not transfer to them — written up rather than quoted.
       `docs/nulls.rst`, `scripts/permutation_nulls.py`.
 
-## M1 — `assemble`, the consensus and quality model ✅
+## M1 — `assemble`, the consensus and quality model
 
 - [x] Grouping on the **whole** barcode — sample + cell + UMI. A UMI repeats across cells and
       samples by design; the sort key is `(cell, umi, src_index)` and the range partition is on
@@ -92,7 +92,7 @@ scientific claim and is validated before any throughput work.
 - [x] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
 - [x] Sub-clustering by *linkage*, not by count of polymorphic sites. Threshold 8.68 (`-log10 p`,
       two-sided, Bonferroni'd within the MIG) from X3's false-positive curve — **not** the nominal
-      2.00, which over-calls by 19x. ⚠ It implies a minimum group size: the strongest evidence a
+      2.00, which over-calls by 19x. Note: It implies a minimum group size: the strongest evidence a
       pair of columns can carry is `log10 C(n, n/2)`, so a 50/50 split needs ~34 reads to clear it
 - [x] Quality floor **added**, not compared: `Q = −10 log10(p_cons + p_floor)`, default 1e-4 from
       X2, so nothing above ~Q38 is emitted
@@ -104,7 +104,7 @@ scientific claim and is validated before any throughput work.
       memory-hostile shape: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct barcode
 - [ ] `--rt-error auto`, fitted per dataset rather than taken from the default
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
-- Gate: per-base error ≤1e-5 at coverage ≥5 ✅ (`tests/synthetic/test_assemble.py`, stratified by
+- Gate: per-base error ≤1e-5 at coverage ≥5 Done: (`tests/synthetic/test_assemble.py`, stratified by
   depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
 
 ## M2 — `checkout`
@@ -136,7 +136,7 @@ scientific claim and is validated before any throughput work.
 - [ ] `.mig` bucket output, which is also what bounds the UMI counters
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
-  threads ✅; >1 M reads/s at 16 threads ✅
+  threads ; >1 M reads/s at 16 threads
 
 ## M3 — `refine` (the stage works; cell calling and the FDR threshold are open)
 
@@ -181,7 +181,7 @@ model has to use the evidence that survives at one read:
   | 7.12 | 1.000 | 0.979 | 0.997 | 0.999 |
   | 13.30 | 1.000 | 0.983 | 0.999 | 1.000 |
 
-  ⚠ At ~1 read/UMI **80% of barcode errors are unfixable in principle** — the parent was never
+  Note: At ~1 read/UMI **80% of barcode errors are unfixable in principle** — the parent was never
   sequenced — and of the rest migec fixes 11% while destroying no real molecule. Precision is the
   side to err on: a wrong merge deletes a molecule and nothing downstream can tell, a missed
   correction only inflates the count.
@@ -191,7 +191,7 @@ model has to use the evidence that survives at one read:
       reads; three streaming passes
 - [x] **Quality calibration measured against the pattern's own constant bases**, fitted as
       `ê(q) = ε_qi + a·10^(−q/10)` weighted by bases per Q. On `SRR1763769` the slope is 1.04 over
-      46.3 M bases, so the reported Phred's *scaling* is right. ⛔ The intercept (3.9e-3) is **not**
+      46.3 M bases, so the reported Phred's *scaling* is right. Never: The intercept (3.9e-3) is **not**
       a sequencing floor -- the standard is a synthesised oligo, and synthesis runs ~1 defect per
       200-500 bases. It is spread evenly over all 23 anchor positions, none polymorphic, and
       matches the independently measured 0.55% one-base-short rate. Reported as a diagnostic of the
@@ -204,11 +204,11 @@ model has to use the evidence that survives at one read:
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`
 - [x] **MIG-size threshold at a target FDR; keep-orphan retention.** The residual is measured, not
       derived: a surviving barcode that still looks like a child of a surviving neighbour, by count
-      *or* by its reads agreeing on the molecule. ⚠ Count alone reports **zero residual at 1-3
+      *or* by its reads agreeing on the molecule. Note: Count alone reports **zero residual at 1-3
       reads per UMI**, which is where it is worst. On a 1.23 reads/barcode library: 5.25% of 1-read
-      molecules, threshold ≥2; on 4.62 reads/barcode: 0%, threshold 1. ⛔ Reported, never applied —
+      molecules, threshold ≥2; on 4.62 reads/barcode: 0%, threshold 1. Never: Reported, never applied —
       every molecule stays in the output
-- [ ] ⚠ **Bucketed correction.** A range partition on the top b bits splits a barcode from its
+- [ ] **Note: Bucketed correction.** A range partition on the top b bits splits a barcode from its
       neighbour for the top b/2 positions, so correction cannot be bucketed naively. The fix is two
       passes with the key rotated, so every pair shares a bucket in at least one. Until then the
       table is held whole and its size is reported
@@ -232,7 +232,7 @@ model has to use the evidence that survives at one read:
       UMI-tools, Calib, fgbio, Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware
       callers benchmarked by Maruzani et al. 2024 for low-frequency ctDNA)
 - [ ] ctDNA ground truth in the style of Maruzani et al.: COSMIC variants spiked at 0.005–0.075 VAF
-      into a real cfDNA background at 200x/450x/850x. ⛔ Their deposited runs carry **no** UMI
+      into a real cfDNA background at 200x/450x/850x. Never: Their deposited runs carry **no** UMI
       (aligned BAM submissions, `suggest` finds no pattern, `CMP_LINKAGE_GROUP` empty), so the UMIs
       have to be simulated — and their rule assigns them to reads sharing start *and* end, which is
       the co-terminal assumption X1 falsified

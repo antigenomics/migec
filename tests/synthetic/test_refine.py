@@ -458,7 +458,7 @@ def test_the_residual_fdr_finds_what_correction_left_behind(tmp_path):
 
     assert shallow["residual_fdr_at_one"] > 10 * deep["residual_fdr_at_one"]
     assert shallow["suspected_residual"] > 0
-    # ⛔ Reported, never applied: every molecule survives whatever the threshold says.
+    # Never: Reported, never applied: every molecule survives whatever the threshold says.
     assert shallow["mig_size_threshold"] >= 1
     hist = {b["min_reads"]: b["molecules"] for b in shallow["coverage"]}
     assert hist[1] > 0, "1-read molecules must still be in the output"
