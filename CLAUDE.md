@@ -229,7 +229,10 @@ correction is written up in `project/review-algorithms.md`.
   `mikessh/migec` is a redirect, and `gh` commands must use the former.
 - ⚠ `gh repo edit --default-branch` and force-pushes may be blocked by the permission classifier;
   hand those to the user rather than working around them.
-- `isalgo/umi_data` does not exist yet; nothing has been uploaded.
+- `isalgo/umi_data` **exists and is populated** (2026-08-13): the CI fixture and the derived
+  result tables, 1.3 MB. ⚠ It is **public**. Written through the mirror at `~/hf/umi_data`, never
+  the HTTP API. Nothing from aldan3 is in it, and raw ENA runs are not either -- `SOURCES.md`
+  carries the regenerating command instead of the bytes.
 - ⚠ Do **not** add seqtk as a dependency. It is the right tool for generic FASTQ slicing in a
   benchmark harness, but it cannot subsample by whole UMI (it samples reads), which is the one
   thing we need and the thing that makes a UMI example fixture correct.

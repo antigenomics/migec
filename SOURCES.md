@@ -108,19 +108,24 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 
 ## HuggingFace — `isalgo/umi_data`
 
-Does not exist yet. When created: a git + git-lfs mirror at `~/hf/umi_data`, written by
-committing and pushing **in the mirror**, one commit per change set. Never through the HTTP API —
-that writes remotely only, leaves the mirror silently stale, and lands one commit per call.
-
-Planned layout:
+A git + git-lfs mirror at `~/hf/umi_data`, written by committing and pushing **in the mirror**,
+one commit per change set. Never through the HTTP API — that writes remotely only, leaves the
+mirror silently stale, and lands one commit per call. ⚠ The repo is **public**.
 
 ```
 umi_data/
-  ci/            small slices for CI, subsampled by WHOLE UMIs (all reads of N UMIs)
-  truth/         ground-truth tables (spike-in clonotypes, simulated molecule tables)
-  whitelists/    barcode whitelists + a README recording their upstream and license
-  SOURCES.md
+  ci/            small slices for CI, subsampled by WHOLE barcodes (all reads of N barcodes)
+  results/       the derived tables behind every number the documentation quotes
+  SOURCES.md     a copy of this file, plus a section on what is and is not shipped
 ```
+
+Still to add: `truth/` (spike-in clonotypes) and `whitelists/` (10x barcode lists with their
+upstream and license), neither of which has been fetched yet.
+
+**Published at [huggingface.co/datasets/isalgo/umi_data](https://huggingface.co/datasets/isalgo/umi_data)**
+(2026-08-13): `ci/SRR1763769_umi0.5pct.fq.gz` (all reads of 0.5% of the barcodes, built with
+`migec subsample`) and `results/` (the derived tables behind every number the docs quote). Written
+through the local git+git-lfs mirror at `~/hf/umi_data`, never the HTTP API.
 
 ⛔ Not in this dataset: aldan3 Experiment 1 raw reads, and anything regenerable by a one-line
 command (record the command here instead of storing gigabytes in LFS).
