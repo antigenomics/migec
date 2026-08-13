@@ -96,8 +96,9 @@ five bases cannot pay. Anchored, there is only one place to be and the bar does 
      - ``^XXXXXXXXXXXXXXXXNNNNNNNNNN``
      - 10x Chromium 3' v2 and 5' v1/v2: 16 nt cell barcode, 10 nt UMI.
    * - ``tso500``
-     - ``^NNNNN.....`` on both mates
-     - Illumina TSO500 ctDNA. The same as the read structure ``5M5S+T`` on each mate.
+     - ``^NNNNN.....`` on R1 only
+     - Illumina TSO500 ctDNA. The fgbio read structure is ``5M5S+T +T`` -- R2 is all template.
+       See the warning below.
    * - ``smarter-umi``
      - ``^NNNNNNNNNNGGG``
      - SMARTer template-switching RNA-seq: a 10 nt inline UMI, then the ``GGG`` the template switch
@@ -106,6 +107,15 @@ five bases cannot pay. Anchored, there is only one place to be and the bar does 
 Warning: the ``duplex`` preset extracts the tags and emits **single-strand** consensuses. Pairing
 the two strands of a molecule into a duplex consensus is not implemented, so no duplex error rate
 should be quoted from this output.
+
+Never: **a 5 nt UMI does not identify a molecule, and TSO500's does not pretend to.** 4^5 is 1,024
+barcodes against the tens of thousands of fragments a ctDNA panel region carries, so the space is
+saturated by construction and the birthday bound says most barcodes are shared. TSO500's own
+pipeline resolves that by grouping on the UMI **and the mapping position** (``fgbio
+GroupReadsByUmi``, which runs after alignment); migec groups on the barcode, before any alignment
+exists, so it cannot. It will report the space as saturated, set ``err_unreliable``, and warn --
+and on this chemistry that warning is the correct answer, not a threshold to raise. Use migec here
+to extract and tag; do the grouping position-aware, downstream.
 
 3. A read structure
 -------------------
@@ -116,7 +126,8 @@ migec takes them verbatim: ``M`` a molecular barcode, ``B`` a sample/cell barcod
 
 .. code-block:: bash
 
-    migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T --read-structure2 5M5S+T -o out/
+    migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T -o out/    # TSO500: `5M5S+T +T`
+    migec checkout R1.fq.gz R2.fq.gz --read-structure 12M5S+T --read-structure2 12M5S+T -o out/
 
 .. list-table::
    :header-rows: 1

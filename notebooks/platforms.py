@@ -163,17 +163,29 @@ def _(mo, show):
         | {show("16B10M+T")} | 10x 5' |
         | {show("8M+T")} | a plain 8 nt inline UMI |
 
-        TSO500 carries a UMI on **both** mates, and the two halves are one molecule identifier:
+        TSO500 ctDNA is `5M5S+T +T` -- the UMI is on R1 and R2 is all template:
 
         ```bash
         migec checkout R1.fq.gz R2.fq.gz --preset tso500 -o co/
-        migec checkout R1.fq.gz R2.fq.gz \\
-            --read-structure 5M5S+T --read-structure2 5M5S+T -o co/
+        migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T -o co/
         ```
 
-        That gives a 10 nt UMI, not two 5 nt ones. Accepting only the first mate would emit 5 nt
-        barcodes beside 10 nt ones, and every collision estimate downstream would be computed over
-        two different barcode spaces at once.
+        Warning: **5 nt is 1,024 barcodes, which does not identify a molecule on a real panel.**
+        TSO500's own pipeline groups on the UMI *and the mapping position* (`fgbio
+        GroupReadsByUmi`, after alignment). migec groups on the barcode, before any alignment
+        exists, so it will report the space as saturated -- and on this chemistry that warning is
+        the right answer, not a threshold to raise. Extract and tag here; group position-aware,
+        downstream.
+
+        When a chemistry really does put a UMI on **both** mates -- duplex sequencing, or MAGERI's
+        dual-end design -- the two halves concatenate into one identifier and both must match:
+
+        ```bash
+        migec checkout R1.fq.gz R2.fq.gz --preset duplex -o co/
+        ```
+
+        Accepting only the first mate would emit 12 nt barcodes beside 24 nt ones, and every
+        collision estimate downstream would be computed over two barcode spaces at once.
         """
     )
     return

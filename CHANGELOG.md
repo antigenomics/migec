@@ -30,9 +30,17 @@ answer: a free scan over an unanchored pattern has no evidence to choose an offs
 `migec sheet --presets` prints each with what it is and where the layout is written down; a wrong
 name lists all of them. Every preset is a published chemistry with a citable source, so a wrong one
 is falsifiable rather than folklore, and each is compiled by a test — a preset nobody can run is
-worse than no preset, because it looks supported. Never: `duplex` extracts the tags and emits
-**single-strand** consensuses; duplex pairing is not implemented and no duplex error rate may be
-quoted from it.
+worse than no preset, because it looks supported. Two carry warnings that are part of the preset:
+
+* Never: `duplex` extracts the tags and emits **single-strand** consensuses. Duplex pairing is not
+  implemented and no duplex error rate may be quoted from it.
+* Never: **TSO500's UMI is 5 nt, on R1 only** — the read structure is `5M5S+T +T`, checked against
+  the pipeline this repo was pointed at, which corrects a first pass that had it on both mates.
+  1,024 barcodes does not identify a molecule on a real ctDNA panel, and TSO500's own pipeline does
+  not claim it does: it groups on the UMI **and the mapping position** (`fgbio GroupReadsByUmi`,
+  after alignment). migec groups on the barcode, before any alignment exists, so it will report the
+  space as saturated — on this chemistry that warning is the correct answer, not a threshold to
+  raise. Extract and tag here; group position-aware, downstream.
 
 **The downstream contract is measured, not asserted** — new `docs/downstream.rst`. Against a real
 `assemble` output on this machine: `minimap2 -ax sr -y` and `bwa mem -C` carry `RX`, `CB` and `MI`

@@ -90,7 +90,7 @@ written down):
 | `duplex` | `^NNNNNNNNNNNN.....` on both mates | duplex sequencing |
 | `10x` | `^XXXXXXXXXXXXXXXXNNNNNNNNNNNN` | 10x Chromium 3' v3 |
 | `10x-v2` | `^XXXXXXXXXXXXXXXXNNNNNNNNNN` | 10x Chromium 3' v2 and 5' |
-| `tso500` | `^NNNNN.....` on both mates | Illumina TSO500 ctDNA |
+| `tso500` | `^NNNNN.....` on R1 | Illumina TSO500 ctDNA — read the warning in [docs/layouts.rst](docs/layouts.rst) |
 | `smarter-umi` | `^NNNNNNNNNNGGG` | SMARTer template-switching RNA-seq |
 
 ```bash
@@ -100,7 +100,7 @@ migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
 fgbio, Picard, samtools and TSO500 write the same thing as a *read structure*, taken verbatim:
 
 ```bash
-migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T --read-structure2 5M5S+T -o out/
+migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T -o out/    # TSO500: `5M5S+T +T`
 ```
 
 ### Many samples in one file

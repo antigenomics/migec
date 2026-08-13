@@ -60,8 +60,9 @@ By platform
      - ``--preset 10x-v2``, or ``--bc-pattern 'cell:0:16,16:26'``
      - positional; ``refine``/``assemble`` take **R2**
    * - TSO500
-     - ``--preset tso500``, or ``--read-structure 5M5S+T --read-structure2 5M5S+T``
-     - a UMI on both mates, concatenated into one identifier
+     - ``--preset tso500``, or ``--read-structure 5M5S+T``
+     - ``5M5S+T +T``: a 5 nt UMI on R1 only. Warning: 1,024 barcodes does not identify
+       a molecule -- TSO500 groups position-aware, downstream
    * - UMI RNA-seq (SMARTer)
      - ``--preset smarter-umi``
      - 10 nt inline UMI, then the ``GGG`` the template switch leaves

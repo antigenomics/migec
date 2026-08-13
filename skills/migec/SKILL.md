@@ -32,7 +32,7 @@ migec checkout reads.fq.gz --bc-pattern '^NNNNNNNN' -o out/   # 8 nt UMI at the 
 migec checkout reads.fq.gz --bc-pattern '0:8'       -o out/   # the same, as a half-open slice
 migec checkout R1.fq.gz R2.fq.gz --bc-pattern 'cell:0:16,16:26' -o out/            # 10x
 migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2                -o out/            # named
-migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T --read-structure2 5M5S+T  # fgbio
+migec checkout R1.fq.gz R2.fq.gz --read-structure 5M5S+T -o out/                   # fgbio
 migec checkout reads.fq.gz -b barcodes.txt -o out/                                 # many samples
 ```
 

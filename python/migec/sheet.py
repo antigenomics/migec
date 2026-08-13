@@ -231,9 +231,12 @@ PRESETS: dict[str, tuple[str, str | None, str]] = {
     ),
     "tso500": (
         "^NNNNN.....",
-        "^NNNNN.....",
-        "Illumina TSO500 ctDNA: a 5 nt UMI and a 5 nt spacer on both mates, giving a 10 nt "
-        "identifier. Same as the fgbio read structure `5M5S+T` on each mate.",
+        None,
+        "Illumina TSO500 ctDNA: a 5 nt UMI and a 5 nt spacer, on R1 ONLY -- the fgbio read "
+        "structure is `5M5S+T +T`, R2 being all template. Warning: 5 nt is 1,024 barcodes, so the "
+        "UMI alone does NOT identify a molecule on a real panel; TSO500's own pipeline groups on "
+        "the mapping position as well (fgbio GroupReadsByUmi, after alignment). migec groups on "
+        "the barcode, so it will report the space as saturated -- believe it.",
     ),
     "smarter-umi": (
         "^NNNNNNNNNNGGG",
