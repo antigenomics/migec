@@ -12,6 +12,7 @@
 #ifndef MIGEC_PARALLEL_HPP
 #define MIGEC_PARALLEL_HPP
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -39,6 +40,14 @@ inline int worker_count(int requested, size_t items) {
 // cost here is wildly uneven -- one barcode's neighbourhood is empty and the next one's is full,
 // one bucket holds ten molecules and the next ten million -- and a static split would leave every
 // thread but one idle at the end.
+//
+// Never: the counter is claimed in BATCHES, not one item at a time. Measured on assemble's
+// partition, where an item is one read's tag scan: 21% of all CPU samples across every thread sat
+// on that single `ldadd` instruction, more than the parse it was handing out. Sixteen cores
+// hammering one cache line is the work, not the work. The batch is sized so that each worker takes
+// ~8 turns -- enough turns for the uneven case to even out, few enough atomics to disappear -- and
+// collapses to 1 when there are few items, which is exactly the uneven case (one bucket per item)
+// that the counter exists for.
 template <typename Fn>
 void parallel_for(size_t items, int threads, Fn&& fn) {
     const int n = worker_count(threads, items);
@@ -48,6 +57,10 @@ void parallel_for(size_t items, int threads, Fn&& fn) {
         return;
     }
 
+    // Capped, so a ten-million-item scan still hands out ten thousand batches rather than eight:
+    // the tail imbalance of a batch is paid by whichever worker draws the last one.
+    const size_t grab =
+        std::min<size_t>(1024, std::max<size_t>(1, items / (static_cast<size_t>(n) * 8)));
     std::atomic<size_t> next{0};
     std::mutex err_mutex;
     std::exception_ptr err;
@@ -55,17 +68,20 @@ void parallel_for(size_t items, int threads, Fn&& fn) {
 
     auto run = [&](int worker) {
         for (;;) {
-            const size_t i = next.fetch_add(1, std::memory_order_relaxed);
-            if (i >= items) return;
-            try {
-                fn(i, worker);
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(err_mutex);
-                if (i < err_at) {  // lowest index wins, so the message does not depend on timing
-                    err_at = i;
-                    err = std::current_exception();
+            const size_t first = next.fetch_add(grab, std::memory_order_relaxed);
+            if (first >= items) return;
+            const size_t last = std::min(items, first + grab);
+            for (size_t i = first; i < last; ++i) {
+                try {
+                    fn(i, worker);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(err_mutex);
+                    if (i < err_at) {  // lowest index wins: the message does not depend on timing
+                        err_at = i;
+                        err = std::current_exception();
+                    }
+                    return;
                 }
-                return;
             }
         }
     };

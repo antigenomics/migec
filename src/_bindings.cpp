@@ -601,6 +601,10 @@ PYBIND11_MODULE(_core, m) {
             d["mig_size_threshold"] = st.mig_size_threshold;
             d["residual_fdr_at_one"] = st.residual_fdr_at_one;
             d["suspected_residual"] = st.suspected_residual;
+            d["error_from_children"] = st.error_from_children;
+            d["error_at_depth"] = st.error_at_depth;
+            d["error_depth"] = st.error_depth;
+            d["error_phred"] = st.error_phred;
             py::dict wl;
             wl["barcodes"] = st.whitelist.barcodes;
             wl["exact"] = st.whitelist.exact;

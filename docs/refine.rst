@@ -234,12 +234,21 @@ Output
 ``<sample>.cells.tsv``         cell, molecules, called — only with cell barcodes
 ``<sample>.rank.tsv``          the barcode-rank curve and its CDF, log-spaced ranks
 ``<sample>.bins.tsv``          per MIG size: barcodes, reads, merged as error, entropy
+``<sample>.sizes.tsv``         the MIG size spectrum at exact sizes: molecules and their reads
+``<sample>.umi_errors.tsv``    per parent depth: error children, their reads, the rate implied
 ``refine.coverage.tsv``        molecules per power-of-two MIG size, after correction
 ``refine.json``                all of it, machine-readable
 ============================== ====================================================
 
 ``notebooks/refine_diagnostics.py`` draws all of them. Nothing is plotted inside the C++: a figure
 has to be redrawable from a committed TSV long after the run.
+
+``<sample>.umi_errors.tsv`` is the barcode error rate measured at every amplification depth
+rather than once for the library, and it is what checks ``estimated_error``: a parent seen
+:math:`c` times had :math:`cL` barcode bases to miscall, and its error children are what got
+miscalled. Two estimators fall out of the same row and they fail in opposite directions, which is
+the point of reporting both — :doc:`umi_errors` works through where each one holds and where it
+stops. On a diverse library sequenced 25 deep it lands within 1% of a known injected rate.
 
 The column worth reading first is ``fraction_erroneous`` in ``<sample>.bins.tsv``. About **94% of
 singleton barcodes are error children** and ~0.2% at 2–3 reads. A flat curve, or one rising at high

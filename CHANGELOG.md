@@ -4,6 +4,104 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+### The barcode error rate, measured at every depth
+
+`refine` writes `<sample>.umi_errors.tsv`: one row per exact parent depth, carrying the distinct
+error children that parent spawned, the reads in them, and the error rate each implies. A parent
+carrying `c` reads offered `c*L` barcode bases to be miscalled, so the same eps falls out two ways:
+
+    distinct children  u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
+    reads in children  r(c) = c L eps                    -> eps = r / (c L)
+
+A barcode has only `3L` neighbours one substitution away, so the first **saturates**; reads have no
+ceiling, so the second does not. Where the two part company on the figure is where this library's
+barcode neighbourhood filled up, read off the data instead of predicted. Past saturation the first
+is left blank rather than reported as a small number: inverting a full neighbourhood returns "no
+errors" for the most error-ridden library there can be.
+
+New report lines and JSON fields `error_at_depth`, `error_phred`, `error_from_children`,
+`error_depth`. The number to quote is `error_at_depth` — restricted to parents seen >= 10 times,
+where correction is near-complete — and `error_phred` is the same thing as a Phred so it can be put
+beside the barcode's own reported Q. On a diverse library sequenced 25 deep with 1e-3 injected, the
+distance-1 excess gives 9.73e-04, the children give 9.89e-04 (Q30) and all depths give 9.98e-04.
+Three routes to one number agreeing within 3% is what makes any of them believable.
+
+Never: **both estimators are bounded by the merges correction actually made**, so neither is
+saturation-free. Against a known injected rate, as a fraction of truth:
+
+| occupancy | 0.2% | 2.3% | 9.8% | 33% | 100% |
+|---|---|---|---|---|---|
+| distance-1 excess | 0.97 | 0.96 | 0.76 | 0.45 | 0.001 |
+| from the children | **0.99** | **0.95** | **0.88** | **0.62** | 0.00 |
+
+The children estimate is the better of the two wherever either works, and at 100% they both go to
+zero for the same reason: on a full barcode space `correct_umis` refuses to merge, correctly,
+because a distance-1 neighbour there is more likely a real molecule than a child. The `saturated`
+flag is what says the answer is a floor — read it, do not read this table instead of it. And read
+the table at depth: a child whose parent was never sequenced cannot be counted, which at 1-3
+reads/UMI is 80% of them. `tests/synthetic/test_umi_errors.py` holds all of it, `docs/umi_errors.rst`
+works through it.
+
+Two new `migec plot` panels over that table, `umi_error_children` and `umi_error_rate`, with the
+`3L` ceiling and the reported estimate drawn as reference lines. Note: `neighbours` and `estimate`
+are constant down their columns on purpose — the panels draw them, and a figure that needs a value
+its own table does not carry will one day disagree with the report.
+
+### `reads in them` is points, never a line
+
+The `mig_size_spectrum` panel drew its reads series `with lines` over a table that has one row per
+**exact** size. Past the head of the distribution almost every size holds exactly one molecule, so
+reads == size, and the line rendered the `y = x` diagonal as the most prominent feature of the
+figure — a tautology drawn as a second mode. Where two or three molecules shared a size the same
+line sawtoothed between `size*1` and `size*2`, which is integer quantisation drawn as signal, and it
+bridged gaps in the support where no size was observed at all. It is points now, and the new
+barcode-error panels are points for the same reason.
+
+### The thread helper was the bottleneck
+
+With all three stages threaded, a sampling profile of
+`assemble` put **21% of all CPU samples, across every thread, on a single instruction**: the atomic
+`fetch_add` in `parallel_for` that handed out one item at a time. When an item is one read's tag
+scan, sixteen cores serialise on one cache line and the counter costs more than the work it
+distributes. Items are claimed in batches now, sized so each worker takes ~8 turns and capped so a
+ten-million-item scan still hands out ten thousand batches. Never: the batch collapses to 1 when
+there are few items, which is the uneven case -- one bucket per item, one holding ten molecules and
+the next ten million -- that the counter exists for.
+
+Two serial blocks fell out with it, both read-only `3L`-binary-search scans of the barcode table:
+the **distance-1 census** in `estimate_umi_error` (checkout's per-sample statistics tail) and
+refine's **residual-FDR scan**, which was 0.53 s of a 2.17 s run on one core after everything around
+it had been parallelised. Both tally integers into per-worker counters summed afterwards, so `-t`
+still changes nothing but the clock -- verified byte-for-byte at `-t` 1/3/16 on a clean library and
+on one with injected barcode errors (residual 1,294 either way), and under the thread sanitizer
+(104 cases, 224,116 assertions, no race).
+
+Two allocation fixes on paths every read takes: refine's rewrite chunk is now **assigned into
+rather than cleared** -- the same trade assemble's partition already made, since `clear()` destroys
+four `std::string` per record -- and the rewrite's comment buffer and unpacked barcode are worker
+scratch reused read after read, with the cell and UMI halves taken as `string_view` instead of
+`substr`. That is four allocations a read removed; `rewrite_seconds` fell 0.51 s to 0.38 s.
+`assemble` also unpacked each group's UMI twice, once for the composition tally and once for the
+record name.
+
+| stage | 1 thread | 16 threads | was, at 16 |
+|---|---|---|---|
+| `checkout` | 213,880 | **1,548,835** | 1,056,472 |
+| `refine` | 617,802 | **1,554,156** | 1,012,368 |
+| `assemble` | 554,106 | **2,470,928** | 2,051,937 |
+
+reads/s, 500 k-read sample except checkout at 2 M; `assets/benchmark_threads.tsv` is regenerated
+and the figure redrawn from it. checkout's gap between end-to-end and matching throughput fell from
+20% to 9%.
+
+Note: re-measured while it was in hand, a **64 k chunk in assemble's partition is still 32% faster**
+(3,075,506 reads/s against 2,324,403 on 4 M reads) and is still not taken: it costs 16 MB of
+resident chunk, which at NovaSeq scale makes pass 1 the memory peak and breaks the property that a
+finer partition costs less rather than more. The benchmark tier does not fail at 64 k on a 500 k
+corpus -- the objection is one of scale -- so the number is written down next to the constant.
+
 ## 2.1.0 — 2026-08-13
 
 First non-alpha of the rewrite. The three stages, the eight commands and the on-disk formats have

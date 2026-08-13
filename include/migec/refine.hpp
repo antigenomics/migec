@@ -102,6 +102,18 @@ struct RefineStats {
     uint32_t mig_size_threshold = 0;
     double residual_fdr_at_one = 0.0;
     uint64_t suspected_residual = 0;
+    // The barcode error rate read off the CHILDREN, per base per read, against the reads their
+    // parents carried: a parent seen c times had c*L barcode bases to miscall, and its children
+    // hold what was miscalled. Independent of the distance-1 census in `estimated_error`, which
+    // counts distinct NEIGHBOURS and therefore saturates at 3L per parent as the space fills --
+    // this one counts READS and does not. `<sample>.umi_errors.tsv` is the same measurement per
+    // depth, and `error_at_depth` is it read where correction is near-complete rather than
+    // averaged over the shallow molecules whose parents were never sequenced.
+    double error_from_children = 0.0;   // library-wide, all depths; a LOWER bound at 1-3 reads/UMI
+    double error_at_depth = 0.0;        // the same, restricted to parents at or above `error_depth`
+    uint32_t error_depth = 0;           // the depth it was read at, 0 when no depth qualified
+    // -10 log10(error_at_depth), so it can be put beside the barcode's own reported Phred.
+    double error_phred = 0.0;
     std::string sample_id;
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.

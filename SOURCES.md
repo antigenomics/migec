@@ -175,11 +175,11 @@ comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
 
 | Item | Value |
 |---|---|
-| Use | the four panels the README embeds: barcode rank, MIG size spectrum, rank/Zipf, consensus quality |
+| Use | the panels the README embeds: barcode rank, MIG size spectrum, rank/Zipf, consensus quality, and the two barcode-error-against-depth panels |
 | Regenerate | `python scripts/example_figures.py` -- simulates, runs all three stages, copies the tables, redraws |
-| Tables | `assets/PBMC.cell_rank.tsv`, `PBMC.sizes.tsv`, `assemble.quality_by_depth.tsv`, `assemble.coverage.tsv` |
+| Tables | `assets/PBMC.cell_rank.tsv`, `PBMC.sizes.tsv`, `PBMC.umi_errors.tsv`, `assemble.quality_by_depth.tsv`, `assemble.coverage.tsv` |
 | Shape | 120 cells x 40-200 molecules, Pareto(1.1) depth, plus 4,000 ambient barcodes with 1-3 molecules each; 0.2% barcode and 1% payload error, seed 3 |
-| Why that shape | a uniform simulator draws all four panels as straight lines. The ambient population is what makes the knee; the Pareto tail is what gives the rank curve slope; the per-base error is what gives emitted quality a spread to draw quartiles over |
+| Why that shape | a uniform simulator draws every panel as a straight line. The Pareto tail reaching ~19,000 reads on one molecule is also what makes the barcode-error panels show anything: saturation of the `3L` neighbour shell is only visible on a molecule deep enough to have spawned all of it. The ambient population is what makes the knee; the Pareto tail is what gives the rank curve slope; the per-base error is what gives emitted quality a spread to draw quartiles over |
 | Provenance | **derived (simulated)** -- never presented as a measurement. `assets/SRR1763769.mig.tsv` beside it is experimental; see the Primer ID entry |
 | Storage | the TSVs are committed, the FASTQ is not (`--keep` writes it locally) |
 

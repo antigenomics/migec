@@ -73,6 +73,16 @@ What gets drawn
    * - ``mig_size_zipf``
      - ``<sample>.sizes.tsv``
      - Molecule size against rank, log-log. A straight line is Zipf; amplification bias bends it.
+   * - ``umi_error_children``
+     - ``<sample>.umi_errors.tsv``
+     - How many distinct error children a molecule spawned, and how many reads were in them,
+       against the depth of the parent. The dashed line is :math:`3L` -- every distinct child
+       there can be -- and where the points leave it is where the barcode neighbourhood filled.
+   * - ``umi_error_rate``
+     - ``<sample>.umi_errors.tsv``
+     - The barcode error rate the two series above imply, per depth, with what ``refine`` reports
+       drawn across them. One decade is ten Phred, so this is directly comparable with the
+       barcode's own reported Q.
    * - ``sample_umis``
      - ``checkout.summary.tsv``
      - Unique UMIs and reads per **sample** barcode -- the multiplexed analogue of the barcode

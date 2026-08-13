@@ -130,14 +130,18 @@ AssembleStats assemble(const AssembleRequest& request) {
         // of `-t`. ONE chunk is held rather than one per worker, so this is ~2 MB whatever the
         // thread count.
         //
-        // ponytail: 8192 is where a real trade sits, and it is worth naming. `parallel_for` starts
-        // and joins its threads per call, so a bigger chunk amortises that: 64 k reads runs 26%
-        // faster (2.51 M reads/s against 1.99 M) but costs 16 MB of resident chunk, and that is
-        // enough to make PASS 1 the memory peak on a finely partitioned shallow library -- which
-        // breaks the property that a finer partition costs less, not more, and
-        // `test_shallow_memory_is_still_bounded_by_the_bucket` catches exactly that. The upgrade
-        // path is a persistent worker pool rather than a bigger chunk: with the threads started
-        // once for the whole pass, chunk size stops buying anything and can stay small.
+        // ponytail: 8192 is where a real trade sits, and it is worth naming. A chunk is one
+        // `parallel_for`, and every one of those starts threads, joins them, and leaves whoever
+        // finishes first idle at the barrier: a bigger chunk amortises all three. Re-measured on
+        // 4 M reads after the work-claiming atomic was batched, 64 k reads a chunk still runs 32%
+        // faster (3.08 M reads/s against 2.32 M) -- but it costs 16 MB of resident chunk, and at
+        // NovaSeq scale on a finely partitioned shallow library that is what makes PASS 1 the
+        // memory peak, which breaks the property that a finer partition costs less, not more.
+        // `test_shallow_memory_is_still_bounded_by_the_bucket` is the guard, and it does not fail
+        // at 64 k on a 500 k-read corpus -- the objection is one of scale, not one the test tier
+        // can see, which is exactly why the constant is written down here with its number. The
+        // upgrade path is a persistent worker pool rather than a bigger chunk: with the threads
+        // started once for the whole pass, chunk size stops buying anything and can stay small.
         constexpr size_t kChunkReads = 8192;
         // What the parallel scan extracts from a record. No strings: the serial pass that follows
         // only validates and counts, so it must not have to touch the comment again.
@@ -314,13 +318,13 @@ AssembleStats assemble(const AssembleRequest& request) {
         std::FILE* table = nullptr;
         auto emit = [&](uint64_t cell_key, uint64_t key, const std::vector<Resident>& group) {
         ++out.groups;
-        {
-            const std::string bases = unpack_barcode(key, stats.umi_length);
-            if (out.usage.empty()) out.usage.assign(bases.size(), {});
-            for (size_t j = 0; j < bases.size(); ++j) {
-                const uint8_t c = base_code(bases[j]);
-                if (c != kInvalidBase) ++out.usage[j][c];
-            }
+        // Unpacked once and used twice: the composition tally below and the record name further
+        // down are the same string, and this runs per GROUP, which is per molecule.
+        const std::string umi = unpack_barcode(key, stats.umi_length);
+        if (out.usage.empty()) out.usage.assign(umi.size(), {});
+        for (size_t j = 0; j < umi.size(); ++j) {
+            const uint8_t c = base_code(umi[j]);
+            if (c != kInvalidBase) ++out.usage[j][c];
         }
         bin(out.size_histogram, group.size());
         if (group.size() < request.min_reads) {
@@ -344,7 +348,6 @@ AssembleStats assemble(const AssembleRequest& request) {
         const uint32_t components = molecules.empty() ? 1 : molecules[0].components;
         if (components > 1) { ++out.groups_fragmented; out.contigs += components; }
         if (molecules.size() > components) ++out.groups_split;
-        const std::string umi = unpack_barcode(key, stats.umi_length);
         const std::string cell =
             stats.cell_length ? unpack_barcode(cell_key, stats.cell_length) : std::string();
         // The count is the true depth of the molecule whenever the group produced exactly one --

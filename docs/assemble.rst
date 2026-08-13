@@ -46,10 +46,10 @@ finer, which exists to use less memory, would use more.
 
 .. code-block:: text
 
-   531,365 reads/s = 1,952,983 partitioning + 181,786 groups/s consensus
+   2,423,777 reads/s = 3,741,782 partitioning + 1,713,585 groups/s consensus
 
     1 bucket:     203 MB
-   16 buckets:    121 MB
+   16 buckets:    123 MB
 
 ``tests/benchmark/test_assemble_speed.py`` asserts that raising the bucket count lowers peak RSS
 and does not change the output. Each configuration is measured in its own process, because

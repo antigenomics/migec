@@ -5,43 +5,43 @@
   "rows": [
     {
       "threads": 1,
-      "reads_per_second": 202717.32437457907,
-      "matching_reads_per_second": 217505.79928235867,
-      "peak_rss_mb": 59.523072,
-      "wall_seconds": 9.865955,
-      "match_seconds": 9.195157125
+      "reads_per_second": 213880.43570074628,
+      "matching_reads_per_second": 216583.85755057388,
+      "peak_rss_mb": 59.293696,
+      "wall_seconds": 9.351018916,
+      "match_seconds": 9.234298542
     },
     {
       "threads": 2,
-      "reads_per_second": 362485.90199213586,
-      "matching_reads_per_second": 412855.196097445,
-      "peak_rss_mb": 77.692928,
-      "wall_seconds": 5.517455959,
-      "match_seconds": 4.8443135
+      "reads_per_second": 394471.13851786836,
+      "matching_reads_per_second": 403392.5176810662,
+      "peak_rss_mb": 78.512128,
+      "wall_seconds": 5.070079417,
+      "match_seconds": 4.957950166
     },
     {
       "threads": 4,
-      "reads_per_second": 603772.7114629938,
-      "matching_reads_per_second": 758800.7851081048,
-      "peak_rss_mb": 97.4848,
-      "wall_seconds": 3.312504792,
-      "match_seconds": 2.635737916
+      "reads_per_second": 737777.3577004663,
+      "matching_reads_per_second": 768809.6241895185,
+      "peak_rss_mb": 100.84352,
+      "wall_seconds": 2.710844917,
+      "match_seconds": 2.60142425
     },
     {
       "threads": 8,
-      "reads_per_second": 910499.9421019915,
-      "matching_reads_per_second": 1335790.6315158927,
-      "peak_rss_mb": 136.47872,
-      "wall_seconds": 2.196595417,
-      "match_seconds": 1.497240625
+      "reads_per_second": 1256837.5892472516,
+      "matching_reads_per_second": 1349533.0907679857,
+      "peak_rss_mb": 138.52672,
+      "wall_seconds": 1.5912955,
+      "match_seconds": 1.481994042
     },
     {
       "threads": 16,
-      "reads_per_second": 1056471.784378863,
-      "matching_reads_per_second": 1684654.0336566502,
-      "peak_rss_mb": 217.25184,
-      "wall_seconds": 1.893093625,
-      "match_seconds": 1.187187375
+      "reads_per_second": 1548834.9594898769,
+      "matching_reads_per_second": 1697313.0080485344,
+      "peak_rss_mb": 214.974464,
+      "wall_seconds": 1.291293167,
+      "match_seconds": 1.178333042
     }
   ]
 }

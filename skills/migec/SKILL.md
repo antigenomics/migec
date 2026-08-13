@@ -197,6 +197,22 @@ any method. Report the molecule count next to the coverage histogram, never alon
 | `<sample>.cells.tsv` | cell, molecules, called — OrdMag, only with cell barcodes |
 | `<sample>.rank.tsv` | the barcode-rank curve and its CDF, log-spaced ranks |
 | `<sample>.bins.tsv` | per MIG size: barcodes, reads, merged as error, payload entropy |
+| `<sample>.sizes.tsv` | the MIG size spectrum at EXACT sizes: molecules and their reads |
+| `<sample>.umi_errors.tsv` | per parent depth: error children, their reads, the rate implied |
+
+**Note: the barcode error rate is reported twice, and that is the point.** `estimated_error` inverts
+the excess of distance-1 NEIGHBOURS, of which a barcode has only `3L`, so it saturates and fails
+downward as the space fills. `error_at_depth` divides the reads in a parent's error children by the
+`c*L` barcode bases that parent had to miscall; reads have no ceiling, so it does not saturate.
+`error_phred` is the same number as a Phred, for comparison with the barcode's own reported Q.
+Against a known injected rate, as a fraction of truth: 0.99 / 0.97 at 0.2% occupancy, 0.88 / 0.76
+at 9.8%, 0.62 / 0.45 at 33%.
+
+**Never: BOTH are bounded by the merges correction made**, so on a FULL barcode space both fall to
+zero -- `correct_umis` refuses to merge there, rightly, because a distance-1 neighbour is more
+likely a real molecule than a child. Read the `saturated` flag; it is what says the answer is a
+floor. And read the table at DEPTH: a child whose parent was never sequenced cannot be counted,
+which at 1-3 reads/UMI is 80% of them, so `error_from_children` over all depths is a lower bound.
 
 **Never: Cells are called on MOLECULES, never reads** — read depth is amplification. OrdMag
 (`--expect-cells`, default 3000) makes the call; the knee is reported beside it, and a disagreement
@@ -345,8 +361,23 @@ calls 30.62% of MIGs as two molecules; the measured one calls 1.60%. `docs/nulls
 
 ## Speed and memory
 
-Reported on every run. ~1.18 M reads/s at 16 threads; matching *and* compression run on the
-workers, and the serial stage only appends bytes.
+Reported on every run, and every stage is byte-identical at any `-t`. Measured on this machine,
+1 thread against 16:
+
+| stage | 1 thread | 16 threads | scales with |
+|---|---|---|---|
+| `checkout` | 213,880 | 1,548,835 | reads |
+| `refine` | 617,802 | 1,554,156 | distinct barcodes |
+| `assemble` | 554,106 | 2,470,928 | reads, then the largest bucket |
+
+reads/s. `assets/benchmark_threads.tsv` is the committed checkout table and the figure is drawn
+from it; regenerate with `python scripts/benchmark_threads.py --reads 2000000 -o assets/`.
+
+**Note: profile the thread helper, not only the work.** With all three stages threaded, the largest
+single cost in the pipeline was `parallel_for` handing out one item per atomic `fetch_add` — 21% of
+all CPU samples across every thread, on one instruction, because sixteen cores were serialising on
+one cache line. Items are claimed in batches now. Anything that spreads per-read work should be
+checked against the same trap.
 
 **Note: The UMI counters are the allocation that scales with the library** — ~22 bytes per distinct
 UMI (a sorted `(key, count)` array; a hash map is ~48). They are **not yet partitioned**, so a

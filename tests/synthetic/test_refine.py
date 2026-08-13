@@ -350,6 +350,8 @@ def test_a_disagreement_between_ordmag_and_the_knee_is_reported(tmp_path):
                       "reads_corrected": 0, "far": 0, "background_prior": 0.0},
         "suspected_residual": 0, "residual_fdr_at_one": 0.0, "mig_size_threshold": 1,
         "target_fdr": 0.05,
+        "error_from_children": 1.1e-3, "error_at_depth": 1e-3, "error_depth": 10,
+        "error_phred": 30.0,
     }
     report = format_report(summary)
     assert "OrdMag calls" in report

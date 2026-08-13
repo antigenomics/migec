@@ -45,15 +45,15 @@ The stages have different shapes, and one process forces one answer for all thre
      - memory
    * - ``checkout``
      - reads
-     - 1,056,472 reads/s at 16
+     - 1,548,835 reads/s at 16
      - chunk-bounded, plus the UMI counters
    * - ``refine``
      - **distinct barcodes**
-     - 1,012,368 reads/s at 16
+     - 1,554,156 reads/s at 16
      - the barcode table, ~96 B each
    * - ``assemble``
      - reads, then buckets
-     - 2,051,937 reads/s at 16
+     - 2,470,928 reads/s at 16
      - one bucket per worker
 
 Splitting them means a failed ``assemble`` resumes without re-running the demultiplex, and each

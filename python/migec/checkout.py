@@ -180,14 +180,16 @@ def format_report(summary: dict) -> str:
             f"-- tag found on the other mate/strand, reads normalised"
         )
     lines.append("")
-    # Two clocks, because they scale differently and only one of them threads: matching is the
-    # part `-t` speeds up, the UMI statistics are a serial pass over every distinct barcode.
+    # Two clocks, because they scale differently: matching is what `-t` speeds up, and the UMI
+    # statistics are a pass over every distinct barcode that runs once per sample at the end. Their
+    # distance-1 census threads now, so the tail is no longer wholly serial -- but it is still a
+    # separate wall, and reporting one number would publish a throughput no user sees.
     total, match = c.get("wall_seconds", 0.0), c.get("match_seconds", 0.0)
     lines.append(
         f"{_dur(total)} "
         f"({c.get('reads_per_second', 0.0):,.0f} reads/s) = "
         f"{_dur(match)} matching on {c.get('threads', 1)} threads "
-        f"+ {_dur(max(0.0, total - match))} UMI statistics, serial"
+        f"+ {_dur(max(0.0, total - match))} UMI statistics"
     )
     lines.append(
         f"peak RSS {_bytes(c.get('peak_rss_bytes', 0))} "

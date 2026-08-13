@@ -244,7 +244,7 @@ UmiComposition UmiCounts::composition(bool weight_by_reads) const {
     return c;
 }
 
-double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
+double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, int threads) {
     const int L = counts.length();
     if (L <= 0 || counts.distinct() < 2) return 0.0;
 
@@ -257,19 +257,26 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
         return it != m.end() && it->key == key;
     };
 
-    // Observed distinct-barcode pairs at Hamming distance 1, counted once each.
-    uint64_t d1_obs = 0;
-    for (const UmiCounts::Entry& e : m) {
+    // Observed distinct-barcode pairs at Hamming distance 1, counted once each. Threaded: a
+    // barcode's 3L probes read the sorted table and nothing else, so each worker keeps its own
+    // tally and they are added up afterwards -- an integer sum, so the total does not depend on
+    // who counted what.
+    const int workers = worker_count(threads, m.size());
+    std::vector<uint64_t> tally(static_cast<size_t>(workers), 0);
+    parallel_for(m.size(), workers, [&](size_t i, int w) {
+        const UmiCounts::Entry& e = m[i];
         for (int j = 0; j < L; ++j) {
             const int shift = 62 - 2 * j;
             const uint64_t cur = (e.key >> shift) & 3u;
             for (uint64_t b = 0; b < 4; ++b) {
                 if (b == cur) continue;
                 const uint64_t nb = (e.key & ~(uint64_t{3} << shift)) | (b << shift);
-                if (nb > e.key && present(nb)) ++d1_obs;  // count each pair once
+                if (nb > e.key && present(nb)) ++tally[static_cast<size_t>(w)];  // each pair once
             }
         }
-    }
+    });
+    uint64_t d1_obs = 0;
+    for (uint64_t v : tally) d1_obs += v;
 
     const double n = static_cast<double>(counts.distinct());
     double p_coll = 1.0;
@@ -437,7 +444,7 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
 
     const UmiComposition comp = counts.composition(false);
     double eps = params.sequencing_error;
-    if (eps < 0.0) eps = estimate_umi_error(counts, comp);
+    if (eps < 0.0) eps = estimate_umi_error(counts, comp, params.threads);
     if (eps <= 0.0) eps = 1e-4;  // a floor, so correction still runs on a clean small library
     res.estimated_error = eps;
 

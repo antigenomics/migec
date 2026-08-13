@@ -239,8 +239,83 @@ set key inside top right
 # over-sequenced: most MOLECULES are shallow, and most READS are in the deep ones. A figure with
 # only the first says the library is fine and a figure with only the second says it is saturated.
 # log1p on x so a molecule seen once has a place on the axis; a plain log drops it.
+#
+# Never: "reads in them" is POINTS, never a line. The spectrum is one row per EXACT size, and past
+# the head almost every size holds one molecule -- so reads == size, and a line through those
+# points draws the y = x diagonal as the most prominent feature of the figure. It is a tautology,
+# not a second mode. Where two or three molecules share a size the same line sawtooths between
+# size*1 and size*2, which is integer quantisation drawn as signal, and it bridges gaps in the
+# support where no size was observed at all. Points say what the data are: isolated observations,
+# one per size, most of them a single molecule.
 plot "{src}" using 2:3 with boxes lc rgb "#1b9e77" title "molecules", \
-     "" using 2:4 axes x1y2 with lines lw 2.5 lc rgb "#d95f02" title "reads in them"
+     "" using 2:4 axes x1y2 with points pt 7 ps 0.5 lc rgb "#d95f02" title "reads in them"
+""",
+    ),
+    Panel(
+        name="umi_error_children",
+        source="*.umi_errors.tsv",
+        script="""
+set title "Barcode errors against the parent's depth -- distinct children, and the reads in them"
+set xlabel "reads carried by the parent"
+set ylabel "per parent"
+set logscale xy
+set key inside top left
+# A parent seen c times had c*L barcode bases to miscall, so both series should rise with c -- but
+# only one of them can rise forever. There are just 3L distinct barcodes one substitution away, so
+# the DISTINCT-children curve bends over and stops; the READS-in-children curve has no ceiling and
+# keeps climbing. The dashed line is that ceiling. Where the points leave it is where the barcode
+# neighbourhood filled, measured rather than predicted, and it is the same saturation that makes
+# the distance-1 error estimate fail downward.
+#
+# Points, never lines: one row is one exact depth, and past the head most depths hold a handful of
+# parents, so a line would draw quantisation noise as structure.
+plot "{src}" using 1:($5 > 0 ? $5 : 1/0) with points pt 7 ps 0.5 lc rgb "#1b9e77" \
+       title "distinct child barcodes", \
+     "" using 1:($6 > 0 ? $6 : 1/0) with points pt 7 ps 0.5 lc rgb "#d95f02" \
+       title "reads in those children", \
+     "" using 1:7 with lines lw 1.5 dt 2 lc rgb "{INK}" \
+       title "3L, the only children there can be"
+""",
+    ),
+    Panel(
+        name="umi_error_rate",
+        source="*.umi_errors.tsv",
+        script="""
+set title "Barcode error rate by depth -- two estimators of one number"
+set xlabel "reads carried by the parent"
+# Phred in the label rather than on a second axis: Phred is -10 log10 of an error rate, so on a log
+# y axis one decade IS ten Phred and a linked axis would only relabel the same gridlines. (gnuplot
+# refuses to link a nonlinear axis anyway.) It is named because the number this figure produces has
+# to be comparable with the barcode's own reported quality, which is the only independent check on
+# it there is -- `phred_from_reads` is column 10 of the table if you want it per row.
+set ylabel "error per base per read -- one decade is 10 Phred, 1e-3 is Q30"
+set logscale xy
+set key inside bottom left
+# The estimate that matters, and the reason there are two of it. Both invert a model of the same
+# eps against the same row:
+#
+#   distinct children  u(c) = 3L (1 - exp(-c eps / 3))    saturates at 3L
+#   reads in children  r(c) = c L eps                     no ceiling
+#
+# They agree while the neighbourhood is empty and part company as it fills, and the depth where
+# they part is worth more than either curve: it is where a distance-1 estimate stops being usable
+# on this library. `error_from_variants` is blank past saturation rather than small, because
+# inverting a full neighbourhood reports "no errors" for the most error-ridden case there is.
+#
+# Never: read this at DEPTH. A child whose parent was never sequenced cannot be merged and so
+# cannot be counted, which at 1-3 reads/UMI is 80% of them -- the left-hand end of this figure is a
+# lower bound and the right-hand end is the measurement.
+#
+# Never: both series are bounded by the merges correction made, so neither survives a FULL barcode
+# space -- there `correct_umis` refuses to merge, rightly, and both fall to zero. Against an
+# injected rate: 0.99 and 0.97 of truth at 0.2% occupancy, 0.62 and 0.45 at 33%, and nothing at
+# 100%. The `saturated` flag in the report is what says the answer is a floor.
+plot "{src}" using 1:($9 > 0 ? $9 : 1/0) with points pt 7 ps 0.5 lc rgb "#d95f02" \
+       title "from the reads in the children", \
+     "" using 1:($8 > 0 ? $8 : 1/0) with points pt 6 ps 0.5 lc rgb "#1b9e77" \
+       title "from the distinct children (saturates)", \
+     "" using 1:($11 > 0 ? $11 : 1/0) with lines lw 1.5 dt 2 lc rgb "{INK}" \
+       title "what refine reports, read at depth"
 """,
     ),
     Panel(

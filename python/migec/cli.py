@@ -289,9 +289,10 @@ def refine(
     ),
     threads: int = typer.Option(
         0, "--threads", "-t",
-        help="Worker threads for the neighbourhood scan and the read rewrite; 0 uses one per "
-        "core. The output is byte-identical whatever this is: the scan is a pure function of the "
-        "barcode table, and the merges it finds are applied serially afterwards.",
+        help="Worker threads for the neighbourhood scan, the error-rate estimate, the residual-FDR "
+        "scan and the read rewrite; 0 uses one per core. The output is byte-identical whatever "
+        "this is: all four are pure functions of the barcode table, and the merges the scan finds "
+        "are applied serially afterwards.",
     ),
     limit_read: int = typer.Option(
         0,

@@ -320,7 +320,11 @@ struct CorrectionResult {
 //     E[D1](eps) = C(n,2) * P_collision
 //                + 3L * sum_i (1 - exp(-c_i eps))         parent-child
 //                + 3L * sum_i (1 - exp(-c_i eps))^2       sibling
-double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp);
+//
+// `threads` only spreads the distance-1 census, which is 3L binary searches per barcode and was
+// the largest serial block left in both checkout and refine. It is a sum of integers over a
+// read-only table, so the answer does not depend on it.
+double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, int threads = 1);
 
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {},
                               const BarcodeEvidence& evidence = {});

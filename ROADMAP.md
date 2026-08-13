@@ -18,7 +18,7 @@ count. `scripts/spikein_ratio.py` computes the published spike-in validation met
 and merging reported separately.
 
 **Throughput and footprint**: every stage threads and every stage is byte-identical at any `-t` --
-checkout 1.06 M reads/s end to end (1.68 M matching), refine 1.01 M, assemble 2.05 M, all at 16
+checkout 1.55 M reads/s end to end (1.70 M matching), refine 1.55 M, assemble 2.47 M, all at 16
 threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
 as well as by comparison at 1..16 threads.
 The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
@@ -130,7 +130,7 @@ above has to be built rather than downloaded.
       when that makes contigs untrustworthy
 - [x] Shallow libraries (1-3 reads/UMI) run, report the coverage histogram, threshold nothing, and
       say that the UMI is buying counting rather than error correction. Benchmarked as the
-      memory-hostile shape: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct barcode
+      memory-hostile shape: 1,179,549 reads/s at 1.02 reads/UMI, 282 B resident per distinct barcode
 - [x] **`--rt-error` names the chemistry** rather than guessing: `rt` 1e-4 (default, Q40 -- 10x's
       figure for the V(D)J RT and X2's own measurement), `medium` 1e-5, `high` 1e-6, or the rate.
       Never: it is the ONE-MOLECULE floor; 10x's Q60 needs two UMIs to agree and that is arda's job

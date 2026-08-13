@@ -348,9 +348,16 @@ RefineStats refine(const RefineRequest& request) {
         // up as 100 MB of fixed cost at 32 threads before anything had been read.
         constexpr size_t kChunkReads = 4096;
         const int rewrite_threads = worker_count(request.correction.threads, 64);
-        std::vector<std::vector<FastqOwned>> chunks(static_cast<size_t>(rewrite_threads));
+        // Sized once and ASSIGNED into, never cleared -- the same trade assemble's partition
+        // makes. `clear()` destroys four std::string per record, so every round would cost
+        // 4 x kChunkReads allocations and the reader would sit in malloc instead of inflate.
+        std::vector<std::vector<FastqOwned>> chunks(static_cast<size_t>(rewrite_threads),
+                                                    std::vector<FastqOwned>(kChunkReads));
+        std::vector<size_t> held(static_cast<size_t>(rewrite_threads), 0);
         std::vector<std::string> plain(static_cast<size_t>(rewrite_threads));
         std::vector<std::string> packed(static_cast<size_t>(rewrite_threads));
+        std::vector<std::string> scratch_comment(static_cast<size_t>(rewrite_threads));
+        std::vector<std::string> scratch_whole(static_cast<size_t>(rewrite_threads));
 
         std::FILE* fh = std::fopen(fastq_path.string().c_str(), "wb");
         if (!fh) throw MigecError("refine: cannot write " + fastq_path.string());
@@ -359,7 +366,8 @@ RefineStats refine(const RefineRequest& request) {
         bool eof = false;
         uint64_t written = 0;
 
-        auto rewrite_one = [&](const FastqOwned& r, std::string& dst) {
+        auto rewrite_one = [&](const FastqOwned& r, std::string& dst, std::string& comment,
+                               std::string& whole) {
             const std::string_view umi = tag_value(r.comment, "RX:Z:");
             if (umi.empty()) return;
             const std::string_view cell = tag_value(r.comment, "CB:Z:");
@@ -375,15 +383,21 @@ RefineStats refine(const RefineRequest& request) {
                 return;
             }
             const uint32_t root = correction.root[i];
-            std::string comment(r.comment);
+            comment.assign(r.comment);
             // The final barcode is the root's, which already carries the whitelist snap because
             // the snap happened before the table was built. Compare against what the READ said,
             // not against the root only: a barcode can be snapped by the whitelist without being
             // merged by the posterior, and rewriting it only in the second case would leave the
             // CB tag disagreeing with the key everything else was grouped on.
-            const std::string whole = unpack_barcode(entries[root].key, L);
-            const std::string new_cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
-            const std::string new_umi = whole.substr(static_cast<size_t>(stats.cell_length));
+            //
+            // `comment` and `whole` are the worker's own scratch, reused read after read, and the
+            // two halves are views into `whole`: a fresh string plus two substr is four
+            // allocations per read on a path every read takes.
+            whole = unpack_barcode(entries[root].key, L);
+            const std::string_view new_cell =
+                std::string_view(whole).substr(0, static_cast<size_t>(stats.cell_length));
+            const std::string_view new_umi =
+                std::string_view(whole).substr(static_cast<size_t>(stats.cell_length));
             if (new_umi != umi) {
                 const size_t at = comment.find("RX:Z:");
                 comment.replace(at + 5, umi.size(), new_umi);
@@ -403,22 +417,28 @@ RefineStats refine(const RefineRequest& request) {
             size_t filled = 0;
             for (; filled < chunks.size(); ++filled) {
                 std::vector<FastqOwned>& c = chunks[filled];
-                c.clear();
-                while (c.size() < kChunkReads && (!stats.limited || written < stats.reads) &&
+                size_t n = 0;
+                while (n < kChunkReads && (!stats.limited || written < stats.reads) &&
                        reader.next(rec)) {
                     ++written;
-                    c.push_back({std::string(rec.name), std::string(rec.comment),
-                                 std::string(rec.seq), std::string(rec.qual)});
+                    FastqOwned& slot = c[n++];
+                    slot.name.assign(rec.name);
+                    slot.comment.assign(rec.comment);
+                    slot.seq.assign(rec.seq);
+                    slot.qual.assign(rec.qual);
                 }
-                if (c.empty()) { eof = true; break; }
-                if (c.size() < kChunkReads) { ++filled; eof = true; break; }
+                held[filled] = n;
+                if (n == 0) { eof = true; break; }
+                if (n < kChunkReads) { ++filled; eof = true; break; }
             }
             if (filled == 0) break;
 
             parallel_for(filled, rewrite_threads, [&](size_t t, int) {
                 std::string& dst = plain[t];
                 dst.clear();
-                for (const FastqOwned& r : chunks[t]) rewrite_one(r, dst);
+                for (size_t k = 0; k < held[t]; ++k) {
+                    rewrite_one(chunks[t][k], dst, scratch_comment[t], scratch_whole[t]);
+                }
                 if (request.gzip_level > 0) {
                     gzip_member(dst, packed[t], request.gzip_level);
                 } else {
@@ -640,6 +660,123 @@ RefineStats refine(const RefineRequest& request) {
         std::fclose(sf);
     }
     {
+        // ------------------------------------------- barcode errors against the parent's depth
+        //
+        // The error rate measured at every amplification depth, instead of once for the library.
+        // A parent carrying c reads had c*L barcode bases for the instrument and the polymerase to
+        // get wrong, and its error children are what they got wrong, so two estimators of the same
+        // eps fall out of the same row:
+        //
+        //   distinct children   u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
+        //   reads in children   r(c) = c L eps                    -> eps = r / (c L)
+        //
+        // They are the check on each other, not two opinions. The first counts distinct
+        // NEIGHBOURS and a barcode has only 3L of them, so it saturates; the second counts READS,
+        // of which there is no ceiling, so it does not. Where the two part company on the figure
+        // is where the neighbourhood filled, read off the data rather than predicted. Past
+        // saturation the first is left blank rather than reported as a small number, because
+        // inverting a full neighbourhood returns "no errors" for the most error-ridden library
+        // there can be.
+        //
+        // Never: BOTH are bounded by the merges correction actually made, so neither is a
+        // saturation-free estimator and this table must not be read as one. Measured against an
+        // injected rate on simulated libraries (`tests/synthetic/test_umi_errors.py`), as a
+        // fraction of the truth:
+        //
+        //     occupancy    0.2%   2.3%   9.8%    33%    100%
+        //     distance-1   0.97   0.96   0.76   0.45   0.001
+        //     children     0.99   0.95   0.88   0.62   0.00
+        //
+        // So it is the better of the two wherever either works, and at 100% they both go to zero
+        // for the same reason: on a full barcode space `correct_umis` refuses to merge -- and it
+        // is right to, because a distance-1 neighbour there is more likely a real molecule than a
+        // child. `saturated` is what says the answer is a floor. Read that flag; do not read this
+        // table instead of it.
+        //
+        // Never: this counts children that were FOUND, so at 1-3 reads/UMI it is a lower bound --
+        // 80% of barcode errors there have no sequenced parent to be merged into and are
+        // unreachable in principle. That is why `error_at_depth` is read where correction is
+        // near-complete instead of averaged over every molecule, and why the depth it was read at
+        // travels with it.
+        struct Row { uint64_t parents = 0, children = 0, child_reads = 0; };
+        std::map<uint32_t, Row> by_depth;  // the PARENT's own reads -> what its children came to
+        for (size_t i = 0; i < entries.size(); ++i) {
+            const uint32_t root = correction.root[i];
+            if (root == i) {
+                ++by_depth[entries[i].count].parents;
+            } else {
+                Row& r = by_depth[entries[root].count];
+                ++r.children;
+                r.child_reads += entries[i].count;
+            }
+        }
+
+        const double Lf = static_cast<double>(L);
+        const double ceiling = 3.0 * Lf;  // distinct distance-1 neighbours a barcode can have
+        // Deep enough that a child almost always has its parent in the table, so the count is not
+        // a lower bound worth quoting. Below this the estimate is reported per row but not taken.
+        constexpr uint32_t kTrustedDepth = 10;
+        uint64_t all_parent_reads = 0, all_child_reads = 0;
+        uint64_t deep_parent_reads = 0, deep_child_reads = 0;
+        for (const auto& [depth, row] : by_depth) {
+            all_parent_reads += static_cast<uint64_t>(depth) * row.parents;
+            all_child_reads += row.child_reads;
+            if (depth >= kTrustedDepth) {
+                deep_parent_reads += static_cast<uint64_t>(depth) * row.parents;
+                deep_child_reads += row.child_reads;
+            }
+        }
+        stats.error_from_children =
+            all_parent_reads ? static_cast<double>(all_child_reads) /
+                                   (static_cast<double>(all_parent_reads) * Lf) : 0.0;
+        if (deep_parent_reads) {
+            stats.error_at_depth = static_cast<double>(deep_child_reads) /
+                                   (static_cast<double>(deep_parent_reads) * Lf);
+            stats.error_depth = kTrustedDepth;
+            if (stats.error_at_depth > 0.0) {
+                stats.error_phred = -10.0 * std::log10(stats.error_at_depth);
+            }
+        }
+
+        // `neighbours` and `estimate` are constant down the column, and that is deliberate: the
+        // figure draws the saturation ceiling and the library's own estimate as reference lines,
+        // and a figure that cannot be redrawn from the committed table alone is a figure that will
+        // one day disagree with the report. Two repeated columns are cheaper than a gnuplot script
+        // that shells out to recover them.
+        std::FILE* ef =
+            std::fopen((out_dir / (stats.sample_id + ".umi_errors.tsv")).string().c_str(), "w");
+        if (!ef) throw MigecError("refine: cannot write the barcode error table");
+        std::fprintf(ef, "parent_reads\tparents\tchild_barcodes\tchild_reads\t"
+                         "children_per_parent\treads_per_parent\tneighbours\t"
+                         "error_from_variants\terror_from_reads\tphred_from_reads\testimate\n");
+        for (const auto& [depth, row] : by_depth) {
+            if (!row.parents) continue;
+            const double c = static_cast<double>(depth);
+            const double np = static_cast<double>(row.parents);
+            const double u = static_cast<double>(row.children) / np;
+            const double r = static_cast<double>(row.child_reads) / np;
+            const double eps_reads = r / (c * Lf);
+            const bool invertible = u < ceiling;
+            const double eps_variants = invertible ? -(3.0 / c) * std::log1p(-u / ceiling) : 0.0;
+            std::fprintf(ef, "%u\t%llu\t%llu\t%llu\t%.6f\t%.6f\t%.1f\t", depth,
+                         static_cast<unsigned long long>(row.parents),
+                         static_cast<unsigned long long>(row.children),
+                         static_cast<unsigned long long>(row.child_reads), u, r, ceiling);
+            if (invertible) {
+                std::fprintf(ef, "%.6e\t", eps_variants);
+            } else {
+                std::fprintf(ef, ".\t");  // the neighbourhood is full; inverting it says nothing
+            }
+            if (eps_reads > 0.0) {
+                std::fprintf(ef, "%.6e\t%.2f\t", eps_reads, -10.0 * std::log10(eps_reads));
+            } else {
+                std::fprintf(ef, "0.000000e+00\t.\t");
+            }
+            std::fprintf(ef, "%.6e\n", stats.error_at_depth);
+        }
+        std::fclose(ef);
+    }
+    {
         // Per MIG-size bin: how much of it was error, and how diverse the sequence is there.
         // Error children pile up at low counts; finding them at high counts means the correction
         // is merging real molecules, and the sequence entropy is what says whether a bin holds
@@ -676,8 +813,17 @@ RefineStats refine(const RefineRequest& request) {
         std::vector<uint64_t> suspected(nbins, 0);
         {
             const int width = L;
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (correction.corrected[i] == 0) continue;
+            // Threaded, and it is the whole reason this is not the serial tail any more: the scan
+            // is 3L binary searches per surviving barcode, which measured 0.53 s of a 2.17 s run on
+            // 2 M reads -- a quarter of refine, on one core, after everything else had been
+            // parallelised. It reads the barcode table and the payload draft and writes nothing
+            // shared, so a per-worker bin counter merged afterwards is the whole change; the
+            // counters are integers, so the merge is order-independent and `-t` still changes
+            // nothing but the clock.
+            std::vector<std::vector<uint64_t>> per_worker(
+                static_cast<size_t>(stats.threads), std::vector<uint64_t>(nbins, 0));
+            parallel_for(entries.size(), stats.threads, [&](size_t i, int w) {
+                if (correction.corrected[i] == 0) return;
                 const uint32_t mine = correction.corrected[i];
                 bool looks_like_a_child = false;
                 for (int j = 0; j < width && !looks_like_a_child; ++j) {
@@ -717,12 +863,17 @@ RefineStats refine(const RefineRequest& request) {
                         }
                     }
                 }
-                if (!looks_like_a_child) continue;
+                if (!looks_like_a_child) return;
                 size_t bidx = 0;
                 while ((mine >> bidx) > 1) ++bidx;
                 if (bidx >= nbins) bidx = nbins - 1;
-                ++suspected[bidx];
-                ++stats.suspected_residual;
+                ++per_worker[static_cast<size_t>(w)][bidx];
+            });
+            for (const std::vector<uint64_t>& mine : per_worker) {
+                for (size_t b = 0; b < nbins; ++b) {
+                    suspected[b] += mine[b];
+                    stats.suspected_residual += mine[b];
+                }
             }
         }
         const std::vector<uint64_t> surviving_in = molecules_per_bin(correction, nbins);

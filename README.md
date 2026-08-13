@@ -163,8 +163,8 @@ reads       2,000,000
   unmatched 0 (0.0%)
   ambiguous 0 (0.0%)
 
-2.2 s (903,599 reads/s) = 1.5 s matching on 8 threads + 0.7 s UMI statistics, serial
-peak RSS 131.0 MB of which UMI counters 21.2 MB
+1.6 s (1,243,801 reads/s) = 1.5 s matching on 8 threads + 0.1 s UMI statistics
+peak RSS 136.0 MB of which UMI counters 11.5 MB
 
 sample             reads        UMIs  reads/UMI  UMI len  eff len
 S1               500,000     125,000       4.00       12    12.00
@@ -231,7 +231,7 @@ migec assemble out/S1.fq.gz -o cons/ --contig     # random-primed reads that til
 A molecule is **sample + cell barcode + UMI**, never the UMI alone — the same UMI in two cells is
 two molecules, and that is the design rather than a defect. Reads are range partitioned on the
 packed key into `.mig` buckets and one bucket is sorted at a time, so nothing scales with the
-library: 531,365 reads/s, and 121 MB at 16 buckets against 203 MB at one.
+library: 2,423,777 reads/s, and 123 MB at 16 buckets against 203 MB at one.
 
 The per-column posterior is `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`, and then the number that
 matters:
@@ -333,6 +333,30 @@ than in power-of-two bins: four bins make four steps, and a straight line cannot
 bent one.
 
 <p align="center"><img alt="molecule size against rank" src="assets/mig_size_zipf.svg" width="72%"></p>
+
+**Barcode errors against the parent's depth** — how many distinct error children a molecule
+spawned, and how many reads were in them. A parent seen *c* times had *c·L* barcode bases to
+miscall, so both series climb with *c* — but only one of them can climb forever. There are exactly
+*3L* barcodes one substitution away, so the distinct-children series bends over at the dashed line
+while the reads series carries straight past it. Where they part is where this library's barcode
+neighbourhood filled up, measured rather than predicted.
+
+<p align="center"><img alt="barcode errors against depth" src="assets/umi_error_children.svg" width="72%"></p>
+
+Invert both and you get two estimates of the same barcode error rate, per depth, with what `refine`
+reports drawn across them. The y axis is a log error rate, so one decade is exactly ten Phred and
+1e-3 is Q30 — which makes the number directly comparable with the barcode's own reported quality,
+the only independent check on it there is. On a diverse library sequenced 25 deep it lands within
+1% of a known injected rate.
+
+<p align="center"><img alt="barcode error rate by depth" src="assets/umi_error_rate.svg" width="72%"></p>
+
+> **Never** read this instead of the `saturated` flag. Both series count only the children
+> correction actually merged, and on a *full* barcode space `refine` refuses to merge — rightly,
+> because a distance-1 neighbour there is more likely a real molecule than an error child — so both
+> estimates collapse to zero. Against a known rate they are 0.99 and 0.97 of the truth at 0.2%
+> occupancy, 0.62 and 0.45 at 33%, and nothing at 100%. See
+> [docs/umi_errors.rst](docs/umi_errors.rst).
 
 **Consensus quality against depth**, as a box, never a thinned scatter. Emitted quality is discrete
 and capped at the floor, so at any real depth every molecule sits on one or two integers: a cloud
@@ -474,7 +498,7 @@ warning: 79.4% of molecules were seen once. A consensus over one read is that re
 ```
 
 It is also the memory-hostile case, because distinct barcodes are what everything scales with, so
-it is what the benchmarks use: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct
+it is what the benchmarks use: 1,179,549 reads/s at 1.02 reads/UMI, 282 B resident per distinct
 barcode, still bounded by the bucket rather than the library.
 
 ### Speed and memory are reported, not assumed
@@ -487,11 +511,12 @@ and nothing else, which is asserted per stage in C++, at the CLI, and under the 
 
 | stage | 1 thread | 16 threads | bound by |
 |---|---|---|---|
-| `checkout` | 202,717 | **1,056,472** | reads |
-| `refine` | 605,611 | **1,012,368** | distinct barcodes |
-| `assemble` | 549,745 | **2,051,937** | reads, then the largest bucket |
+| `checkout` | 213,880 | **1,548,835** | reads |
+| `refine` | 617,802 | **1,554,156** | distinct barcodes |
+| `assemble` | 554,106 | **2,470,928** | reads, then the largest bucket |
 
-reads/s. Two of those used to be 222,017 and 202,977, and the first fix was not a thread: **zlib at
+reads/s — `refine` and `assemble` on a 500 k-read sample, `checkout` on 2 M. Two of those used to
+be 222,017 and 202,977, and the first fix was not a thread: **zlib at
 its default level 6 was 83% of refine's wall clock**, compressing an intermediate the next stage
 decompresses immediately. Level 1 costs 21% more bytes and gave 3x before a single thread was
 added. Measure the stage before parallelising it.
@@ -509,18 +534,32 @@ malloc instead of inflate.
 | reads/s | 1,481,946 | **2,051,937** |
 | peak RSS | 1,479 MB | **789 MB** |
 
+That is the record of *that* change. Batching the work-claiming atomic later took the same corpus
+to **1.72 s and 2,324,403 reads/s**.
+
 The memory fell with it, because the estimate deciding how finely to cut the input said a gzipped
 FASTQ goes resident at 8x its on-disk size and it is really **19x** — a resident record is two heap
 `std::string` with their allocator headers, not the 180 bytes of payload. Guessing low picks too
 few buckets, and pass 2 holds sixteen of them at once.
 
+And once every stage was threaded, the largest single cost in the whole pipeline was the
+**thread helper itself**. `parallel_for` handed out one item per atomic `fetch_add`, and when an
+item is one read's tag scan that instruction took **21% of all CPU samples across every thread** —
+more than the work it was handing out. Sixteen cores serialise on one cache line. Items are claimed
+in batches now, sized so each worker takes ~8 turns, collapsing to 1 when there are few items,
+which is the uneven case (one bucket per item) the counter existed for. Two serial blocks went with
+it: the distance-1 census inside `estimate_umi_error`, which is checkout's per-sample tail, and
+refine's residual-FDR scan, which was 0.53 s of a 2.17 s run on one core after everything around it
+had been parallelised. Both are read-only scans of the barcode table that tally integers, so they
+thread exactly and `-t` still changes nothing but the clock.
+
 | threads | reads/s | matching reads/s | peak RSS |
 |---|---|---|---|
-| 1 | 202,717 | 217,506 | 60 MB |
-| 2 | 362,486 | 412,855 | 78 MB |
-| 4 | 603,773 | 758,801 | 97 MB |
-| 8 | 910,500 | 1,335,791 | 136 MB |
-| 16 | **1,056,472** | **1,684,654** | 217 MB |
+| 1 | 213,880 | 216,584 | 59 MB |
+| 2 | 394,471 | 403,393 | 79 MB |
+| 4 | 737,777 | 768,810 | 101 MB |
+| 8 | 1,256,838 | 1,349,533 | 139 MB |
+| 16 | **1,548,835** | **1,697,313** | 215 MB |
 
 <p align="center"><img alt="checkout thread scaling" src="assets/benchmark_threads.svg" width="72%"></p>
 

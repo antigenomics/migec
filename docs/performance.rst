@@ -7,8 +7,8 @@ asking.
 
 .. code-block:: text
 
-   2.2 s (903,599 reads/s) = 1.5 s matching on 8 threads + 0.7 s UMI statistics, serial
-   peak RSS 131.0 MB of which UMI counters 21.2 MB
+   1.6 s (1,243,801 reads/s) = 1.5 s matching on 8 threads + 0.1 s UMI statistics
+   peak RSS 136.0 MB of which UMI counters 11.5 MB
 
 The same fields are in ``checkout.json`` as ``wall_seconds``, ``match_seconds``,
 ``reads_per_second``, ``threads``, ``peak_rss_bytes`` and ``umi_memory_bytes``.
@@ -20,8 +20,10 @@ Two clocks, because they scale differently
 That is the part ``--threads`` speeds up, and it scales with the number of *reads*.
 
 ``wall_seconds`` also covers the per-sample statistics — the coverage histogram, the composition,
-and the count correction — which run once at the end, on one thread, and scale with the number of
-*distinct UMIs* at roughly 1.5–2 µs each. On a shallow library that is most of the run.
+and the count correction — which run once at the end, after the driver has finished, and scale with
+the number of *distinct UMIs* rather than with reads. Their largest part, the distance-1 census
+inside ``estimate_umi_error``, threads now; the histogram and the composition still do not. On a
+shallow library this tail is still a large share of the run.
 
 They are reported separately because a single number would hide which one to attack, and because a
 throughput figure that stopped at the driver would be measuring the matcher rather than checkout.
@@ -48,35 +50,35 @@ corpus ``tests/benchmark/`` builds — on an M-series laptop:
      - matching reads/s
      - peak RSS
    * - 1
-     - 9.9 s
-     - 202,717
+     - 9.4 s
+     - 213,880
      - 9.2 s
-     - 217,506
-     - 60 MB
+     - 216,584
+     - 59 MB
    * - 2
-     - 5.5 s
-     - 362,486
-     - 4.8 s
-     - 412,855
-     - 78 MB
+     - 5.1 s
+     - 394,471
+     - 5.0 s
+     - 403,393
+     - 79 MB
    * - 4
-     - 3.3 s
-     - 603,773
+     - 2.7 s
+     - 737,777
      - 2.6 s
-     - 758,801
-     - 98 MB
+     - 768,810
+     - 101 MB
    * - 8
-     - 2.2 s
-     - 910,500
+     - 1.6 s
+     - 1,256,838
      - 1.5 s
-     - 1,335,791
-     - 136 MB
+     - 1,349,533
+     - 139 MB
    * - 16
-     - 1.9 s
-     - 1,056,472
+     - 1.3 s
+     - 1,548,835
      - 1.2 s
-     - 1,684,654
-     - 217 MB
+     - 1,697,313
+     - 215 MB
 
 Measured 2026-08-13 by ``python scripts/benchmark_threads.py --reads 2000000 -o assets/``, which
 writes ``assets/benchmark_threads.tsv``; ``migec plot assets/`` draws the figure from that table,
@@ -85,9 +87,10 @@ sent every read to one sample of four -- the matcher still scored all four patte
 matching column was sound, but the per-sample counters were not, and the memory figure was a
 single sample's.
 
-The serial 0.7 s of statistics is why the end-to-end column flattens at 16 threads while the
-matching column is still scaling. Amdahl, and it is the next thing to fix rather than the thread
-count.
+The statistics tail is why the end-to-end column trails the matching column, and it is Amdahl
+rather than the thread count. Threading the distance-1 census inside it narrowed that gap from 20%
+to 9%: at 8 threads the tail fell from 0.7 s to 0.1 s on this corpus. What is left of it — the
+coverage histogram and the composition — is the next thing to attack, not more threads.
 
 Two things had to be true for the matching to scale, and neither is obvious:
 
@@ -109,8 +112,8 @@ tabulates into 1.2 kB. It was 90% of runtime before it did.
 .. note::
 
    Non-scaling parts are the gzip *read* of the input, which is one thread by construction, the
-   ``fwrite`` of already-compressed blocks, and the per-sample statistics. At 16 threads on this
-   machine the statistics are the larger of the two walls.
+   ``fwrite`` of already-compressed blocks, and what is left of the per-sample statistics once
+   their distance-1 census threads: the coverage histogram and the composition.
 
 refine and assemble
 -------------------
@@ -126,20 +129,21 @@ first fix was not a thread:
      - 16 threads
      - bound by
    * - ``checkout``
-     - 202,717
-     - 1,056,472
+     - 213,880
+     - 1,548,835
      - reads
    * - ``refine``
-     - 605,611
-     - 1,012,368
+     - 617,802
+     - 1,554,156
      - distinct barcodes
    * - ``assemble``
-     - 549,745
-     - 2,051,937
+     - 554,106
+     - 2,470,928
      - reads, then the largest bucket
 
-reads/s on the same 500 k-read sample, except ``assemble``, which is measured on 4 M reads because
-its partition only shows up at that size.
+reads/s: ``refine`` and ``assemble`` on the same 500 k-read sample, ``checkout`` on the 2 M-read
+corpus of the table above. ``assemble`` on 4 M reads, where its partition dominates, runs at
+2,324,403.
 
 **zlib at its default level 6 was 83% of refine's wall clock** -- 1.78 s of a 2.14 s run,
 compressing an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes
@@ -198,16 +202,23 @@ allocations per read and the reader spends its time in malloc rather than in inf
      - **789 MB**
      - 0.53x
 
+That is the record of *that* change. Batching the work-claiming atomic later took the same corpus
+to **1.72 s and 2,324,403 reads/s**.
+
 .. note::
 
-   The chunk is 8,192 reads, and a bigger one is measurably faster: ``parallel_for`` starts and
-   joins its threads per call, so 64 k reads a chunk runs at **2,510,241 reads/s** against
-   2,051,937 -- 22% more. It costs 16 MB of resident chunk, and that is enough to make the
-   *partition* the memory peak on a finely partitioned shallow library, which breaks the property
-   that a finer partition costs less rather than more.
+   The chunk is 8,192 reads, and a bigger one is measurably faster: a chunk is one
+   ``parallel_for``, and every one of those starts threads, joins them, and leaves whoever
+   finishes first idle at the barrier. Re-measured on 4 M reads after the work-claiming atomic was
+   batched, 64 k reads a chunk still runs at **3,075,506 reads/s** against 2,324,403 -- 32% more.
+   It costs 16 MB of resident chunk, and at NovaSeq scale on a finely partitioned shallow library
+   that is enough to make the *partition* the memory peak, which breaks the property that a finer
+   partition costs less rather than more.
    ``tests/benchmark/test_assemble_speed.py::test_shallow_memory_is_still_bounded_by_the_bucket``
-   is what catches it. The upgrade path is a persistent worker pool rather than a bigger chunk:
-   start the threads once for the whole pass and chunk size stops buying anything.
+   is the guard, and it does **not** fail at 64 k on a 500 k-read corpus: the objection is one of
+   scale, which is why the constant carries its number in the source rather than only a test. The
+   upgrade path is a persistent worker pool rather than a bigger chunk: start the threads once for
+   the whole pass and chunk size stops buying anything.
 
 The memory fell at the same time, and not by accident. Pass 2 holds ``kBucketConcurrency`` buckets
 at once, so how finely the input is cut decides the peak -- and the estimate feeding that choice
@@ -216,6 +227,32 @@ record is two heap ``std::string`` with their allocator headers and rounded-up b
 8-byte keys, not the 180 bytes of payload. Guessing low is the expensive direction, because it
 picks too few buckets. The constant is 20x now, and it is a measurement rather than an estimate --
 which is the property that was missing.
+
+The thread helper was the bottleneck
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Once all three stages were threaded, the single largest cost in the pipeline turned out to be the
+code handing out the work. ``parallel_for`` claimed **one item per atomic** ``fetch_add``, and when
+an item is one read's tag scan, sixteen cores serialise on one cache line: a sampling profile of
+``assemble`` put **21% of all CPU samples, across every thread, on that one instruction** -- more
+than the parse it was distributing. It was the top entry by a factor of four.
+
+Items are claimed in batches now, sized so each worker takes roughly eight turns and capped so a
+ten-million-item scan still hands out ten thousand batches rather than eight. The batch collapses
+to 1 when there are few items, which is exactly the uneven case -- one bucket per item, where one
+bucket holds ten molecules and the next ten million -- that the atomic counter exists for.
+
+Two serial blocks went with it, both read-only scans of the barcode table doing ``3L`` binary
+searches per barcode:
+
+- the **distance-1 census** in ``estimate_umi_error``, which is what checkout's per-sample
+  statistics tail is made of;
+- refine's **residual-FDR scan**, measured at 0.53 s of a 2.17 s run on one core, after everything
+  around it had already been parallelised.
+
+Each tallies integers into a per-worker counter that is summed afterwards, so the answer is
+independent of who counted what and ``-t`` still changes nothing but the clock. Between them,
+checkout's gap between end-to-end and matching throughput fell from 20% to 9%.
 
 .. warning::
 

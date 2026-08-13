@@ -91,7 +91,7 @@ def main() -> None:
         # Never PBMC.mig.tsv: assets/ already holds SRR1763769.mig.tsv, which is REAL data, and
         # two matches for the same glob draw the per-molecule panels twice -- once from a
         # simulation and once from a library, side by side with nothing saying which is which.
-        for name in ("ref/PBMC.cell_rank.tsv", "ref/PBMC.sizes.tsv",
+        for name in ("ref/PBMC.cell_rank.tsv", "ref/PBMC.sizes.tsv", "ref/PBMC.umi_errors.tsv",
                      "asm/assemble.quality_by_depth.tsv", "asm/assemble.coverage.tsv"):
             shutil.copy(work / name, args.out / Path(name).name)
         if args.keep:
