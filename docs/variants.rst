@@ -53,6 +53,16 @@ again. Nothing errors; the molecule count just quietly drops.
 What to run
 -----------
 
+.. warning::
+
+   **A standard caller on consensus reads needs a background model, not just a threshold.** Run
+   over the 0%-certified arm of a reference series, ``LoFreq`` on migec consensus returns 9-11
+   calls per sample at 0.4-1.4% VAF; **94% are** ``-> G``, eight positions recur in 3 of 3
+   replicates, and one of them is the PIK3CA H1047R hotspot itself. That is 2-colour chemistry's
+   dark-G bias, and no consensus removes it because it is systematic rather than random. See
+   :doc:`detection`. What removes it is a per-position background built from normals -- which is
+   the real contribution of the UMI-aware and panel-of-normals callers below.
+
 **If you have UMIs and you are running migec**, collapse first and use a standard caller:
 
 .. code-block:: bash

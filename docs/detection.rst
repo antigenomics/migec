@@ -179,6 +179,79 @@ of detection computed by ``scripts/detection_limit.py`` is a *floor*, not a fiel
 real assay will do worse, and validating against a dilution series is the only way to know by how
 much.
 
+The true negative is not empty
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The arm that matters most is the one certified at **0% mutant**, and running the same
+consensus-then-LoFreq chain over it does not return nothing. It returns **9-11 calls per sample at
+0.4-1.4% VAF**, and they are not noise:
+
+* **94% of them are** ``-> G`` (14 A>G, 9 T>G, 6 C>G, against one C>A and one T>A).
+* **Eight positions recur in 3 of 3 replicates**, with VAF reproducible to the third decimal --
+  ``3:179234288 A>G`` at 0.0137 / 0.0133 / 0.0140, ``4:54733163 A>G`` at 0.0117 / 0.0127 / 0.0140.
+
+A ``-> G`` bias is the signature of **2-colour chemistry**, where G is the base call for *no
+signal*: any position that loses fluorescence reads as G. These runs are MiniSeq, which is
+2-colour. Consensus does not remove it, because it is not a random sequencing error -- it is a
+systematic, position-specific, sequence-context-driven bias that most reads of a molecule share.
+
+Never: **the artifact lands on the hotspot too.** ``3:179234297 A>G`` is PIK3CA H1047R, and the
+true-negative arm calls it at **0.58-0.79%** while the certified 1% arm reads 0.92%.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 46 27 27
+
+   * - arm
+     - measured VAF at H1047R
+     - truth
+   * - undiluted ``cell_line``
+     - 3.6%
+     - positive
+   * - certified 1% (5 ng, 3.3x)
+     - 0.92%
+     - 1%
+   * - **certified 0%** (20 ng, 10x)
+     - **0.66%**
+     - **0%**
+
+Note: those two arms differ in input and depth as well as in truth, so this is not a matched
+comparison -- but the artifact is at the same base, is reproducible across replicates, and is 72%
+the size of the certified signal. A pipeline that reports 0.92% as a detection must explain why
+0.66% is not one.
+
+What follows for the caller
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**A standard caller on consensus reads is not sufficient on its own.** The molecule count is
+right, the consensus is right, and the caller still reports systematic false positives, because
+nothing in that chain knows that *this base on this strand in this context* reads high.
+
+What fixes it is a **per-position background model** built from samples known not to carry the
+variant -- and that, rather than UMI handling as such, is what the UMI-aware and panel-of-normals
+callers actually contribute:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - approach
+     - what it models
+   * - ``Mutect2`` + panel of normals
+     - per-site artifact rate across a normal cohort
+   * - ``Shearwater``, ``DREAMS-vc``
+     - per-position beta-binomial / learned error model over a panel of normals
+   * - ``UMIErrorCorrect``
+     - per-position beta-binomial background
+   * - ``UMI-VarCal``
+     - per-position Poisson background
+   * - ``LoFreq`` alone on consensus
+     - the base qualities only -- which the artifact does not violate
+
+So the recommendation in :doc:`variants` stands for *which* caller, and gains a condition: run it
+against a background model. On this data a panel of normals is not optional, and the WT arm of a
+reference material series is exactly the cohort to build one from.
+
 .. code-block:: bash
 
     migec assemble rf/S1.fq.gz -o as/
