@@ -6,13 +6,26 @@ that does not run is a typo nobody catches until someone types it. Neither had a
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from typer.testing import CliRunner
 
 from migec.cli import app
 from migec.sheet import describe, read_barcodes
 
-runner = CliRunner()
+# A wide terminal, because typer wraps its error box to the terminal width and CI runs at 80
+# columns: an assertion on a message can otherwise pass locally and fail there, having found the
+# message split across two lines. `clean()` is the belt to that braces -- it also strips the ANSI
+# colour codes typer emits.
+runner = CliRunner(env={"COLUMNS": "200", "TERM": "dumb"})
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def clean(output: str) -> str:
+    """Output with colour codes gone and whitespace collapsed, so a wrapped line still matches."""
+    return " ".join(_ANSI.sub("", output).split())
 
 
 def sheet(tmp_path, text):
@@ -86,7 +99,7 @@ def test_sheet_command_prints_the_table(tmp_path):
     p = sheet(tmp_path, "S1\taaACTcagNNNNtNNNNtNNNN\n")
     result = runner.invoke(app, ["sheet", str(p)])
     assert result.exit_code == 0
-    assert "umi=12" in result.output
+    assert "umi=12" in clean(result.output)
 
 
 def test_a_bad_trim_mode_is_rejected(tmp_path):
@@ -170,8 +183,8 @@ def test_a_umi_tools_pattern_is_refused_rather_than_misread(tmp_path):
     r = runner.invoke(app, ["checkout", "reads.fq", "--bc-pattern", "CCCCCCCCCCCCCCCCNNNNNNNNNN",
                             "-o", str(tmp_path / "out")])
     assert r.exit_code != 0
-    assert "cytosine" in r.output
-    assert "XXXXXXXXXXXXXXXXNNNNNNNNNN" in r.output
+    assert "cytosine" in clean(r.output)
+    assert "XXXXXXXXXXXXXXXXNNNNNNNNNN" in clean(r.output)
 
 
 def test_exactly_one_of_barcodes_and_bc_pattern(tmp_path):
@@ -179,7 +192,7 @@ def test_exactly_one_of_barcodes_and_bc_pattern(tmp_path):
     for args in ([], ["-b", str(p), "--bc-pattern", "ACGTNNNN"]):
         r = runner.invoke(app, ["checkout", "reads.fq", "-o", str(tmp_path / "o"), *args])
         assert r.exit_code != 0
-        assert "exactly one" in r.output
+        assert "exactly one" in clean(r.output)
 
 
 # ------------------------------------------------- fgbio read structures (TSO500, 10x)
@@ -244,7 +257,7 @@ def test_tso500_read_structure_end_to_end(tmp_path):
 def test_read_structure_and_bc_pattern_are_exclusive(tmp_path):
     r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure", "5M5S+T",
                             "--bc-pattern", "NNNNN", "-o", str(tmp_path / "o")])
-    assert r.exit_code != 0 and "not both" in r.output
+    assert r.exit_code != 0 and "not both" in clean(r.output)
     r = runner.invoke(app, ["checkout", "reads.fq", "--read-structure2", "5M5S+T",
                             "-o", str(tmp_path / "o")])
-    assert r.exit_code != 0 and "needs --read-structure" in r.output
+    assert r.exit_code != 0 and "needs --read-structure" in clean(r.output)
