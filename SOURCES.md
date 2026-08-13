@@ -95,6 +95,37 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Provenance | experimental (ENA); the floor and its interval are derived |
 | ⚠ | ENA's metadata gives every run in the study the same title, so it does **not** identify which runs are controls. This is HIV plasma — a quasispecies — so the estimator restricts to monomorphic positions rather than assuming clonality. The library is also 49.6% occupied on its 9 nt barcode, which `checkout` flags as saturated; the measured floor is an upper bound. |
 
+### ctDNA UMI benchmark — Maruzani et al. 2024 (checked 2026-08-13)
+
+| Item | Value |
+|---|---|
+| Paper | Maruzani R, Brierley L, Jorgensen A, Fowler A. *Benchmarking UMI-aware and standard variant callers for low frequency ctDNA variant detection.* **BMC Genomics** 25, 2024-09-03. [doi:10.1186/s12864-024-10737-w](https://doi.org/10.1186/s12864-024-10737-w), PMC11370058 |
+| Synthetic template | `SRR10296599` — cfDNA from a healthy Han Chinese female, Roche ctDNA panel (17 genes), NextSeq 550, 6,230,802 spots, 2x96 nt, `PRJNA577992` |
+| Tumour samples | `SRR15081468/70/72/77/80/82/93/94` — 8 pre-treatment metastatic breast cancer samples, COMET trial, custom 54-gene panel, HiSeq 2500, ~3.2 M spots, 2x~105 nt, `PRJNA745047` |
+| Their benchmark | 303 COSMIC variants spiked at 0.005–0.075 VAF across 200x/450x/850x; six callers compared (Mutect2, bcftools, LoFreq, FreeBayes vs UMI-aware UMI-VarCal, UMIErrorCorrect) |
+| Provenance | experimental (SRA), human clinical; their spiked truth is derived |
+
+⛔ **Neither accession carries a recoverable UMI, so neither is a migec input.** Established from the
+data, not from the text:
+
+- Both are **aligned BAM submissions** (`NCBI:align:db:alignment_sorted`), so the Illumina headers
+  are stripped and the read lengths are already trimmed (101 vs 110 nt between mates).
+- `migec suggest` finds **no pattern** in either mate of either run: near-uniform composition with
+  no constant anchor after it, which is what diverse payload looks like rather than a barcode.
+- `vdb-dump -T SEQUENCE` shows `CMP_LINKAGE_GROUP` **empty** — that is where an `MI`/`RX` tag would
+  survive, so no UMI was preserved.
+- The paper says so too: the UMIs of the synthetic dataset were **generated in silico**, at 9 nt
+  with Phred fixed to 37, assigned by Poisson (λ=1/2) to reads *sharing start and end positions*.
+
+⚠ That assignment rule bakes in the co-terminal assumption **X1 measured as false**
+(`docs/fragmented.rst`: 7.8% of 10x groups overall, 0.3% at ≥6 reads). cfDNA has preferred cut
+sites so it is less wrong for a capture panel than for 3' GEX, but any comparison against their
+numbers inherits it.
+
+**What these are good for:** the *design* — spiking COSMIC variants at known VAF into a real cfDNA
+background at controlled depth is the ground truth a consensus-quality claim wants — and two more
+comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
+
 ### Calib (github.com/vpc-ccg/calib)
 
 | Item | Value |

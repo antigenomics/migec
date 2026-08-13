@@ -229,7 +229,13 @@ model has to use the evidence that survives at one read:
 ## M5 — benchmarks and release
 
 - [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
-      UMI-tools, Calib, fgbio, Cell Ranger
+      UMI-tools, Calib, fgbio, Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware
+      callers benchmarked by Maruzani et al. 2024 for low-frequency ctDNA)
+- [ ] ctDNA ground truth in the style of Maruzani et al.: COSMIC variants spiked at 0.005–0.075 VAF
+      into a real cfDNA background at 200x/450x/850x. ⛔ Their deposited runs carry **no** UMI
+      (aligned BAM submissions, `suggest` finds no pattern, `CMP_LINKAGE_GROUP` empty), so the UMIs
+      have to be simulated — and their rule assigns them to reads sharing start *and* end, which is
+      the co-terminal assumption X1 falsified
 - Gate: grouping ARI ≥0.99; residual error ≤1e-5 on a clonal control; ≥3× MIGEC v1 wall-clock
 
 ## Deliberately not doing
