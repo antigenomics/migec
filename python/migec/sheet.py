@@ -272,7 +272,7 @@ def from_read_structure(structure: str) -> str:
     """Translate an fgbio read structure into a migec pattern.
 
     `5M5S+T` is TSO500: five UMI bases, a five-base spacer, then template. `16B10M+T` is 10x.
-    Both are positional, so both need `--max-offset 0`.
+    Both are positional, so both carry their own anchor -- the caller does not set an offset.
 
         M  molecular barcode   -> N   captured as UMI
         B  sample barcode      -> X   captured as cell barcode

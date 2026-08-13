@@ -77,11 +77,11 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Fetch | `curl -O https://cf.10xgenomics.com/samples/cell-vdj/5.0.0/sc5p_v2_hs_PBMC_1k/sc5p_v2_hs_PBMC_1k_t_fastqs.tar` (569 MB, 1.1 GB unpacked) |
 | Why this one | the **VDJ-T** library, not GEX: 569 MB against tens of GB, and it is the part that matters here. The 3' GEX libraries carry the same barcode structure at 100x the size |
 | Layout | 5' v2: **R1 = 16 nt cell barcode + 10 nt UMI, exactly 26 nt and nothing else**; R2 = 90 nt cDNA; I1/I2 index reads present |
-| Pattern | `XXXXXXXXXXXXXXXXNNNNNNNNNN` with `--max-offset 0`. Purely positional — there is no constant sequence to anchor on, which is why the pattern grammar had to allow a scored-nothing pattern at a fixed offset |
+| Pattern | `^XXXXXXXXXXXXXXXXNNNNNNNNNN`, or `--preset 10x-v2`, or the slice `cell:0:16,16:26`. Purely positional — there is no constant sequence to anchor on, which is why the pattern grammar had to allow a scored-nothing pattern at a fixed offset |
 | Measured | 3,155,166 reads, **100% assigned**, 221,024 barcodes at 14.28 reads each, effective UMI length 9.97/10. refine on **R2** (the mate carrying the cDNA): 305,702 molecules, **813 cells** called by OrdMag, clonality 0.0014 |
 | Note: | refine and assemble take **R2**, not R1: trimming the pattern leaves R1 empty, so the payload evidence is vacuous there and the reported clonality comes out 1.0 saying so |
 | Provenance | experimental (10x public) |
-| Regenerate the fixture | `migec checkout R1 R2 -b bc.txt -o co/ --max-offset 0` then `migec subsample co/PBMC_R2.fq.gz -o sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz --keep 1` |
+| Regenerate the fixture | `migec checkout R1 R2 --preset 10x-v2 --sample PBMC -o co/` then `migec subsample co/PBMC_R2.fq.gz -o sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz --keep 1` |
 
 **X1 (read-start dispersion) used `pbmc_1k_v3`**, Cell Ranger 3.0.0, GRCh38-3.0.0:
 

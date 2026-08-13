@@ -71,7 +71,7 @@ def checkout(
         "--read-structure",
         help="An fgbio/Picard read structure instead of a pattern, which is what TSO500, fgbio "
         "and samtools all speak. M is a UMI base, B a sample/cell barcode, S skipped, T template: "
-        "TSO500 is 5M5S+T and 10x 5' is 16B10M+T. Positional, so pair it with --max-offset 0.",
+        "TSO500 is 5M5S+T and 10x 5' is 16B10M+T. Positional by definition, so it carries its own anchor.",
     ),
     read_structure2: Optional[str] = typer.Option(
         None,
