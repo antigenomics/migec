@@ -185,8 +185,8 @@ def get(acc: str, outdir: Path, conns: int, keep_sra: bool, prefer: str = "s3") 
     locs = locations(acc)
     ena = [x for x in locs if x["source"] == "ena-fastq"]
     if prefer == "ena" and ena:
-        for x in ena:
-            download(x["url"], outdir / Path(x["url"]).name, x["md5"], conns)
+        for i, x in enumerate(ena, start=1):
+            download(x["url"], outdir / f"{acc}_{i}.fastq.gz", x["md5"], conns)
         return
     # Prefer the normalised `.sra`. SDL also lists the ORIGINAL SUBMITTED files, which for some
     # runs sort first -- SRR8255848's is `Platinum_Hifi2_S5_L001_R1_001.fastq.gz.1`, a gzipped
@@ -195,16 +195,26 @@ def get(acc: str, outdir: Path, conns: int, keep_sra: bool, prefer: str = "s3") 
     ncbi = [x for x in locs if x["source"].startswith("ncbi-")]
     sra = next((x for x in ncbi if x.get("type") == "sra"), None)
 
+    # Never: EVERY PATH MUST PRODUCE THE SAME NAME. The three sources here would otherwise write
+    # `<acc>_1.fastq.gz` (fasterq-dump), `Platinum_Hifi2_S5_L001_R1_001.fastq.gz` (submitted) and
+    # `<acc>.fastq.gz` (ENA) for runs of one study. A downstream loop written against one pattern
+    # then skips the others in silence -- measured: 13 of 100 runs missing, and the job that did it
+    # reported success. Mate suffixes are kept, everything else is normalised to `<acc>_N`.
+    def _emit(src: dict, mate: int) -> Path:
+        return download(src["url"], outdir / f"{acc}_{mate}.fastq.gz", src["md5"], conns)
+
     if sra is None:
-        submitted = next((x for x in ncbi if x.get("name")), None)
-        if submitted is not None:
-            name = Path(submitted["name"]).name.removesuffix(".1")
-            print(f"  note: no .sra for {acc}, taking the submitted {name}", file=sys.stderr)
-            download(submitted["url"], outdir / name, submitted["md5"], conns)
+        submitted = [x for x in ncbi if x.get("name")]
+        if submitted:
+            names = ", ".join(Path(x["name"]).name for x in submitted)
+            print(f"  note: no .sra for {acc}, taking the submitted file(s): {names}",
+                  file=sys.stderr)
+            for i, x in enumerate(submitted, start=1):
+                _emit(x, i)
             return
         if ena:
-            for x in ena:
-                download(x["url"], outdir / Path(x["url"]).name, x["md5"], conns)
+            for i, x in enumerate(ena, start=1):
+                _emit(x, i)
             return
         raise SystemExit(f"no download location for {acc}")
 

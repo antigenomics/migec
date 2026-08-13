@@ -84,6 +84,28 @@ software runs: sequencing deeper buys more reads per molecule, only more input D
 [docs/variants.rst](docs/variants.rst) has the caller table, the published comparison, and the run
 over cell-free DNA reference material at known allele frequency that puts numbers on it.
 
+### How low can you go — exome, ctDNA, MRD
+
+Every rare-variant application asks one question, and two numbers answer it: `N`, the molecules
+covering the site, and `p`, the per-**molecule** error floor. You are always in one of two regimes,
+and knowing which tells you what to buy:
+
+```bash
+python scripts/detection_limit.py --input-ng 20 --sites 5                      # a ctDNA panel
+python scripts/detection_limit.py --input-ng 50 --sites 30 --rt-error duplex   # MRD
+```
+
+| | molecule-limited | floor-limited |
+|---|---|---|
+| fix | more input DNA, or track more sites | a lower floor: proofreading enzyme, or **duplex** |
+| does **not** help | deeper sequencing, a better caller | deeper sequencing, *more input DNA*, a better caller |
+
+The crossover is `VAF = p/3` — 3.3e-5 at the default RT floor. A 50 ng, 30-site MRD panel has
+enough molecules for 6.9e-6 but a single-strand protocol floors out five times higher, so those
+molecules promise something the chemistry cannot deliver. That is the design decision to get right
+before buying sequencing. [docs/detection.rst](docs/detection.rst) covers all three applications;
+MRD is where migec started, tracking a leukaemic clone's IGH rearrangement.
+
 ## Install
 
 ```bash

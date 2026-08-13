@@ -79,6 +79,9 @@ Where to go
    * - call rare variants (ctDNA, tumour)
      - :doc:`Variant calling <variants>` -- which caller, and the molecule count that decides
        whether any of them can see it
+   * - know the limit of detection
+     - :doc:`Detection limits <detection>` -- exome, ctDNA and MRD, and which of the two regimes
+       your assay is in
    * - know why a default is what it is
      - :doc:`Method <method>`
    * - look up a column or a tag
@@ -94,5 +97,6 @@ Where to go
    commands
    Downstream <downstream>
    Variant calling <variants>
+   Detection limits <detection>
    method
    reference

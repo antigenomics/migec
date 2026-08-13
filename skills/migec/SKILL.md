@@ -443,6 +443,37 @@ worst *error* at the same substitution distance. Targets after UMI consensus: `V
 Note: Anchor on the junction's 3′ end only. V1 differs at position 4 and V2 at 7–8, so a 5′ anchor
 makes both variants count as zero and the metric look perfect.
 
+## Limit of detection (`docs/detection.rst`, `scripts/detection_limit.py`)
+
+Two numbers answer "how low can this assay go", and the caller is neither: **N** molecules covering
+the site, and **p** the per-MOLECULE error floor. Every assay is in one of two regimes:
+
+| | molecule-limited | floor-limited |
+|---|---|---|
+| fix | more input DNA, or track more sites | lower floor: proofreading enzyme, or duplex |
+| does **not** help | deeper sequencing, a better caller | deeper sequencing, **more input DNA**, a better caller |
+
+**Never: the crossover is `VAF = p/3`** -- the frequency at which a true variant molecule is as rare
+as the chemistry's own false ones. At the `rt` floor of 1e-4 that is **3.3e-5**, and no amount of
+input reaches below it. A 50 ng / 30-site MRD panel has molecules for 6.9e-6 and a single-strand
+floor at 3.3e-5: the molecules promise what the chemistry cannot deliver.
+
+```bash
+python scripts/detection_limit.py --input-ng 20 --sites 5
+python scripts/detection_limit.py --input-ng 50 --sites 30 --rt-error duplex
+```
+
+**Note: MRD pools evidence across sites.** Tracking 30 patient-specific variants is 30x the
+molecules that can carry a signal and 30x lower a reachable VAF, from the same blood draw. This is
+migec's original application -- the leukaemic clone's IGH rearrangement -- with the clonotype half
+belonging to **arda**, whose AIRR `duplicate_count` is then a molecule count.
+
+**Never: measured on a real panel, a library total is not on-target evidence.** Off-target product
+took **5-7% at 80 ng, 24% at 20 ng and 47-58% at 5 ng** -- its absolute count barely moves while
+on-target scales with input, so precisely when input is scarce the total is most misleading. And
+coverage is not uniform: the weakest target held 0.31-0.61x of the on-target mean. Count molecules
+**per target** (distinct `MI` in the region) and quote the weakest, not the mean.
+
 ## Running a cohort
 
 Two, both in `docs/nextflow.rst`:

@@ -109,6 +109,21 @@ def count_amplicons(consensus_fq: Path, prefix_len: int, min_share: float) -> tu
     between the smallest true amplicon (7.6% of molecules) and the largest error prefix (1.1%),
     so 5% sits in the middle of a gap rather than on a slope, and the count is stable across
     every depth and input in the design.
+
+    Never: THIS COUNTS AMPLICONS, IT DOES NOT MEASURE COVERAGE, and dividing by it therefore gives
+    a per-panel AVERAGE that must not be read as a per-site count. Checked against an alignment to
+    GRCh38 (`docs/variants.rst`), the average is optimistic in two compounding ways:
+
+    * **Coverage is not uniform.** The weakest real target holds 0.31-0.61x of the on-target mean,
+      so a variant sitting on it has up to 3x fewer molecules than the average implies.
+    * **Off-target product is invisible here.** A prefix tally cannot tell a panel amplicon from a
+      primer-dimer that happens to be abundant. On this panel an off-target locus took **8% of
+      molecules at 5 ng/3.3x and 58% at 5 ng/30x** -- so the total is not on-target evidence, and
+      the off-target share grows exactly as input DNA falls and depth rises.
+
+    Together those turned a published P(>=3 variant molecules) of 0.69 into 0.08 at the weakest
+    real target. Use this only where no reference exists; when one does, align and count per
+    target.
     """
     import collections
     import gzip

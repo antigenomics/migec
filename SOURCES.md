@@ -243,6 +243,39 @@ McInerney 2014's published fidelities can be checked against.
 | Checked by | `tests/unit/test_downstream.py::test_an_aligner_carries_the_tags_into_the_sam[minibwa]`, skipped when not on `PATH` |
 | Provenance | derived (run here against our own synthetic 10x-shaped fixture) |
 
+### Reference genome and panel definitions (aldan3, 2026-08-14)
+
+Not fetched here — already on the cluster, and the panel is **inferred from the data** rather than
+taken from a vendor file.
+
+| Item | Value |
+|---|---|
+| Genome | `/projects/cdr3_common/reference/genome/human/Homo_sapiens.GRCh38.dna.primary_assembly.fa` (3.15 GB) + `.fai` |
+| Annotation | `Homo_sapiens.GRCh38.110.chr.gtf` (1.46 GB), Ensembl 110 |
+| Note: contig naming | **Ensembl style — `>1`, not `>chr1`.** Every BED, region string and tool must match, or it silently intersects nothing |
+| Note: existing indices | `bwamem2_index/` is **empty**, and the `.bwameth.c2t.*` index is bisulfite-converted and unusable for ordinary alignment. Build a minimap2 index |
+| Panel | derived: align the consensus, `bedtools genomecov` above a depth floor, `merge -d 50`, then name the intervals against the GTF. `scripts/`-adjacent job at `/projects/tcr_bcr_rnaseq/migec_ctdna/job/` |
+| Provenance | experimental (Ensembl reference); the inferred panel is **derived** |
+
+**Why inferred rather than vendor-supplied:** the amplicon count in `assets/ctdna_titration.tsv`
+came from a consensus-prefix tally, which assumes the panel is evenly covered. It is not — observed
+shares 20.4 / 17.4 / 16.9 / 15.9 / 7.6%, so `molecules / n_amplicons` overstates the weakest target
+by **2.6x**. Real coordinates turn a per-target average into a per-target count.
+
+Two production pipelines read as design references for the panel handling, neither run here:
+
+| Repo | What it is good for |
+|---|---|
+| [AWGL/TSO500_post_processing](https://github.com/AWGL/TSO500_post_processing) | Illumina TSO500 post-processing. Ships `hotspot_variants/*.bed`, `hotspot_coverage/*combined.bed`, `vendorCaptureBed_100pad_updated.bed` and `TSO_extra_padding_chr.interval_list` — note the padding beyond Illumina's +/-2 bp, and the `chr`-prefixed naming, which is the opposite convention to the Ensembl reference above |
+| [ikmb/exome-seq](https://github.com/ikmb/exome-seq) | Exome capture. `--kit xGen_v2 \| Agilent_v7 \| xGen_pan_cancer`; `--assembly GRCh38_no_alt` recommended for short reads; `--baits`/`--targets` as Picard interval lists, `--panel cardio\|cancer\|liver\|...`, and **`--amplicon_bed` for amplicon primer positions** — the same object this job infers |
+| [AstraZeneca-NGS/reference_data](https://github.com/AstraZeneca-NGS/reference_data/tree/master/hg38) | **Ready-made hg38 capture BEDs**, no vendor login: `Exome-Agilent_V2/V4/V5/V6` (plus `_UTR` and `_Padded` variants), `Exome-IDT_V1.bed`, `Exome-MedExome.bed`, `Exome-NGv3.bed`, `Exome-AZ_V2.bed`, `Exome-Agilent-OneSeq.bed`, and `CDS-canonical.bed` (5.7 MB). Also a `tricky_regions/` directory. Fetch one file with `curl -sL https://raw.githubusercontent.com/AstraZeneca-NGS/reference_data/master/hg38/bed/<name>.bed` |
+
+Note: these are **exome capture** targets, so they are the right object for
+`notebooks/exome_capture.py` and the wrong one for the SiMSen-Seq amplicon panels above — an
+amplicon panel's coordinates are set by its primers, not by a capture bait set, which is why they
+are inferred here. `CDS-canonical.bed` is still useful against the inferred panel, as a check on
+whether the amplicons land in coding sequence.
+
 ### UMIErrorCorrect / UMIAnalyzer — Österlund et al. (Clin Chem 2022, doi:10.1093/clinchem/hvac136)
 
 Read 2026-08-13. Not a data source: a **comparator and a design reference** for the map-first order.
