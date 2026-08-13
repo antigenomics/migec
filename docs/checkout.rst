@@ -208,7 +208,7 @@ its Methods, is twelve bases at each end of the molecule:
 
 .. code-block:: bash
 
-   migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ --max-offset 0
+   migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/
 
 **Never: Both halves must match** or the read is unmatched. Accepting the master alone would emit 12 nt
 UMIs beside 24 nt ones, and every collision estimate downstream would then be computed over two
@@ -217,8 +217,11 @@ barcode spaces at once.
 ``--max-offset``: where the pattern may start
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``-1`` scans the whole read; ``0`` anchors the pattern at the first base. A dual-end design needs
-``0``, and the reason is not convenience:
+**The default is automatic and this flag should not be passed.** A leading ``^``, a slice list, a
+read structure and a pattern with nothing to score all anchor at the first base; anything with an
+adapter to place it gets a free scan. ``-1`` forces the free scan and ``0`` forces the anchor.
+
+A dual-end design needs the anchor, and the reason is not convenience:
 
 A five-base handle like ``TGACT`` is worth 10 bits. The acceptance bar is a Bonferroni bound over
 the offsets scanned — ``log2(offsets × patterns / α)`` — which over a 77 nt read is 12.6 bits. So a

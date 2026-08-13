@@ -12,7 +12,7 @@ Three commands, whatever the platform. Only ``checkout`` needs to know where the
 Declaring the layout
 --------------------
 
-Three equivalent ways to say where the barcode is:
+Four equivalent ways to say where the barcode is, in the order to reach for them:
 
 .. list-table::
    :header-rows: 1
@@ -20,20 +20,26 @@ Three equivalent ways to say where the barcode is:
    * - form
      - looks like
      - when
-   * - barcode table
-     - ``S1<TAB>aaACTcagtgg...NNNNtNNNNtNNNN``
-     - many samples in one file; MIGEC's own format, read verbatim
-   * - ``--bc-pattern``
-     - ``XXXXXXXXXXXXXXXXNNNNNNNNNN``
-     - one sample, inline; what ``umi_tools``, ``umitools`` and ``mgatk`` take
+   * - a position
+     - ``^NNNNNNNN`` or ``0:8``
+     - the primary mode -- the chemistry fixes the barcode at an offset
+   * - ``--preset``
+     - ``10x-v2``, ``tso500``, ``duplex``, ...
+     - a chemistry with a name; ``migec sheet --presets`` lists them
    * - ``--read-structure``
      - ``5M5S+T``
      - fgbio, Picard, samtools and TSO500 all speak this
+   * - barcode table
+     - ``S1<TAB>aaACTcagtgg...NNNNtNNNNtNNNN``
+     - many samples in one file; MIGEC's own format, read verbatim
 
 In a pattern, ``N`` is a UMI base, ``X`` a cell-barcode base, uppercase is matched exactly,
-lowercase is the fuzzy adapter region, and ``.`` is skipped.
+lowercase is the fuzzy adapter region, and ``.`` is skipped. Slices are half-open and 0-based like
+Python's, each a UMI slice unless prefixed ``cell:``. A leading ``^``, a slice list and a read
+structure all anchor the barcode at the first base, so ``--max-offset`` never has to be passed.
 
-Do not guess the layout. :doc:`suggest` reads it off the data.
+:doc:`layouts` has all of it in one place. Do not guess the layout -- :doc:`suggest` reads it off
+the data, and :doc:`downstream` is what happens after.
 
 By platform
 -----------
@@ -51,11 +57,14 @@ By platform
      - ``NNNNNNNNNcagtttaacttttgggccatcca``
      - recovered from the data by ``migec suggest``
    * - 10x droplet
-     - ``--bc-pattern XXXXXXXXXXXXXXXXNNNNNNNNNN --max-offset 0``
+     - ``--preset 10x-v2``, or ``--bc-pattern 'cell:0:16,16:26'``
      - positional; ``refine``/``assemble`` take **R2**
    * - TSO500
-     - ``--read-structure 5M5S+T --read-structure2 5M5S+T``
+     - ``--preset tso500``, or ``--read-structure 5M5S+T --read-structure2 5M5S+T``
      - a UMI on both mates, concatenated into one identifier
+   * - UMI RNA-seq (SMARTer)
+     - ``--preset smarter-umi``
+     - 10 nt inline UMI, then the ``GGG`` the template switch leaves
    * - Dual-end (MAGERI)
      - column 3 of the sheet, ``NNNNNNNNNNNNtgact`` / ``agtcaNNNNNNNNNNNN``
      - both halves must match
