@@ -133,6 +133,12 @@ scientific claim and is validated before any throughput work.
 - [x] **`--max-offset`**, because a positional chemistry cannot be checked out without it. Also
       fixed: the acceptance bar was charged for the offsets a read *could* hold rather than the
       ones actually scanned, so an anchored 5 nt handle (10 bits) was billed 12.6 bits and refused
+- [x] **Positional layouts as the primary mode** (2.0.0a2) — `^NNNN` / `^NNNNXNNN`, or half-open
+      slices `0:8` / `0:4,5:10` / `cell:0:16,16:26`. `--max-offset` is now automatic and should not
+      be passed: a caret, a slice list, a read structure and a pattern with nothing to score all
+      anchor at 0. Presets for the eight chemistries with names, each carrying a citable source
+- [x] **A run that matches nothing reports the declaration error** instead of three statistics
+      computed from reads that never arrived
 - [ ] `.mig` bucket output, which is also what bounds the UMI counters
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
@@ -223,8 +229,12 @@ model has to use the evidence that survives at one read:
 
 ## M4 — end to end
 
-- [ ] `suggest`, `sort`, `subsample`, marimo notebooks, full docs
-- Gate: output consumed by `bwa-meme mem -C` and `arda rnaseq run` with tags intact
+- [x] `suggest`, `subsample`, marimo notebooks, full docs
+- [x] **Gate met, measured** (`docs/downstream.rst`): `minimap2 -ax sr -y` and `bwa mem -C` carry
+      `RX`/`CB`/`MI` into a valid sorted BAM on 600/600 records; `arda amplicon` reads the
+      consensus directly and its AIRR `sequence_id` **is** the molecule id; `salmon` and `kallisto`
+      quantify it plainly. STAR unverified — the brew arm64 build reads 0 reads from any FASTQ
+- [ ] `sort`
 
 ## M5 — benchmarks and release
 
