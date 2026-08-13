@@ -13,6 +13,8 @@ measurements the defaults are set from.
      - the question it answers
    * - :doc:`UMI statistics <umi_statistics>`
      - how long is my barcode really, and how much of it is the same base in every molecule
+   * - :doc:`Barcode error against depth <umi_errors>`
+     - how often is a barcode base called wrong, and can I believe the answer
    * - :doc:`Barcode space <barcode_space>`
      - is the barcode long enough for this library, and how many molecules collided
    * - :doc:`Grouping accuracy <grouping>`
@@ -30,6 +32,7 @@ measurements the defaults are set from.
    :maxdepth: 1
 
    umi_statistics
+   umi_errors
    barcode_space
    grouping
    fragmented

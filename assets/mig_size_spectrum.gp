@@ -27,5 +27,13 @@ set key inside top right
 # over-sequenced: most MOLECULES are shallow, and most READS are in the deep ones. A figure with
 # only the first says the library is fine and a figure with only the second says it is saturated.
 # log1p on x so a molecule seen once has a place on the axis; a plain log drops it.
-plot "/Users/mikesh/vcs/code/migec/assets/PBMC.sizes.tsv" using 2:3 with boxes lc rgb "#1b9e77" title "molecules",      "" using 2:4 axes x1y2 with lines lw 2.5 lc rgb "#d95f02" title "reads in them"
+#
+# Never: "reads in them" is POINTS, never a line. The spectrum is one row per EXACT size, and past
+# the head almost every size holds one molecule -- so reads == size, and a line through those
+# points draws the y = x diagonal as the most prominent feature of the figure. It is a tautology,
+# not a second mode. Where two or three molecules share a size the same line sawtooths between
+# size*1 and size*2, which is integer quantisation drawn as signal, and it bridges gaps in the
+# support where no size was observed at all. Points say what the data are: isolated observations,
+# one per size, most of them a single molecule.
+plot "/Users/mikesh/vcs/code/migec/assets/PBMC.sizes.tsv" using 2:3 with boxes lc rgb "#1b9e77" title "molecules",      "" using 2:4 axes x1y2 with points pt 7 ps 0.5 lc rgb "#d95f02" title "reads in them"
 

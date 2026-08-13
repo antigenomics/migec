@@ -261,6 +261,26 @@ correction is written up in `project/review-algorithms.md`.
   is where the answer matters most. It caught me twice: once in the correction posterior, once in
   the residual-FDR estimator. Both now use payload agreement as well. On a 1.23 reads/barcode
   library the count-only residual is 0 and the full one is 1,294.
+- **The barcode error rate is measured at every DEPTH, not once for the library.**
+  `<sample>.umi_errors.tsv`, one row per exact parent depth: a parent carrying `c` reads offered
+  `c*L` barcode bases to be miscalled, so `u(c) = 3L(1-exp(-c eps/3))` from the distinct children
+  and `r(c) = c L eps` from the reads in them invert to the same eps. Reported as
+  `error_at_depth` (parents seen >= 10 times, where correction is near-complete), `error_phred`,
+  and `error_from_children` (all depths, a LOWER bound). On 1e-3 injected: distance-1 9.73e-04,
+  children 9.89e-04 = Q30, all depths 9.98e-04.
+- **Never: neither error estimator is saturation-free — both are bounded by the merges correction
+  MADE.** As a fraction of an injected truth: distance-1 0.97 / 0.96 / 0.76 / 0.45 / 0.001 and
+  children 0.99 / 0.95 / 0.88 / 0.62 / 0.00 at occupancy 0.2% / 2.3% / 9.8% / 33% / 100%. The
+  children estimate wins everywhere either works; at 100% BOTH are zero, because `correct_umis`
+  refuses to merge on a full space and is right to. `saturated` is the flag that says the answer
+  is a floor -- do not read the table instead of it. `docs/umi_errors.rst`,
+  `tests/synthetic/test_umi_errors.py`.
+- **Never: a sparse spectrum is POINTS, never a line.** `mig_size_spectrum` drew "reads in them"
+  `with lines` over a table at EXACT sizes, where past the head almost every size holds one
+  molecule -- so reads == size and the line drew the `y = x` diagonal as the figure's most
+  prominent feature, a tautology that reads as a second mode. Two or three molecules on a size made
+  it sawtooth between `size*1` and `size*2`, and it bridged gaps where nothing was observed. Same
+  rule for the two `umi_error_*` panels.
 - **The MIG-size FDR threshold is reported, never applied** (2026-08-13). Measured residual, not
   derived. 5.25% of 1-read molecules at 1.23 reads/barcode, 0% at 4.62.
 - **Dual-end barcodes work (2026-08-13)**: column 3 of the sheet is the slave pattern, on the
@@ -359,6 +379,32 @@ correction is written up in `project/review-algorithms.md`.
   was 83% of refine's wall clock compressing an intermediate the next stage immediately
   decompresses. Level 1 is now the default for every stage's output and gave 3x on its own.
   Measure before parallelising.
+- **Never: the thread HELPER was the bottleneck once everything else was threaded (unreleased).**
+  `parallel_for` claimed one item per atomic `fetch_add`, and a sampling profile of assemble put
+  **21% of all CPU samples across every thread on that one instruction** -- more than the parse it
+  was handing out. Sixteen cores serialise on one cache line. Batched now: ~8 turns per worker,
+  capped at 1024, collapsing to 1 when items are few, which is the uneven case (one bucket per
+  item) the counter exists for. Never: profile the helper, not only the work. Current numbers,
+  1 thread -> 16: checkout **213,880 -> 1,548,835** end to end (1,697,313 matching), refine
+  **617,802 -> 1,554,156**, assemble **554,106 -> 2,470,928**; `assets/benchmark_threads.tsv` is
+  the committed table and the figure is drawn from it.
+- **Two serial scans went with it**: the distance-1 census in `estimate_umi_error` (which IS
+  checkout's per-sample statistics tail -- the end-to-end/matching gap fell from 20% to 9%) and
+  refine's residual-FDR scan, 0.53 s of a 2.17 s run on one core. Both are read-only `3L` binary
+  searches per barcode tallying integers, so per-worker counters summed afterwards keep `-t`
+  changing nothing but the clock. `estimate_umi_error` now takes a `threads` argument, defaulted
+  to 1 so the C++ test calls are unchanged.
+- **Note: a 64 k chunk in assemble's partition is STILL 32% faster and still not taken**
+  (3,075,506 reads/s against 2,324,403 on 4 M, re-measured after the batching). It costs 16 MB of
+  resident chunk, which at NovaSeq scale makes pass 1 the memory peak. Never: the benchmark tier
+  does NOT fail at 64 k on a 500 k corpus -- the objection is scale, which no test here can see,
+  so the number lives next to the constant in `assemble.cpp`. Upgrade path is a persistent worker
+  pool, not a bigger chunk.
+- **Never: `clear()` on a chunk of `FastqOwned` is four allocations a record.** assemble's
+  partition knew this; refine's rewrite still did it. Assigned into now, and the rewrite's comment
+  buffer and unpacked barcode are worker scratch with the cell/UMI halves as `string_view` rather
+  than `substr` -- `rewrite_seconds` 0.51 -> 0.38. Same class of bug in `assemble`: each group's
+  UMI was unpacked twice, once for the composition tally and once for the record name.
 - **Never: `-t` changes nothing but the wall clock, on every stage.** refine parallelises the
   neighbourhood SCAN (a pure function of the barcode table -- it reads no union-find state) and
   applies the merges serially in the original order, so the result is identical, not equivalent.

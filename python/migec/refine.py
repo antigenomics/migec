@@ -98,6 +98,14 @@ def format_report(summary: dict) -> str:
     lines += [
         f"barcode error   {s['estimated_error']:.2e} per base, estimated from the "
         f"distance-1 excess",
+        # The same rate off the children instead of off the neighbourhood, because the two fail in
+        # different directions and quoting one alone hides which. Read at depth, since a child
+        # whose parent was never sequenced cannot be counted and that is most of them at 1 read.
+        f"                {s['error_at_depth']:.2e} from the reads in the children of molecules "
+        f"seen >= {s['error_depth']} times"
+        + (f" -- Q{s['error_phred']:.0f}" if s["error_phred"] else ""),
+        f"                {s['error_from_children']:.2e} over all depths, which is a LOWER bound: "
+        f"a child with no sequenced parent cannot be found",
         f"residual        {s['suspected_residual']:,} molecules still look like children of a "
         f"neighbour -- by count, or by their reads agreeing on the molecule",
         f"                {s['residual_fdr_at_one']:.2%} of 1-read molecules; "

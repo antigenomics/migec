@@ -123,6 +123,9 @@ to look at first:
    * - ``mig_size_zipf``
      - is amplification even?
      - a bent rank curve where Zipf would be straight
+   * - ``umi_error_rate``
+     - is the barcode error rate believable?
+     - the two estimators part company, which means the barcode space filled
    * - ``consensus_quality``
      - what quality am I allowed to claim?
      - the boxes flatten at the RT floor, not at the instrument
