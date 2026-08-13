@@ -51,7 +51,7 @@ Reading the output
      - what it does
      - reads no reads because
    * - :doc:`plot <plots>`
-     - draws sixteen QC panels from the TSVs the stages wrote
+     - draws twenty QC panels from the TSVs the stages wrote
      - it computes nothing; a figure that cannot be redrawn from a committed table will
        eventually disagree with the report
    * - ``sheet``

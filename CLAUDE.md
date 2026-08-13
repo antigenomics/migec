@@ -354,8 +354,8 @@ correction is written up in `project/review-algorithms.md`.
   but the per-sample counters and the memory figure were one sample's. Fixed; the published table
   is re-measured and now comes from `scripts/benchmark_threads.py`, which writes the TSV the
   figure is drawn from.
-- **All three stages thread (2026-08-13, 2.0.0a3).** refine 222k -> 1.01M reads/s, assemble
-  203k -> 1.43M, checkout unchanged at 1.06M. Never: the FIRST fix was not a thread -- zlib level 6
+- **All three stages thread (2026-08-13, 2.0.0a3-2.1.0).** refine 222k -> 1.01M reads/s, assemble
+  203k -> 2.05M (its partition threaded in a4), checkout unchanged at 1.06M. Never: the FIRST fix was not a thread -- zlib level 6
   was 83% of refine's wall clock compressing an intermediate the next stage immediately
   decompresses. Level 1 is now the default for every stage's output and gave 3x on its own.
   Measure before parallelising.
@@ -407,8 +407,22 @@ correction is written up in `project/review-algorithms.md`.
 - **Never: `containsKey`, not `?:`, for a nextflow boolean.** Groovy's elvis treats `false` as
   absent, so a per-sample `contig: false` against `params.migec_contig = true` silently meant its
   opposite -- the one direction a per-sample override exists to make possible.
-- Next: M3's remainder (the template's own error split), then the M2 remainder
-  (`.mig` bucket output from checkout, i7xi5, bit-parallel matcher), then `--rt-error auto`.
+- **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
+  1. **`.mig` bucket output from `checkout`** — the only unbounded allocation left. The UMI
+     counters are 8.8 GB at NovaSeq scale held in one piece; checkout warns past 1 GB and a warning
+     is not a fix.
+  2. **Bucketed correction in `refine`**, two passes with the key rotated. Same problem one stage
+     on, and the fix is understood rather than still to be designed.
+  3. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
+     the polymerase, so the RT/PCR separation needs a different standard.
+  4. **`--rt-error auto`**, which falls out of 3 and not before it.
+  5. **i7xi5 contingency table** — needs nothing that is not already in the headers.
+  6. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
+     waiting on, not the code.
+  7. **ctDNA ground truth** (COSMIC at 0.005-0.075 VAF). Must be built: Maruzani's deposited runs
+     carry no UMI.
+  8. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
+  9. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point

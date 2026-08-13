@@ -18,13 +18,38 @@ count. `scripts/spikein_ratio.py` computes the published spike-in validation met
 and merging reported separately.
 
 **Throughput and footprint**: every stage threads and every stage is byte-identical at any `-t` --
-checkout 1.06 M reads/s end to end (1.68 M matching), refine 1.01 M, assemble 1.43 M, all at 16
+checkout 1.06 M reads/s end to end (1.68 M matching), refine 1.01 M, assemble 2.05 M, all at 16
 threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
 as well as by comparison at 1..16 threads.
 The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
 
+**QC**: twenty gnuplot panels over the tables the stages write, including the four figures a user
+already knows how to read -- Cell Ranger's barcode rank plot on unique UMIs, the MIG size spectrum
+with molecules *and* reads, the rank/Zipf curve, and consensus quality as a box over an exact
+`(depth, quality)` grid.
+
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
 scientific claim and is validated before any throughput work.
+
+## What is left, in the order it should be done
+
+Everything below is either open or half-open. Nothing else on this page is.
+
+| # | item | milestone | why it is next |
+|---|---|---|---|
+| 1 | `.mig` bucket output from `checkout` | M2 | the **only** unbounded allocation left: the UMI counters are 8.8 GB at NovaSeq scale, held in one piece, and this is what bounds them. `checkout` warns past 1 GB and that is a warning, not a fix |
+| 2 | Bucketed correction, two passes with the key rotated | M3 | same problem one stage on. `refine` holds the whole barcode table; a plain range partition splits a barcode from its neighbour for the top b/2 positions, so the rotation is the fix and it is understood, not designed |
+| 3 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
+| 4 | `--rt-error auto` | M1 | falls straight out of (3). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
+| 5 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
+| 6 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 7 | ctDNA ground truth, COSMIC at 0.005-0.075 VAF | M5 | the one claim with no ground truth yet. Never: Maruzani's deposited runs carry **no** UMI, so they have to be simulated -- and their own rule assumes co-terminal reads, which X1 falsified |
+| 8 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
+| 9 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
+
+Two things are blocked on data rather than on work: **Britanova et al aging** (bulk TCR, shallow --
+the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled, and the ctDNA ground truth
+above has to be built rather than downloaded.
 
 ## M0 — skeleton, format, simulator
 

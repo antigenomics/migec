@@ -35,3 +35,12 @@ copied out of them:
 
 `review-scope.md` supersedes all of them on *what gets built*: thirteen proposed CLI commands
 became five, three competing on-disk formats became one.
+
+## This directory is frozen
+
+These are the design outputs of 2026-08-12 and they are kept as written, including the parts the
+review pass invalidated. **The live plan is `ROADMAP.md`** -- what is built, what is open, and the
+order the open items should be done in. `CHANGELOG.md` is what shipped when. If a design file here
+disagrees with the code, the code is right and the reason is either in `review-algorithms.md` or in
+a `Never:` line in `CLAUDE.md`; do not edit these files to match, because the value of a design
+record is that it shows what was believed at the time.
