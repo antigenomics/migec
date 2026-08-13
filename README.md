@@ -58,10 +58,22 @@ S1	aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 S2	aaAGAcagtggtatcaacgcagagtNNNNtNNNNtNNNN
 ```
 
+`X` is a cell-barcode position, captured separately from the UMI. Column 3 is MIGEC's *slave*
+pattern — a second pattern on the other mate whose captured positions **extend** the UMI, which is
+how a 24 nt dual-end barcode is declared:
+
+```
+S1	NNNNNNNNNNNNtgact	agtcaNNNNNNNNNNNN
+```
+
 ```bash
+migec suggest reads.fq.gz                            # where is the barcode? read it off the data
 migec sheet barcodes.txt                             # what will each row extract?
 migec checkout reads.fq.gz -b barcodes.txt -o out/
 migec checkout R1.fq.gz R2.fq.gz -b barcodes.txt -o out/ -t 8
+migec refine out/S1.fq.gz -o ref/                    # correct barcode errors
+migec assemble ref/S1.fq.gz -o cons/                 # one consensus per molecule
+migec subsample out/S1.fq.gz -o small.fq.gz --keep 1 # a fixture that is still a library
 ```
 
 ```

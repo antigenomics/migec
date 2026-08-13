@@ -227,9 +227,15 @@ RefineStats refine(const RefineRequest& request) {
     // in either part is found and neither is corrected across the other.
     const int L = stats.umi_length + stats.cell_length;
 
-    auto slot = [&entries](uint64_t key) {
+    // Index of `key`, or entries.size() when it is absent. Returning the lower bound unchecked
+    // would be a silent misattribution: a key past the end indexes one element off the evidence
+    // arrays, and a key that merely sorts next to a real one writes another barcode's reads into
+    // its slot. Pass 1 inserts every key the later passes look up, so a miss should be
+    // unreachable -- this is what makes "should be" checkable instead of assumed.
+    auto slot = [&entries](uint64_t key) -> size_t {
         auto it = std::lower_bound(entries.begin(), entries.end(), key,
                                    [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
+        if (it == entries.end() || it->key != key) return entries.size();
         return static_cast<size_t>(it - entries.begin());
     };
 
@@ -254,6 +260,7 @@ RefineStats refine(const RefineRequest& request) {
                                      ? pack_barcode(umi)
                                      : pack_key_snapped(snap(pack_barcode(cell)),
                                                         stats.cell_length, umi));
+            if (i >= entries.size()) continue;
             if (request.use_quality) {
                 // The whole key's quality, cell part first, to line up with the packed key.
                 std::string qx(tag_value(rec.comment, "CY:Z:"));
@@ -322,6 +329,13 @@ RefineStats refine(const RefineRequest& request) {
             const size_t i = slot(cell.empty()
                                      ? pack_barcode(umi)
                                      : pack_key_snapped(snapped, stats.cell_length, umi));
+            if (i >= entries.size()) {
+                // Unreachable unless pass 1 and pass 3 disagree about the key. Pass the read
+                // through untouched rather than dropping it: emitting a read whose barcode was
+                // not corrected is recoverable, losing it silently is not.
+                writer.write(rec.name, rec.comment, rec.seq, rec.qual);
+                continue;
+            }
             const uint32_t root = correction.root[i];
             std::string comment(rec.comment);
             // The final barcode is the root's, which already carries the whitelist snap because
@@ -535,8 +549,7 @@ RefineStats refine(const RefineRequest& request) {
                         const uint64_t want =
                             (entries[i].key & ~(uint64_t{3} << shift)) | (b << shift);
                         const size_t at = slot(want);
-                        if (at >= entries.size() || entries[at].key != want) continue;
-                        if (correction.corrected[at] == 0) continue;
+                        if (at >= entries.size() || correction.corrected[at] == 0) continue;
                         if (correction.corrected[at] >= 20u * mine) {
                             looks_like_a_child = true;
                             break;

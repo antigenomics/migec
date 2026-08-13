@@ -66,14 +66,38 @@ def read_barcodes(path: str | Path) -> list[SampleRow]:
 
 
 def describe(rows: list[SampleRow]) -> str:
-    """A one-line-per-sample summary of what each pattern will extract."""
+    """A one-line-per-sample summary of what each row will extract.
+
+    Counts the captured positions from the spec rather than by matching a probe: `X` is not a
+    IUPAC symbol, so a probe built by upper-casing the pattern carries an `X` base and the matcher
+    has nothing sensible to do with it. Counting is also what the reader wants to check.
+    """
     from migec import _core
 
     out = []
     for r in rows:
-        probe = _core.match_pattern(r.pattern, r.pattern.upper().replace("N", "A").replace(".", "A"))
-        umi_len = len(probe["umi"])
-        out.append(
-            f"{r.sample_id}\tlen={len(r.pattern)}\tumi={umi_len}\tpattern={r.pattern}"
-        )
+        # Compile every pattern, master and slave. `migec sheet` exists to catch a bad row before
+        # a run rather than after one, so it has to actually parse them -- counting characters
+        # would happily accept a symbol the grammar rejects.
+        for spec in (r.pattern, r.slave):
+            if spec:
+                try:
+                    _core.match_pattern(spec, "A" * (len(spec) + 1))
+                except RuntimeError as exc:
+                    raise ValueError(f"{r.sample_id}: {exc}") from exc
+        umi = sum(1 for c in r.pattern if c in "Nn")
+        cell = sum(1 for c in r.pattern if c in "Xx")
+        # The slave pattern EXTENDS the UMI -- reporting only the master would tell a dual-end
+        # sheet it has a 12 nt barcode when it has 24, which is the number every collision
+        # estimate downstream is computed from.
+        slave_umi = sum(1 for c in (r.slave or "") if c in "Nn")
+        fields = [r.sample_id, f"len={len(r.pattern)}", f"umi={umi + slave_umi}"]
+        if slave_umi:
+            fields.append(f"({umi}+{slave_umi} dual-end)")
+        if cell:
+            fields.append(f"cell={cell}")
+        fields.append(f"pattern={r.pattern}")
+        if r.slave:
+            fields.append(f"slave={r.slave}")
+        out.append("\t".join(fields))
     return "\n".join(out)

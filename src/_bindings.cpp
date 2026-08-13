@@ -737,6 +737,10 @@ PYBIND11_MODULE(_core, m) {
             d["margin"] = m2.margin;
             d["umi"] = m2.umi;
             d["umi_qual"] = m2.umi_qual;
+            // The cell barcode is captured separately by `X` positions, and was missing here
+            // until the audit: a pattern could extract one and no Python caller could see it.
+            d["cell"] = m2.cell;
+            d["cell_qual"] = m2.cell_qual;
             d["payload_begin"] = m2.payload_begin;
             return d;
         },
