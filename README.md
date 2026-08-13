@@ -17,10 +17,10 @@ Computational Biology* 2017).
 
 > **Version 2 is under construction.** All three stages work today — `checkout`, `refine` and
 > `assemble` — with cell barcodes, whitelists, dual-end and positional (10x) layouts, cell calling,
-> QC figures, and `suggest`/`subsample`/`plot`. Index hopping, `.mig` bucket output and the published benchmark
-> comparisons are what remain; see [`ROADMAP.md`](ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on
-> branch [`legacy-v1`](../../tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
-> [1.2.9 release](../../releases/tag/1.2.9).
+> QC figures, and `suggest`/`subsample`/`plot`. Index hopping, `.mig` bucket output and the
+> published benchmark comparisons are what remain; see [`ROADMAP.md`](ROADMAP.md). The Groovy
+> MIGEC 1.2.9 is archived on branch [`legacy-v1`](../../tree/legacy-v1) and at tag `v1-final` —
+> Java users want the jars on the [1.2.9 release](../../releases/tag/1.2.9).
 
 ## Why
 
@@ -71,13 +71,49 @@ one buys.
 > **Never** run alevin, bustools or STARsolo on a consensus FASTQ. They read the barcode out of a
 > *raw* barcode read and deduplicate themselves; migec already did, and that read no longer exists.
 
+### Calling rare variants
+
+The same line decides which variant caller to use. `Mutect2`, `LoFreq`, `FreeBayes` and `VarDict`
+read a BAM and never look at `RX`, so they **compose**: one consensus is one molecule, so their
+depth already is a molecule count. `UMI-VarCal` and `UMIErrorCorrect` do their own grouping and
+consensus, so they **replace** `assemble` rather than following it — and a `--min-family-size 3`
+filter after `assemble` discards the whole library, because every family already has size 1.
+
+Which caller matters less than how many molecules it is handed, and that is fixed before any
+software runs: sequencing deeper buys more reads per molecule, only more input DNA buys molecules.
+[docs/variants.rst](docs/variants.rst) has the caller table, the published comparison, and the run
+over cell-free DNA reference material at known allele frequency that puts numbers on it.
+
 ## Install
 
 ```bash
-pip install migec
+uv tool install migec      # or: uv pip install migec, or: pip install migec
+migec info                 # prints the three version strings; they must agree
 ```
 
-Wheels for CPython 3.10–3.13 on Linux x86-64 and macOS arm64. From source: `bash setup.sh`.
+Wheels for CPython 3.10–3.13 on Linux x86-64 and macOS arm64, so nothing compiles. Python 3.10 or
+newer is required — on a cluster whose system Python is older, bring your own:
+
+```bash
+uv venv --python 3.12 ~/envs/migec && source ~/envs/migec/bin/activate && uv pip install migec
+```
+
+**From source**, for development:
+
+```bash
+git clone https://github.com/antigenomics/migec && cd migec
+bash setup.sh              # uv venv, editable install, and asserts the C++ extension imports
+```
+
+`setup.sh` needs [uv](https://docs.astral.sh/uv/getting-started/installation/) and a C++20
+compiler. It deliberately asserts that `migec._core` imports rather than only that the package
+does — without that check a failed C++ build looks like a successful install and only fails much
+later. Then:
+
+```bash
+cmake -S . -B build -DMIGEC_TESTS=ON && cmake --build build -j && ctest --test-dir build
+python -m pytest tests/unit tests/synthetic -q
+```
 
 ## Usage
 
@@ -501,6 +537,30 @@ It is also the memory-hostile case, because distinct barcodes are what everythin
 it is what the benchmarks use: 1,179,549 reads/s at 1.02 reads/UMI, 282 B resident per distinct
 barcode, still bounded by the bucket rather than the library.
 
+### For rare variants, the molecule count decides — not the caller
+
+Run over 100 runs of two SiMSen-Seq studies on cell-free DNA reference material at *certified*
+allele frequencies (`PRJNA788522`, `PRJNA507366`; `scripts/ctdna_titration.py`). At 0.125% VAF the
+DNA input alone settles the outcome:
+
+| input | depth | molecules at the site | variant molecules | P(at least 3 copies) |
+|---|---|---|---|---|
+| 5 ng | 3.3× | 2,699 | 3.4 | **0.65** |
+| 5 ng | 10× | 4,530 | 5.7 | **0.89** |
+| 20 ng | 3.3× | 7,162 | 9.0 | 0.99 |
+| 20 ng | 10× | 11,961 | 15.0 | 1.00 |
+
+At 5 ng a 0.125% variant is a coin flip and **no caller fixes it** — a third of replicates simply do
+not contain three copies. The decision that mattered was made at extraction.
+[docs/variants.rst](docs/variants.rst) has the caller table (standard callers *compose* with migec,
+UMI-aware ones *replace* a stage), the 33-run true-negative arm, and the rest of the numbers.
+
+The same data gives an independent check on the barcode-error estimate: `PRJNA507366` varies the
+polymerase while holding template and protocol fixed, and `refine` separates the high-fidelity
+enzymes from the standard ones by **3 Phred, a factor of two** — Accuprime/Platinum/Phusion at
+Q30.8–31.4 against Platinum HiFi at Q34.0 and Platinum SuperFi at Q34.8–35.1 — from the barcodes
+alone, with no reference, no alignment, and no knowledge of which enzyme it was looking at.
+
 ### Speed and memory are reported, not assumed
 
 `--threads` defaults to one per core on **all three stages**, and **the output is byte-identical
@@ -612,21 +672,67 @@ distinct molecules. Both are reported; only the collision form feeds any decisio
 
 ## Pipelines
 
-`integrations/nextflow/` is an nf-core-style local module set — four processes, a subworkflow,
-`meta.yml`, `nextflow.config`, `environment.yml` — that drops into
-[nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands you FASTQ pairs. SLURM is
-the pipeline's business, not the module's: it declares `label` and `task.cpus` and nothing more.
+Two, for two situations ([docs/nextflow.rst](docs/nextflow.rst) has both):
+
+**Nextflow** — `integrations/nextflow/` runs the three stages and then keeps going:
+
+```bash
+nextflow run integrations/nextflow --mode ctdna --input 'd/*_R{1,2}.fq.gz' --preset tso500 --fasta ref.fa
+nextflow run integrations/nextflow --mode airr  --input 'd/*_R{1,2}.fq.gz' --preset migec
+nextflow run integrations/nextflow --mode consensus --input 'd/*_R{1,2}.fq.gz' --preset 10x-v2
+```
+
+`ctdna` aligns and calls variants, `airr` calls clonotypes with arda, `consensus` stops at the
+consensus. It drops into [nf-core/airrflow](https://nf-co.re/airrflow) or anything else that hands
+you FASTQ pairs. The align module fails loudly if the `MI:Z:` tag does not reach the BAM, because
+that failure is otherwise silent.
+
+**SLURM** — `integrations/slurm/` is two sbatch templates and a sample sheet, for a cohort where
+the consensus *is* the deliverable:
+
+```bash
+sbatch --array=1-$(($(wc -l < samples.tsv) - 1)) integrations/slurm/migec_array.sbatch samples.tsv
+R1=s1.fq.gz SAMPLE=s1 BC_PATTERN='0:12' bash integrations/slurm/migec_sample.sbatch   # no SLURM
+```
+
+Both run as ordinary bash without SLURM — that is how they are tested, and how a layout should be
+checked before a cohort is queued.
 
 All three stages thread, and each is byte-identical at any `-t`, so a retry with different cores
-cannot change a result — which is what makes an escalating `errorStrategy 'retry'` safe here.
-Per-sample keys in `meta` beat the `params.migec_*` defaults, so one run can mix chemistries. See
-[docs/nextflow.rst](docs/nextflow.rst); nextflow is not installed on the machine these docs were
-measured on, so the modules are reviewed against the nf-core spec rather than verified by a run.
+cannot change a result — which is what makes an escalating `errorStrategy 'retry'` or `--requeue`
+safe. Per-sample keys in `meta` beat the `params.*` defaults, so one run can mix chemistries.
+
+> The SLURM templates have been run end to end here. Nextflow has not — it is not installed on this
+> machine, so the modules are reviewed against the nf-core spec rather than verified by a run.
+
+## Notebooks
+
+Six [marimo](https://marimo.io) notebooks, each a plain Python file with its own dependency header,
+so `uv` builds the environment and nothing needs installing first:
+
+```bash
+uv run marimo edit notebooks/ctdna_variants.py
+```
+
+`platforms.py` (every layout), `barcode_space.py` (collisions and the error budget),
+`refine_diagnostics.py` (where the molecules went), `exome_capture.py` (why coordinate
+deduplication undercounts), `airr_repertoire.py` (reads against molecules for clonotype counts),
+`ctdna_variants.py` (how many molecules a caller actually gets). See
+[notebooks/README.md](notebooks/README.md); four of the six need no network at all.
 
 ## Documentation
 
-<https://antigenomics.github.io/migec/> — see [`docs/formats.rst`](docs/formats.rst) for the on-disk
-format, and [`ROADMAP.md`](ROADMAP.md) for what is implemented.
+<https://antigenomics.github.io/migec/>. The pages worth knowing about:
+
+| | |
+|---|---|
+| [`docs/layouts.rst`](docs/layouts.rst) | where the barcode is: the grammar, every preset, fgbio read structures |
+| [`docs/variants.rst`](docs/variants.rst) | which variant caller, and the molecule count that decides whether any can see it |
+| [`docs/downstream.rst`](docs/downstream.rst) | what consumes the consensus, measured tool by tool |
+| [`docs/nextflow.rst`](docs/nextflow.rst) | the Nextflow modules and the SLURM templates |
+| [`docs/formats.rst`](docs/formats.rst) | the inter-stage contract: tags, `.mig` buckets, every TSV column |
+| [`SOURCES.md`](SOURCES.md) | every dataset, where it came from, and the command that re-fetches it |
+| [`ROADMAP.md`](ROADMAP.md) | what is implemented and what is not |
 
 ## Citing
 

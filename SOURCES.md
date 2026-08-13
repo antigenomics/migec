@@ -16,6 +16,7 @@ are never conflated in a table row.
 | `assets/benchmark_threads.tsv` + `.json` | this machine, 2026-08-13 | **experimental** (a timing measurement) | `python scripts/benchmark_threads.py --reads 2000000 -o assets/` |
 | `assets/SRR1763769.mig.tsv`, `assets/assemble.coverage.tsv` | `isalgo/umi_data` CI fixture | derived | `migec refine ci/SRR1763769_umi0.5pct.fq.gz -o r/ && migec assemble r/CTRL.fq.gz -o a/` |
 | `assets/*.svg`, `assets/*.gp` | the tables beside them | derived | `migec plot assets/ -o assets/` |
+| `assets/ctdna_titration.tsv` (+ `_runs.tsv`) | 100 runs of `PRJNA788522` + `PRJNA507366` | derived (migec over experimental data) | `python scripts/sra_fetch.py get <runs> -o simsen/` then `python scripts/ctdna_titration.py --reads simsen/ --out ctdna/ --design design.tsv` |
 
 Result tables and figures are output, not data, so they live here next to the script that made
 them rather than in `isalgo/umi_data`. Test corpora go the other way: HuggingFace, never git.
@@ -157,6 +158,52 @@ numbers inherits it.
 **What these are good for:** the *design* — spiking COSMIC variants at known VAF into a real cfDNA
 background at controlled depth is the ground truth a consensus-quality claim wants — and two more
 comparators for M5, `UMI-VarCal` and `UMIErrorCorrect`.
+
+### SiMSen-Seq — the ctDNA data that DID keep its UMIs (fetched 2026-08-13)
+
+Found by screening SRA rather than by assuming, after the Maruzani entry above established that
+their two accessions had not. Both studies are the Gothenburg SiMSen-Seq protocol on **commercial
+cell-free DNA reference material with certified mutant allele frequencies**, and both deposited
+the reads untrimmed, so the **12 nt inline UMI is still there**. `migec suggest` recovers it from
+base composition alone with no knowledge of the protocol — a 12 nt near-uniform run at cycles
+0-11, then the constant 16 nt spacer (`ATGGGAAAGAGTGTCC`), which is exactly UMIErrorCorrect's
+`-ul 12 -sl 16`.
+
+| Item | Value |
+|---|---|
+| Pattern | `--bc-pattern '0:12'`, single-end, positional (no `--max-offset`) |
+| Panel | multiplex amplicon, measured from the consensus prefixes: **5 amplicons** for `PRJNA788522`, **3** for `PRJNA507366` (whose own labels say `3plx`) |
+| Cluster copy | `/projects/tcr_bcr_rnaseq/migec_ctdna/fastq` on aldan3, 100 runs, 6.9 GB (2026-08-13). A convenience cache — the fetch command above regenerates it |
+| Provenance | experimental (SRA), commercial reference material; the certified VAFs are the vendor's |
+| Fetch | `python scripts/sra_fetch.py get <runs> -o data/` (NCBI S3, ~7 MB/s) |
+| Analyse | `python scripts/ctdna_titration.py --reads data/ --out out/ --design design.tsv` |
+| Designs | `curl -sG 'https://www.ebi.ac.uk/ena/portal/api/search' -d result=read_run -d query=study_accession=<PRJ> -d fields=run_accession,sample_alias -d format=tsv -d limit=0` |
+
+**`PRJNA788522` — the titration.** Österlund T, Filges S, Johansson G, Ståhlberg A.
+*UMIErrorCorrect and UMIAnalyzer: Software for Consensus Read Generation, Error Correction, and
+Visualization Using Unique Molecular Identifiers.* **Clin Chem** 2022;68(11):1425–1435.
+[doi:10.1093/clinchem/hvac136](https://doi.org/10.1093/clinchem/hvac136), PMID 36031761.
+
+72 runs, 41.8 M reads, Illumina MiniSeq, single-end 151 nt. The design is in `sample_alias` as
+`<input>ng_<vaf>_<depth>x_rep_<n>`: mutant allele frequency **0% (`WT`), 0.125%, 0.25%, 1%** plus
+an undiluted `cell_line` arm, crossed with DNA input **5 / 20 / 80 ng** and depth **3.3 / 10 / 30x
+reads per UMI**, three replicates each. Note: the `WT` arm is a **true negative** — its variant
+frequency is zero by construction, so anything a caller reports there is its own false-positive
+rate on real chemistry rather than on a simulation.
+
+**`PRJNA507366` — the polymerase panel.** Filges S, Yamada E, Ståhlberg A, Godfrey TE. *Impact of
+Polymerase Fidelity on Background Error Rates in Next-Generation Sequencing with Unique Molecular
+Identifiers/Barcodes.* **Sci Rep** 2019;9(1):3503.
+[doi:10.1038/s41598-019-39762-6](https://doi.org/10.1038/s41598-019-39762-6), PMID 30837525.
+
+28 runs, 81.4 M reads. Note: the design is **not** in `sample_alias` (every row reads
+`SeraCare_Reference_Material`) — it is in **`library_name`** (the enzyme: Phusion, Accuprime,
+Accuprime_hifi, Platinum, Platinum_Hifi, Platinum superfi, three replicates each) and in
+`experiment_title` (`Wildtype` against `0.031% VAF` / `0.0625% VAF` / `0.125% VAF`). Reading the
+alias alone would have called this study undesigned. It extends the frequency range **4x below**
+PRJNA788522's floor, and it is the only public dataset here that varies the polymerase while
+holding template and protocol fixed — which is the comparison `--rt-error auto` needs and the one
+McInerney 2014's published fidelities can be checked against.
 
 ### Calib (github.com/vpc-ccg/calib)
 

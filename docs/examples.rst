@@ -77,7 +77,10 @@ Runnable notebooks
 ------------------
 
 `marimo <https://marimo.io>`_ notebooks, each self-contained. The fixtures they use come from
-`isalgo/umi_data <https://huggingface.co/datasets/isalgo/umi_data>`_ and download on first run.
+`isalgo/umi_data <https://huggingface.co/datasets/isalgo/umi_data>`_ and download on first run --
+except ``ctdna_variants.py``, which fetches its own runs straight from SRA with
+``scripts/sra_fetch.py``, because anything with a public accession is regenerated rather than
+mirrored.
 
 .. code-block:: bash
 
@@ -94,6 +97,9 @@ Runnable notebooks
      - is my barcode long enough? collisions, occupancy, the error budget
    * - ``notebooks/refine_diagnostics.py``
      - the coverage curve, the barcode-rank plot, and where the errors are
+   * - ``notebooks/ctdna_variants.py``
+     - how many molecules a variant caller actually gets, on cell-free DNA reference material at
+       known allele frequency (:doc:`variants`)
 
 Looking at the run
 ------------------
@@ -154,8 +160,20 @@ also covers when to align *before* collapsing instead.
 Pipelines
 ---------
 
-``integrations/nextflow/`` is an nf-core-style local module set for
-`nf-core/airrflow <https://nf-co.re/airrflow>`_ or any pipeline handing you FASTQ pairs. SLURM is
-the pipeline's business; the modules declare ``label`` and ``task.cpus`` and nothing more. All
-three stages thread, and all three are byte-identical at any thread count, so a retry with more
-cores cannot change a result. See :doc:`nextflow`.
+Two, for two different situations (:doc:`nextflow` has both in full):
+
+* **Nextflow** -- ``integrations/nextflow/`` runs the three stages and then continues:
+  ``--mode ctdna`` aligns and calls variants, ``--mode airr`` calls clonotypes with arda,
+  ``--mode consensus`` stops at the consensus. It drops into
+  `nf-core/airrflow <https://nf-co.re/airrflow>`_ or any pipeline that hands you FASTQ pairs.
+* **SLURM** -- ``integrations/slurm/`` is two sbatch templates and a sample sheet, for a cohort
+  where the deliverable is the consensus. Both run as ordinary bash without SLURM, which is how
+  to check a layout before queueing anything.
+
+All three stages are byte-identical at any thread count, so a retry with more cores cannot change
+a result -- which is what makes an escalating retry safe in either.
+
+.. code-block:: bash
+
+   nextflow run integrations/nextflow --mode ctdna --input 'd/*_R{1,2}.fq.gz' --fasta ref.fa
+   sbatch --array=1-11 integrations/slurm/migec_array.sbatch samples.tsv

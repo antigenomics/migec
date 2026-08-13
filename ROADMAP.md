@@ -43,13 +43,14 @@ Everything below is either open or half-open. Nothing else on this page is.
 | 4 | `--rt-error auto` | M1 | falls straight out of (3). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
 | 5 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
 | 6 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
-| 7 | ctDNA ground truth, COSMIC at 0.005-0.075 VAF | M5 | the one claim with no ground truth yet. Never: Maruzani's deposited runs carry **no** UMI, so they have to be simulated -- and their own rule assumes co-terminal reads, which X1 falsified |
+| 7 | ctDNA ground truth | M5 | **no longer has to be built.** `PRJNA788522` and `PRJNA507366` are cfDNA reference material at certified VAF (0 / 0.031 / 0.0625 / 0.125 / 0.25 / 1%) with a **real 12 nt inline UMI that survived deposition**, and a true-negative `WT` arm. Maruzani's two runs carry no UMI and had to be simulated; these do not. `SOURCES.md`, `docs/variants.rst` |
 | 8 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
 | 9 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
-Two things are blocked on data rather than on work: **Britanova et al aging** (bulk TCR, shallow --
-the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled, and the ctDNA ground truth
-above has to be built rather than downloaded.
+One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
+shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
+ground truth is no longer on that list: it was found rather than built, by screening SRA read
+structure instead of trusting the published claim that none exists (`scripts/sra_fetch.py probe`).
 
 ## M0 — skeleton, format, simulator
 
@@ -299,11 +300,16 @@ model has to use the evidence that survives at one read:
 - [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
       UMI-tools, Calib, fgbio, Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware
       callers benchmarked by Maruzani et al. 2024 for low-frequency ctDNA)
-- [ ] ctDNA ground truth in the style of Maruzani et al.: COSMIC variants spiked at 0.005–0.075 VAF
-      into a real cfDNA background at 200x/450x/850x. Never: Their deposited runs carry **no** UMI
-      (aligned BAM submissions, `suggest` finds no pattern, `CMP_LINKAGE_GROUP` empty), so the UMIs
-      have to be simulated — and their rule assigns them to reads sharing start *and* end, which is
-      the co-terminal assumption X1 falsified
+- [x] ctDNA ground truth **located, not simulated** (2026-08-13): `PRJNA788522` (72 runs, cfDNA
+      reference material at 0 / 0.125 / 0.25 / 1% VAF x 5/20/80 ng x 3.3/10/30x, three replicates)
+      and `PRJNA507366` (28 runs, six polymerases plus 0.031% / 0.0625% VAF). Both carry a real
+      12 nt inline UMI. Never: Maruzani's runs carry **no** UMI (aligned BAM submissions, `suggest`
+      finds no pattern, `CMP_LINKAGE_GROUP` empty), so theirs had to be simulated — 9 nt, Phred
+      fixed at 37, assigned to reads sharing start *and* end, which is the co-terminal assumption
+      X1 falsified. That is a property of the two runs they picked, not of the public record
+- [ ] Variant calls on top of it: run the callers themselves (LoFreq, Mutect2, UMI-VarCal,
+      UMIErrorCorrect) against the `WT` true-negative arm and the certified dilutions. `docs/variants.rst`
+      reports the molecule counts and the detectability arithmetic; the call sets are the next step
 - Gate: grouping ARI ≥0.99; residual error ≤1e-5 on a clonal control; ≥3× MIGEC v1 wall-clock
 
 ## Deliberately not doing

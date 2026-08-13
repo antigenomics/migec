@@ -11,8 +11,9 @@ Reference
      - the inter-stage contract: tags, ``.mig`` buckets, every TSV column
    * - :doc:`Speed and memory <performance>`
      - what each stage costs, what it scales with, and how the thread invariance is asserted
-   * - :doc:`Nextflow <nextflow>`
-     - the nf-core-style module, and the two things that go wrong in a pipeline
+   * - :doc:`Pipelines <nextflow>`
+     - the nf-core-style modules with their ctDNA and AIRR subworkflows, the SLURM templates, and
+       the three things that go wrong in a pipeline
    * - :doc:`Roadmap <roadmap>`
      - what is done, what is not, and what the version numbers mean
 
