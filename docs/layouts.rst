@@ -153,6 +153,50 @@ to use.
 
 A read structure is positional by definition, so it carries its own anchor.
 
+Translating from zUMIs
+~~~~~~~~~~~~~~~~~~~~~~
+
+zUMIs -- and so NASC-seq2, which drives it -- writes the layout as a ``base_definition``:
+
+.. code-block:: yaml
+
+    file1:
+      base_definition:
+        - UMI(12-19)
+        - cDNA(23-200)
+      find_pattern: ATTGCGCAATG;2
+    file2:
+      base_definition:
+        - cDNA(1-200)
+        - BC(201-220)
+
+Never: **zUMIs ranges are 1-based and inclusive; migec slices are 0-based and half-open.** They are
+not the same numbers and they are not off by a constant either -- ``UMI(12-19)`` is eight bases at
+offsets 11 through 18, which is ``11:19`` here. Subtract one from the start and leave the stop
+alone:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 30 40
+
+   * - zUMIs
+     - migec
+     - note
+   * - ``UMI(12-19)``
+     - ``11:19``
+     - 8 nt; start-1, stop unchanged
+   * - ``BC(1-6,20-26)``
+     - ``cell:0:6,cell:19:26``
+     - two ranges, one barcode -- migec concatenates them the same way
+   * - ``cDNA(23-200)``
+     - (nothing)
+     - the payload; migec trims to the end of the pattern and keeps the rest
+
+``find_pattern: ATTGCGCAATG;2`` is a constant anchor with two mismatches allowed. Write it into the
+pattern in lowercase -- ``attgcgcaatg`` is scored at half weight, which is the soft-match region --
+and drop the slice form, since a pattern that carries its own anchor does not need to be anchored
+at a position.
+
 4. A barcode table
 ------------------
 

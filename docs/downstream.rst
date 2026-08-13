@@ -78,9 +78,12 @@ Not verified here
   so the failure is the build's and says nothing about migec's output.
 * **bwa-mem2.** Same ``-C`` flag and the same comment-copying code path as ``bwa``, which was
   verified. No arm64 build to run.
-* **NASC-seq2.** Its UMI handling is upstream of where migec ends: it wants raw barcoded reads to
-  do its own collapsing, so feeding it consensuses would collapse twice. Use migec's consensus for
-  the alignment and counting stages only.
+* **NASC-seq2.** Not downstream of ``assemble`` at all -- it is an **alternative to** ``checkout``.
+  Its demultiplexing is zUMIs, declared as ``UMI(12-19)`` / ``cDNA(23-200)`` / ``BC(201-220)`` with
+  a ``find_pattern`` anchor, which is the same job migec's pattern does; its molecule tagging then
+  runs on the aligned BAM. Feeding it a consensus FASTQ would collapse twice. :doc:`layouts` has
+  the conversion, and the trap in it: zUMIs ranges are **1-based and inclusive**, migec slices are
+  **0-based and half-open**, so ``UMI(12-19)`` is ``11:19`` and not ``12:19``.
 
 Counting after collapsing
 -------------------------

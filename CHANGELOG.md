@@ -68,6 +68,12 @@ no UMI anywhere — confirmed on three runs by the absence of the template-switc
 would have to be. `migec suggest` reports it unprompted rather than fitting a barcode to payload.
 The preset is therefore sourced from `ncgr/UMI-analysis` itself, and `SOURCES.md` records both.
 
+**Translating from zUMIs**, which is what NASC-seq2 drives. Never: zUMIs ranges are 1-based and
+inclusive, migec slices are 0-based and half-open, so `UMI(12-19)` is `11:19` and not `12:19` —
+subtract one from the start and leave the stop alone. `BC(1-6,20-26)` becomes
+`cell:0:6,cell:19:26`. NASC-seq2 is an alternative to `checkout` rather than something downstream
+of `assemble`; feeding it a consensus FASTQ would collapse twice.
+
 Also: README badges; `docs/layouts.rst` collecting all four ways to declare a layout; the Nextflow
 module takes `migec_preset` and no longer forces an offset.
 
