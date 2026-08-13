@@ -52,6 +52,10 @@ struct RefineRequest {
     int expect_cells = 3000;
     // Snap cell barcodes to a list of the barcodes that were actually synthesised, before any of
     // the rest of this runs. Empty disables it.
+    // Residual-FDR target for the reported MIG size threshold. ⛔ The threshold is REPORTED, never
+    // applied: a molecule seen three times with no plausible parent is information, and cutting it
+    // discards real sequence. Downstream may filter on it; refine does not.
+    double target_fdr = 0.05;
     std::string cell_whitelist;
     WhitelistParams whitelist;
     // Turn the evidence off, to measure what the count ratio alone would have done.
@@ -82,6 +86,11 @@ struct RefineStats {
     uint64_t knee_rank = 0;        // where the curve breaks, reported next to the threshold
     uint32_t knee_molecules = 0;
     WhitelistStats whitelist;
+    // Smallest MIG size whose estimated residual false-molecule rate is at or below `target_fdr`,
+    // and the rate at size 1. 0 when nothing was estimable.
+    uint32_t mig_size_threshold = 0;
+    double residual_fdr_at_one = 0.0;
+    uint64_t suspected_residual = 0;
     std::string sample_id;
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.

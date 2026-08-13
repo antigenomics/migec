@@ -147,6 +147,37 @@ An ``N`` is **expanded, not discarded**: it is a base the instrument declined to
 with all four at ``e = 0.75``, so a barcode carrying one is still correctable rather than thrown
 away with the molecule it tagged.
 
+What correction left behind
+---------------------------
+
+The molecule count is only as good as the errors that were *not* corrected, so ``refine`` estimates
+those directly rather than trusting the correction. A surviving barcode that still looks like a
+child of a surviving neighbour is one the posterior declined to merge:
+
+.. code-block:: text
+
+   residual        1,294 molecules still look like children of a neighbour -- by count, or by
+                   their reads agreeing on the molecule
+                   5.25% of 1-read molecules; at >= 2 reads the rate is within the 5% target.
+                   REPORTED, not applied -- a molecule seen three times is still a molecule
+
+.. warning::
+
+   **"A much larger neighbour" is not the test.** At 1–3 reads per UMI nothing is 20× anything, so
+   a count-ratio criterion reports **zero residual in exactly the regime where the residual is
+   worst** — the same trap the correction posterior itself fell into. The payload is what still
+   separates them at one read: a neighbour whose reads agree on the molecule is a child whatever
+   the counts say. Measured on the same library, the count-only estimator says 0 and the full one
+   says 1,294.
+
+⛔ The MIG size threshold is **reported, never applied**. Every molecule is in the output whatever
+it says: a molecule seen three times with no plausible parent is information, and cutting it
+discards real sequence. ``--target-fdr`` sets which size the report points at; filtering on it is
+a downstream decision, taken with the coverage histogram in view.
+
+``<sample>.bins.tsv`` carries ``molecules``, ``suspected_residual`` and ``residual_fdr`` per
+power-of-two size, next to the fraction that *was* merged.
+
 Cell calling
 ------------
 

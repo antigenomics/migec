@@ -511,7 +511,7 @@ PYBIND11_MODULE(_core, m) {
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
            int expect_cells, const std::string& cell_whitelist, double min_whitelist_posterior,
-           int gzip_level) {
+           double target_fdr, int gzip_level) {
             RefineRequest req;
             req.input = input;
             req.output_dir = out_dir;
@@ -523,6 +523,7 @@ PYBIND11_MODULE(_core, m) {
             req.expect_cells = expect_cells;
             req.cell_whitelist = cell_whitelist;
             req.whitelist.min_posterior = min_whitelist_posterior;
+            req.target_fdr = target_fdr;
             req.gzip_level = gzip_level;
             RefineStats st;
             {
@@ -550,6 +551,9 @@ PYBIND11_MODULE(_core, m) {
             d["cell_threshold"] = st.cell_threshold;
             d["knee_rank"] = st.knee_rank;
             d["knee_molecules"] = st.knee_molecules;
+            d["mig_size_threshold"] = st.mig_size_threshold;
+            d["residual_fdr_at_one"] = st.residual_fdr_at_one;
+            d["suspected_residual"] = st.suspected_residual;
             py::dict wl;
             wl["barcodes"] = st.whitelist.barcodes;
             wl["exact"] = st.whitelist.exact;
@@ -577,7 +581,8 @@ PYBIND11_MODULE(_core, m) {
         py::arg("use_quality") = true, py::arg("use_payload") = true,
         py::arg("payload_width") = 32, py::arg("min_posterior") = 0.95,
         py::arg("expect_cells") = 3000, py::arg("cell_whitelist") = std::string(),
-        py::arg("min_whitelist_posterior") = 0.975, py::arg("gzip_level") = 6,
+        py::arg("min_whitelist_posterior") = 0.975, py::arg("target_fdr") = 0.05,
+        py::arg("gzip_level") = 6,
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
         "correction can be audited.");

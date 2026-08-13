@@ -151,6 +151,13 @@ def refine(
         "that a barcode is genuinely off-list -- without which every hopped or undeclared barcode "
         "is absorbed into whichever entry happens to be nearest.",
     ),
+    target_fdr: float = typer.Option(
+        0.05,
+        "--target-fdr",
+        help="Residual false-molecule rate the reported MIG size threshold aims at. The threshold "
+        "is REPORTED, never applied: a molecule seen three times with no plausible parent is "
+        "information, and cutting it discards real sequence.",
+    ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
     ),
@@ -167,7 +174,7 @@ def refine(
     summary = run(
         reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
         use_payload=not no_payload, min_posterior=min_posterior, expect_cells=expect_cells,
-        cell_whitelist=cell_whitelist or "",
+        cell_whitelist=cell_whitelist or "", target_fdr=target_fdr,
     )
     typer.echo(format_report(summary))
 

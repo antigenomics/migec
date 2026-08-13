@@ -238,7 +238,13 @@ correction is written up in `project/review-algorithms.md`.
   `1-background` spread over every entry (~1e-6 each for 737k), so a library-level "1% off-list"
   is four orders of magnitude too big and wins every time. Use the off-list read share divided by
   the distinct off-list barcodes, both measured.
-- Next: M3's remainder (three error-rate estimators, the FDR number), then the M2 remainder
+- ⛔ **Any "is this a child?" test built on the count ratio reports ZERO at 1-3 reads/UMI**, which
+  is where the answer matters most. It caught me twice: once in the correction posterior, once in
+  the residual-FDR estimator. Both now use payload agreement as well. On a 1.23 reads/barcode
+  library the count-only residual is 0 and the full one is 1,294.
+- **The MIG-size FDR threshold is reported, never applied** (2026-08-13). Measured residual, not
+  derived. 5.25% of 1-read molecules at 1.23 reads/barcode, 0% at 4.62.
+- Next: M3's remainder (the template's own error split), then the M2 remainder
   (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.

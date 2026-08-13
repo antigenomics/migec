@@ -50,6 +50,22 @@ uint64_t pack_key_snapped(uint64_t snapped_cell, int cell_length, std::string_vi
     return pack_barcode(joined);
 }
 
+// Surviving molecules per power-of-two bin of their CORRECTED count. A barcode's bin moves when
+// its children are folded in, so this cannot be read off the pre-correction histogram -- and it is
+// computed once rather than per bin, because a scan per bin is O(barcodes x bins) and the barcodes
+// are the thing that scales.
+std::vector<uint64_t> molecules_per_bin(const CorrectionResult& correction, size_t nbins) {
+    std::vector<uint64_t> out(nbins, 0);
+    for (uint32_t c : correction.corrected) {
+        if (!c) continue;
+        size_t idx = 0;
+        while ((c >> idx) > 1) ++idx;
+        if (idx >= nbins) idx = nbins - 1;
+        ++out[idx];
+    }
+    return out;
+}
+
 void bin(std::vector<uint64_t>& histogram, uint64_t n) {
     size_t b = 0;
     while ((n >> b) > 1) ++b;
@@ -495,11 +511,80 @@ RefineStats refine(const RefineRequest& request) {
                 }
             }
         }
+        // What is left over: a surviving barcode that still looks like a child of a surviving
+        // neighbour is one the posterior declined to merge. Counting those per bin gives a
+        // residual false-molecule rate measured on this library rather than derived.
+        //
+        // ⚠ "Much larger neighbour" alone is not the test. At 1-3 reads per UMI nothing is 20x
+        // anything, so a count-ratio criterion reports zero residual in precisely the regime where
+        // the residual is worst -- the same trap the correction posterior itself fell into. The
+        // payload is what still separates them at one read: a neighbour whose reads agree on the
+        // molecule is a child whatever the counts say.
+        std::vector<uint64_t> suspected(nbins, 0);
+        {
+            const int width = L;
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (correction.corrected[i] == 0) continue;
+                const uint32_t mine = correction.corrected[i];
+                bool looks_like_a_child = false;
+                for (int j = 0; j < width && !looks_like_a_child; ++j) {
+                    const int shift = 62 - 2 * j;
+                    const uint64_t cur = (entries[i].key >> shift) & 3u;
+                    for (uint64_t b = 0; b < 4; ++b) {
+                        if (b == cur) continue;
+                        const uint64_t want =
+                            (entries[i].key & ~(uint64_t{3} << shift)) | (b << shift);
+                        const size_t at = slot(want);
+                        if (at >= entries.size() || entries[at].key != want) continue;
+                        if (correction.corrected[at] == 0) continue;
+                        if (correction.corrected[at] >= 20u * mine) {
+                            looks_like_a_child = true;
+                            break;
+                        }
+                        if (pw > 0 && correction.corrected[at] >= mine) {
+                            int mism = 0, cmp = 0;
+                            for (int k = 0; k < pw; ++k) {
+                                const char x = evidence.payload[i * static_cast<size_t>(pw) +
+                                                                static_cast<size_t>(k)];
+                                const char y = evidence.payload[at * static_cast<size_t>(pw) +
+                                                                static_cast<size_t>(k)];
+                                if (!x || !y || x == 'N' || y == 'N') continue;
+                                ++cmp;
+                                mism += x != y;
+                            }
+                            if (cmp >= 8 && mism * 20 <= cmp) {
+                                looks_like_a_child = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!looks_like_a_child) continue;
+                size_t bidx = 0;
+                while ((mine >> bidx) > 1) ++bidx;
+                if (bidx >= nbins) bidx = nbins - 1;
+                ++suspected[bidx];
+                ++stats.suspected_residual;
+            }
+        }
+        const std::vector<uint64_t> surviving_in = molecules_per_bin(correction, nbins);
+        // The smallest size at which the residual rate is acceptable. Reported, never applied.
+        for (size_t b = 0; b < nbins; ++b) {
+            if (!barcodes[b]) continue;
+            const uint64_t surviving = surviving_in[b];
+            const double fdr = surviving ? static_cast<double>(suspected[b]) /
+                                               static_cast<double>(surviving) : 0.0;
+            if (b == 0) stats.residual_fdr_at_one = fdr;
+            if (!stats.mig_size_threshold && fdr <= request.target_fdr) {
+                stats.mig_size_threshold = static_cast<uint32_t>(1ull << b);
+            }
+        }
+
         std::FILE* fh =
             std::fopen((out_dir / (stats.sample_id + ".bins.tsv")).string().c_str(), "w");
         if (!fh) throw MigecError("refine: cannot write the bin table");
         std::fprintf(fh, "min_reads\tmax_reads\tbarcodes\treads\tmerged\tfraction_erroneous\t"
-                         "payload_entropy_bits\n");
+                         "molecules\tsuspected_residual\tresidual_fdr\tpayload_entropy_bits\n");
         for (size_t b = 0; b < nbins; ++b) {
             if (!barcodes[b]) continue;
             double entropy = 0.0;
@@ -516,12 +601,17 @@ RefineStats refine(const RefineRequest& request) {
                 entropy += h;
                 ++scored;
             }
-            std::fprintf(fh, "%llu\t%llu\t%llu\t%llu\t%llu\t%.6f\t%.4f\n",
+            const uint64_t surviving = surviving_in[b];
+            std::fprintf(fh, "%llu\t%llu\t%llu\t%llu\t%llu\t%.6f\t%llu\t%llu\t%.6f\t%.4f\n",
                          1ull << b, (1ull << (b + 1)) - 1,
                          static_cast<unsigned long long>(barcodes[b]),
                          static_cast<unsigned long long>(reads_in[b]),
                          static_cast<unsigned long long>(merged_in[b]),
                          static_cast<double>(merged_in[b]) / static_cast<double>(barcodes[b]),
+                         static_cast<unsigned long long>(surviving),
+                         static_cast<unsigned long long>(suspected[b]),
+                         surviving ? static_cast<double>(suspected[b]) /
+                                         static_cast<double>(surviving) : 0.0,
                          scored ? entropy / scored : 0.0);
         }
         std::fclose(fh);

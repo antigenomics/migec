@@ -346,6 +346,8 @@ def test_a_disagreement_between_ordmag_and_the_knee_is_reported(tmp_path):
         "knee_molecules": 40, "min_posterior": 0.95,
         "whitelist": {"barcodes": 0, "exact": 0, "corrected": 0, "off_list": 0,
                       "reads_corrected": 0, "far": 0, "background_prior": 0.0},
+        "suspected_residual": 0, "residual_fdr_at_one": 0.0, "mig_size_threshold": 1,
+        "target_fdr": 0.05,
     }
     report = format_report(summary)
     assert "OrdMag calls" in report
@@ -442,3 +444,33 @@ def test_a_whitelist_of_the_wrong_length_is_refused(tmp_path):
         )
     with pytest.raises(RuntimeError, match="whitelist holds"):
         run(tmp_path / "r.fq.gz", tmp_path / "ref", cell_whitelist=tmp_path / "wl.txt")
+
+
+def test_the_residual_fdr_finds_what_correction_left_behind(tmp_path):
+    """The number that says whether the molecule count can be trusted. It must rise where
+    correction is known to fail -- 1-3 reads per UMI -- and fall where it does not."""
+    build(tmp_path / "shallow", n_molecules=30_000, n_clones=100, coverage=1.6,
+          coverage_cv=0.4, umi_len=12, umi_error=5e-3, seed=5)
+    shallow = run(tmp_path / "shallow" / "co" / "S1.fq.gz", tmp_path / "shallow" / "ref")
+    build(tmp_path / "deep", n_molecules=30_000, n_clones=100, coverage=6.0,
+          coverage_cv=0.4, umi_len=12, umi_error=5e-3, seed=5)
+    deep = run(tmp_path / "deep" / "co" / "S1.fq.gz", tmp_path / "deep" / "ref")
+
+    assert shallow["residual_fdr_at_one"] > 10 * deep["residual_fdr_at_one"]
+    assert shallow["suspected_residual"] > 0
+    # ⛔ Reported, never applied: every molecule survives whatever the threshold says.
+    assert shallow["mig_size_threshold"] >= 1
+    hist = {b["min_reads"]: b["molecules"] for b in shallow["coverage"]}
+    assert hist[1] > 0, "1-read molecules must still be in the output"
+    assert "REPORTED, not applied" in format_report(shallow)
+
+
+def test_a_count_ratio_alone_would_report_no_residual_at_all(tmp_path):
+    """The trap this estimator had to avoid. At 1-3 reads per UMI nothing is 20x anything, so a
+    pure count-ratio criterion reports zero residual in exactly the regime where it is worst."""
+    build(tmp_path, n_molecules=30_000, n_clones=100, coverage=1.6, coverage_cv=0.4,
+          umi_len=12, umi_error=5e-3, seed=5)
+    with_payload = run(tmp_path / "co" / "S1.fq.gz", tmp_path / "with")
+    counts_only = run(tmp_path / "co" / "S1.fq.gz", tmp_path / "without", use_payload=False)
+    assert with_payload["suspected_residual"] > 0
+    assert counts_only["suspected_residual"] == 0

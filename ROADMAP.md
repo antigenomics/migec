@@ -196,8 +196,12 @@ model has to use the evidence that survives at one read:
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`
-- [ ] MIG-size model and threshold at a target FDR; keep-orphan retention (orphans are already
-      kept unconditionally — nothing is thresholded — but the FDR *number* is not computed yet)
+- [x] **MIG-size threshold at a target FDR; keep-orphan retention.** The residual is measured, not
+      derived: a surviving barcode that still looks like a child of a surviving neighbour, by count
+      *or* by its reads agreeing on the molecule. ⚠ Count alone reports **zero residual at 1-3
+      reads per UMI**, which is where it is worst. On a 1.23 reads/barcode library: 5.25% of 1-read
+      molecules, threshold ≥2; on 4.62 reads/barcode: 0%, threshold 1. ⛔ Reported, never applied —
+      every molecule stays in the output
 - [ ] ⚠ **Bucketed correction.** A range partition on the top b bits splits a barcode from its
       neighbour for the top b/2 positions, so correction cannot be bucketed naively. The fix is two
       passes with the key rotated, so every pair shares a bucket in at least one. Until then the

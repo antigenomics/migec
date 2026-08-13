@@ -24,6 +24,7 @@ def run(
     expect_cells: int = 3000,
     cell_whitelist: str | Path = "",
     min_whitelist_posterior: float = 0.975,
+    target_fdr: float = 0.05,
     gzip_level: int = 6,
 ) -> dict:
     """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`."""
@@ -31,10 +32,12 @@ def run(
     out.mkdir(parents=True, exist_ok=True)
     summary = _core.refine(
         str(reads), str(out), sample_id, use_quality, use_payload, payload_width,
-        min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior, gzip_level,
+        min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior, target_fdr,
+        gzip_level,
     )
     summary["input"] = str(reads)
     summary["min_posterior"] = min_posterior
+    summary["target_fdr"] = target_fdr
 
     with open(out / "refine.coverage.tsv", "w") as fh:
         fh.write("sample_id\tmin_reads\tmax_reads\tmolecules\n")
@@ -92,6 +95,16 @@ def format_report(summary: dict) -> str:
     lines += [
         f"barcode error   {s['estimated_error']:.2e} per base, estimated from the "
         f"distance-1 excess",
+        f"residual        {s['suspected_residual']:,} molecules still look like children of a "
+        f"neighbour -- by count, or by their reads agreeing on the molecule",
+        f"                {s['residual_fdr_at_one']:.2%} of 1-read molecules; "
+        + (
+            f"at >= {s['mig_size_threshold']:,} reads the rate is within the "
+            f"{s['target_fdr']:.0%} target"
+            if s["mig_size_threshold"]
+            else f"no MIG size reaches the {s['target_fdr']:.0%} target"
+        )
+        + ". REPORTED, not applied -- a molecule seen three times is still a molecule",
         f"clonality       {s['payload_clonality']:.4f} of random barcode pairs carry the same "
         f"payload anyway",
         f"                -- payload agreement is worth about "
