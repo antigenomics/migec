@@ -17,9 +17,9 @@ The stages have different shapes, and one process forces one answer for all thre
 
 | stage | scales with | threads | memory |
 |---|---|---|---|
-| `checkout` | reads | yes, 1.06 M reads/s at 16 | chunk-bounded, plus the UMI counters |
-| `refine` | **distinct barcodes** | yes, 979 k reads/s at 16 | the barcode table, ~96 B each |
-| `assemble` | reads, then buckets | yes, 1.49 M reads/s at 16 | one bucket per worker |
+| `checkout` | reads | yes, 1,056,472 reads/s at 16 | chunk-bounded, plus the UMI counters |
+| `refine` | **distinct barcodes** | yes, 1,012,368 reads/s at 16 | the barcode table, ~96 B each |
+| `assemble` | reads, then buckets | yes, 1,434,573 reads/s at 16 | one bucket per worker |
 
 Splitting them means a failed `assemble` resumes without re-running the demultiplex, and each
 stage gets the label and the retry that fits it. `refine` carries `process_high_memory` because
