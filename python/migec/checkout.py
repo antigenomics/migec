@@ -24,6 +24,7 @@ def run(
     write_unmatched: bool = False,
     threads: int = 0,
     max_offset: int | None = None,
+    limit_reads: int = 0,
 ) -> dict:
     """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`.
 
@@ -52,6 +53,7 @@ def run(
         write_unmatched,
         threads,
         max_offset,
+        limit_reads,
     )
     summary["input"] = str(reads)
     summary["input2"] = "" if reads2 is None else str(reads2)
@@ -137,6 +139,16 @@ def _write_tables(out: Path, summary: dict) -> None:
             for q in x["umi_phred"]:
                 fh.write(f"{x['sample_id']}\t{q['phred']}\t{q['bases']}\t{10 ** (-q['phred'] / 10):.6e}\n")
 
+    # What the trim left: the payload length distribution per sample. A pattern matched one base
+    # off still matches, and this is where that shows.
+    with open(out / "checkout.trimming.tsv", "w") as fh:
+        fh.write("sample_id\tpayload_length\treads\tat_least\n")
+        for s in summary["samples"]:
+            for L in s["payload_lengths"]:
+                fh.write(
+                    f"{s['sample_id']}\t{L['length']}\t{L['reads']}\t{int(L['at_least'])}\n"
+                )
+
     # Per-position base usage and information content -- the numbers a sequence logo draws.
     with open(out / "checkout.umi_composition.tsv", "w") as fh:
         fh.write("sample_id\tposition\tA\tC\tG\tT\tentropy_bits\tinformation_bits\tcollision\n")
@@ -184,11 +196,13 @@ def format_report(summary: dict) -> str:
     lines.append("")
     lines.append(
         f"{'sample':<12}{'reads':>12}{'UMIs':>12}{'reads/UMI':>11}{'UMI len':>9}{'eff len':>9}"
+        f"{'payload':>9}"
     )
     for s in summary["samples"]:
         lines.append(
             f"{s['sample_id']:<12}{s['reads']:>12,}{s['umis']:>12,}"
             f"{s['mean_reads_per_umi']:>11.2f}{s['umi_length']:>9}{s['effective_length']:>9.2f}"
+            f"{s['mean_payload_length']:>9.1f}"
         )
 
     # The birthday arithmetic, per sample. Occupancy is the number that decides whether the
@@ -255,7 +269,7 @@ def format_report(summary: dict) -> str:
             "an anchored acceptance bar of 6.64, so a pattern ending in a short constant run "
             "refuses every read. Write those bases as `.` (skipped) instead"
         )
-    elif c["assigned"] / c["total"] < 0.5:
+    elif c["total"] and c["assigned"] / c["total"] < 0.5:
         warnings.append(
             "less than half of reads matched a pattern -- run `migec suggest` to check where the "
             "barcode actually is"
@@ -338,7 +352,7 @@ def _bytes(n: float) -> str:
         if n < 1024 or unit == "TB":
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024.0
-    return f"{n:.1f} TB"
+    raise AssertionError("unreachable: the loop returns at TB")
 
 
 def _dur(s: float) -> str:

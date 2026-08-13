@@ -9,8 +9,8 @@ license: GPL-3.0-or-later
 UMI barcode extraction, correction and consensus assembly. C++20 core, Python CLI. Successor to
 MIGEC (Groovy) and MAGERI (Java); the algorithms carry over, the code does not.
 
-**Status.** `checkout`, `suggest`, `refine` and `assemble` work. `subsample` is not implemented yet
-— a call to it exits 2 with a pointer to `ROADMAP.md`.
+**Status.** All five pipeline commands work: `checkout`, `suggest`, `refine`, `assemble`,
+`subsample` — plus `sheet`, `info` and `plot`, which read no reads and write no pipeline output.
 
 ## Install and check
 
@@ -96,7 +96,10 @@ migec refine out/S1.fq.gz -o ref/ --min-posterior 0.99 # correct less
 migec refine out/S1.fq.gz -o ref/ --no-payload         # what the count ratio alone would do
 migec assemble ref/S1.fq.gz -o cons/                   # one consensus per molecule
 migec assemble out/S1.fq.gz -o cons/ --contig          # random-primed reads tiling a molecule
-migec assemble out/S1.fq.gz -o cons/ --rt-error 3e-5   # a measured floor for THIS chemistry
+migec assemble out/S1.fq.gz -o cons/ --rt-error medium # the floor by chemistry: rt|medium|high
+migec assemble out/S1.fq.gz -o cons/ --fast            # counting mode: modal sequence, max quality
+migec plot cons/                                       # QC figures from the tables just written
+migec suggest cons/S1.consensus.fq.gz -o qc/           # what synthetic sequence is still in there?
 migec suggest reads.fq.gz -o out/                      # where is the barcode? read it off the data
 migec suggest reads.fq.gz --cycles 40 --umi-deviation 0.18
 migec sheet barcodes.txt
@@ -210,7 +213,22 @@ by design. The sort key is `(cell, umi, src_index)`; the partition is on the cel
 
 **Never: The RT floor is added, not compared**: `Q = −10 log10(p_cons + p_floor)`. An error made before
 amplification is in every read, so the two failure modes are independent. Default `--rt-error 1e-4`
-(X2), which caps every emitted quality at ~Q38.
+(X2, and 10x's own figure for the V(D)J RT), which caps every emitted quality at Q40. `--rt-error`
+takes a class rather than a guess: `rt` 1e-4 (default), `medium` 1e-5, `high` 1e-6, or the rate.
+
+**Never: The floor is the ONE-MOLECULE floor.** 10x give Q40 to a base covered by a single UMI and
+Q60 only to one covered by two or more, because an RT error is common-mode within a molecule and
+independent between them. Every record migec emits is one molecule, so it never claims the
+two-UMI number; combining molecules is arda's job.
+
+**Note: `--fast` is counting mode**, not a faster consensus: the modal exact sequence per group, each
+base carrying the best quality any read of that sequence reported, no column model and no
+sub-clustering. Use it when the deliverable is molecule counts. Refused with `--contig`, whose
+tiling reads share no exact sequence to vote on. `support` in the per-molecule table says how many
+of the group's reads carried what was emitted.
+
+**Note: Coverage into the consensus is capped at 10,000 reads per barcode** (10x's rule). Never: the cap
+is on the reads CONSENSED, never on the reads COUNTED — `cD` stays the molecule's true depth.
 
 **Never: `--contig` assembles one molecule's fragments and stops.** Full-length receptor assembly,
 doublet calling and contaminating-chain filtering are **arda's** job, downstream. Contig mode

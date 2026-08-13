@@ -4,6 +4,123 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.0.0a3 — 2026-08-13
+
+**Every stage threads now, and the first fix was not a thread.** `refine` and `assemble` were the
+pipeline's bottleneck at ~200 k reads/s against checkout's 1.06 M. The measurement said why: zlib
+at its default level 6 spent **1.78 s of refine's 2.14 s run** compressing an intermediate that the
+next stage decompresses immediately. Level 1 costs 21% more bytes and gave 3x on its own. Then the
+parallelism:
+
+| stage | before | after (16 threads) |
+|---|---|---|
+| `checkout` | 1,056,472 | 1,056,472 |
+| `refine` | 222,017 | **1,012,368** |
+| `assemble` | 202,977 | **1,434,573** |
+
+`refine --threads` splits the neighbourhood scan, which is a pure function of the barcode table --
+it reads no union-find state -- so it parallelises exactly, and the merges it finds are applied
+serially afterwards in the original smallest-first order. The result is identical, not merely
+equivalent. `assemble --threads` gives each worker its own bucket; the buckets are independent by
+construction because the partition is on the barcode.
+
+**Never: `-t` still changes nothing but the wall clock, on all three stages.** That is why the
+bucket count is a constant floor of 16 rather than a function of `--threads` -- if `-t` chose how
+finely the input was cut, it would choose the gzip member boundaries too, and two runs would
+produce byte-different files holding identical records. Asserted three ways: in C++ per stage
+(`tests/cpp/test_parallel_stages.cpp`), at the CLI over a full three-stage chain
+(`tests/synthetic/test_thread_invariance.py`), and under the **thread sanitizer**, which reports
+no data race across 104 test cases and 224,116 assertions -- with the instrumentation proven to
+fire on a deliberate race in the same helper.
+
+**`--limit-read N` and `--limit-umi N`** on every stage: stop after N reads, or after N distinct
+barcodes. For getting an answer out of a 400 GB run in a minute. Never: a limited run is not a
+sample, and says so in its own report -- the first N reads of a FASTQ are one corner of one
+flowcell. `subsample` remains the sampler.
+
+**The nextflow integration is rebuilt as three modules and a subworkflow**
+(`integrations/nextflow/`), nf-core layout, with `meta.yml` and a `stub:` for each. One process
+meant one resource label for three stages with different shapes and no resume between them: a
+failed assemble re-ran the whole demultiplex. `refine` now carries `process_high_memory` because
+its memory is set by distinct barcodes and by nothing else, and every stage passes `task.cpus`,
+which is safe precisely because the output does not depend on it.
+
+**The pre-amplification error floor is named, not guessed.** `--rt-error` takes a fidelity class:
+
+```bash
+migec assemble ... --rt-error rt        # 1e-4, caps at Q40 -- anything with an RT step (default)
+migec assemble ... --rt-error medium    # 1e-5, caps at Q50 -- no RT, an ordinary polymerase
+migec assemble ... --rt-error high      # 1e-6, caps at Q60 -- no RT, a proofreading polymerase
+migec assemble ... --rt-error 7.37e-5   # or the rate, e.g. TruSight Oncology 500 v2
+```
+
+Which class applies is a property of the protocol, so it is declared rather than fitted, and every
+value is cited in `SOURCES.md`. The default is 1e-4 because that is 10x's stated figure for the
+V(D)J RT reaction *and* what X2 measured here independently (1.54e-4 on SRR1763769). Never: it is
+the **one-molecule** floor and every record migec emits is one molecule. 10x assign Q40 to bases
+covered by a single UMI and Q60 only to bases covered by two or more — an RT error is common-mode
+within a molecule and independent between them — and combining molecules is arda's job. A
+per-molecule record claiming Q50 is claiming two-UMI confidence on one-UMI evidence.
+
+**`migec assemble --fast`: counting mode.** The group's most frequent *exact* sequence, with each
+base carrying the best quality any read of that sequence reported for it. No column model, so no
+per-base error correction and no sub-clustering — and the RT floor still caps what it claims. For
+expression and clonotype abundance, where the deliverable is a molecule count. Measured against
+the full path at 8 reads and 5e-3 per base: the column posterior clears essentially every
+sequencing error and the majority string keeps what it carried. Refused with `--contig`, whose
+tiling reads share no exact sequence to take a majority over. The per-molecule table gains a
+`support` column: how many of the molecule's reads carried what was emitted.
+
+**Coverage into the consensus is capped at 10,000 reads per barcode**, which is 10x's rule and
+their reasoning — past that the column posterior has long since saturated while the group still
+costs time and memory. Never: the cap applies to the reads that are *consensed*, never to the reads
+that are *counted*. `cD` and the table's `reads` column stay the molecule's true depth, because
+capping a count would flatten the abundance of exactly the most-amplified molecules.
+
+**`migec plot`: sixteen QC panels, drawn with gnuplot from the tables the stages already wrote.**
+UMI PWM and information content, barcode quality and its calibration, coverage, trimming, barcode
+space, the `suggest` cycle trace, overrepresented k-mers, the cell rank curve, consensus quality,
+error and layout, and thread scaling. It reads no reads and computes nothing, so a figure can be
+redrawn from the table beside it long after the FASTQ is gone and can never disagree with the
+number in the report. gnuplot is not a Python dependency: without it the `.gp` scripts are still
+written. `migec plot` joins `info` and `sheet` outside the five-pipeline-command rule.
+
+**`migec suggest` now reports overrepresented k-mers**, and stitches them back into the sequence
+they came from. Run it on a stage's *output* to find what the trim left behind: an 8-mer occurs by
+chance every ~65 kb, so a surviving primer appears as a run of k-mers each shifted one base from
+the last. Counted exactly in a flat 4^8 array — no hash map, nothing to size — and measured
+against the reads' own base composition, never a flat 1/4, so the table is not just a description
+of GC content.
+
+**`checkout` writes `checkout.trimming.tsv`**, the payload length distribution after trimming. A
+pattern matched one base off still matches and still trims; it just leaves every payload one base
+short, which no counter of matched reads can show. The mean payload length is now a column in the
+report.
+
+**Fixes**
+
+- `checkout`'s report divided by zero on an empty input file, so a run with no reads ended in a
+  traceback rather than a summary.
+- The benchmark corpus assigned every read to one sample of four (`i % 4` with four reads per
+  molecule is always 0). The matcher still scored all four patterns, so the throughput figures
+  stand, but the per-sample counters and the memory figure were a single sample's. Fixed in
+  `tests/benchmark/` and in the new `scripts/benchmark_threads.py`, and the published numbers are
+  re-measured: 1,056,472 reads/s end to end and 1,684,654 matching at 16 threads, 217 MB.
+- A sample that received no reads reported an effective barcode length of `inf`. Infinity is not a
+  length; it is the absence of one, and it was being written into a numeric TSV column.
+- The consensus log-likelihood tables were rebuilt per molecule — 122 transcendentals per group
+  against the ~3 per emitted base the posterior actually needs.
+- `polars` was a runtime dependency of the wheel and nothing in the package imported it; it is now
+  in the `notebooks` extra with `marimo` and `matplotlib`. The pipeline's only runtime dependency
+  is `typer`.
+- Stale documentation corrected: `docs/roadmap.rst` still called `assemble` and `refine` planned;
+  `docs/checkout.rst` said dual-end barcodes were unimplemented; `docs/fragmented.rst` documented
+  `--mode {amplicon,fragmented}`, which shipped as `--contig`; the README quoted the retracted
+  1.04x position-independence excess (it is 1.0103x) and linked the docs badge at a host the docs
+  are not published on.
+- `_not_yet()` and its claim in the skill that `subsample` exits 2 are gone; it has worked since
+  M4.
+
 ## 2.0.0a2 — 2026-08-13
 
 **Positional is the primary mode.** Most libraries fix the barcode at an offset in one read, and

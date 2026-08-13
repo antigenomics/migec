@@ -18,7 +18,7 @@ def run(
     output: str | Path,
     keep_percent: float = 1.0,
     by_cell: bool = True,
-    gzip_level: int = 6,
+    gzip_level: int = _core.GZIP_LEVEL,
 ) -> dict:
     """Keep all the reads of `keep_percent` of the barcodes."""
     per_10k = round(keep_percent * 100)

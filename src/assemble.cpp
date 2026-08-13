@@ -1,6 +1,7 @@
 #include "migec/assemble.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -8,6 +9,7 @@
 
 #include "migec/fastq.hpp"
 #include "migec/mig_record.hpp"
+#include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
@@ -32,15 +34,24 @@ std::string_view tag_value(std::string_view comment, std::string_view key) {
 }
 
 int choose_bucket_bits(const std::string& path) {
+    // Never: the floor is a CONSTANT, never a function of the thread count. The buckets are the
+    // unit of parallelism in pass 2, so there has to be more than one of them -- but if -t chose
+    // how many, then -t would choose the gzip member boundaries too, and two runs at different
+    // thread counts would produce byte-different files holding identical records. A fixed floor
+    // makes the partition a property of the input alone, and -t only decides who chews on it.
+    int floor_bits = kMinBucketBits;
+
     std::error_code ec;
     const uintmax_t on_disk = std::filesystem::file_size(path, ec);
-    if (ec) return 0;
+    if (ec) return floor_bits;
     // A gzipped FASTQ expands ~3.5x, and a resident record costs about as much again in the
     // string copies and the record vector. 8x on-disk is the working estimate; it decides only
     // how finely the input is cut, and being one bucket out costs nothing but a little IO.
     uint64_t resident = static_cast<uint64_t>(on_disk) * 8;
-    int bits = 0;
-    while (bits < kMaxBucketBits && (resident >> bits) > kBucketBudgetBytes) ++bits;
+    // Per bucket, so that kBucketConcurrency of them are resident inside the total budget.
+    const uint64_t per_bucket = kBucketBudgetBytes / static_cast<uint64_t>(kBucketConcurrency);
+    int bits = floor_bits;
+    while (bits < kMaxBucketBits && (resident >> bits) > per_bucket) ++bits;
     return bits;
 }
 
@@ -87,6 +98,8 @@ AssembleStats assemble(const AssembleRequest& request) {
     const std::filesystem::path temp_dir = out_dir / ".assemble_buckets";
     std::filesystem::create_directories(temp_dir);
 
+    const int threads = worker_count(request.threads, 64);
+    stats.threads = threads;
     const int bits = request.bucket_bits > 0 ? request.bucket_bits
                                              : choose_bucket_bits(request.input);
     const size_t n_buckets = static_cast<size_t>(1) << bits;
@@ -101,6 +114,7 @@ AssembleStats assemble(const AssembleRequest& request) {
         FastqReader reader(request.input);
         FastqRecord rec;
         uint64_t index = 0;
+        IntakeLimit limit = request.limit;
         while (reader.next(rec)) {
             ++stats.reads;
             const std::string_view umi = tag_value(rec.comment, "RX:Z:");
@@ -132,6 +146,12 @@ AssembleStats assemble(const AssembleRequest& request) {
             // Partition on the cell when there is one: every read of a cell then lands in one
             // bucket, which is what makes a per-cell scope local. Without cells the UMI is the
             // whole key and the partition is on it.
+            // Checked after the key is known, so `--limit-umi` counts barcodes rather than reads.
+            if (limit.active() && !limit.admit(stats.reads, cell.empty() ? key : cell_key)) {
+                --stats.reads;
+                stats.limited = true;
+                break;
+            }
             const uint64_t partition_key = cell.empty() ? key : cell_key;
             Bucket& b = buckets[bucket_of(partition_key, bits)];
             if (!b.writer) {
@@ -166,54 +186,86 @@ AssembleStats assemble(const AssembleRequest& request) {
     }
 
     // ------------------------------------------------------------------ pass 2: consense
-    const std::filesystem::path fastq_path =
-        out_dir / (stats.sample_id + ".consensus.fq" + (request.gzip_level > 0 ? ".gz" : ""));
-    FastqWriter writer(fastq_path.string(), request.gzip_level);
-    std::FILE* table = std::fopen((out_dir / (stats.sample_id + ".mig.tsv")).string().c_str(), "w");
-    if (!table) throw MigecError("assemble: cannot write the per-molecule table");
-    std::fprintf(table,
-                 "cell\tumi\tcontig\tcontigs\tmolecule\treads\tlength\tmean_quality\t"
-                 "consensus_error\tlinkage\n");
+    //
+    // One bucket at a time was the memory bound; one bucket per THREAD is the same bound times the
+    // thread count, and the buckets are independent by construction -- every read of a barcode is
+    // in exactly one of them, because the partition is on that barcode. So this loop parallelises
+    // with no shared state at all: each worker owns its output files and its own counters.
+    //
+    // Never: the output must not depend on -t. Workers write per-bucket temporary files which are
+    // concatenated in BUCKET order afterwards, and bucket order is key order, so the consensus
+    // FASTQ comes out sorted by barcode whatever the thread count and whatever order the buckets
+    // happened to finish in.
+    struct BucketOut {
+        std::string fastq_path, table_path;
+        uint64_t groups = 0, molecules = 0, groups_split = 0, groups_fragmented = 0, contigs = 0;
+        uint64_t reads_dropped = 0, groups_capped = 0, reads_over_cap = 0;
+        std::vector<uint64_t> size_histogram;
+        double qual_sum = 0.0, err_sum = 0.0;
+        uint64_t qual_bases = 0, support_reads = 0, support_of_reads = 0;
+        // Per-position base usage over DISTINCT barcodes, which is what the birthday arithmetic
+        // needs -- weighting by reads would let one over-amplified molecule set the composition.
+        std::vector<std::array<uint64_t, 4>> usage;
+    };
+    std::vector<BucketOut> outs(n_buckets);
 
+    // Merged after the loop, in bucket order.
     double qual_sum = 0.0, err_sum = 0.0;
-    uint64_t qual_bases = 0;
-    // Per-position base usage over DISTINCT barcodes, which is what the birthday arithmetic needs
-    // -- weighting by reads would let one over-amplified molecule set the composition.
+    uint64_t qual_bases = 0, support_reads = 0, support_of_reads = 0;
     std::vector<std::array<uint64_t, 4>> usage;
 
-    auto emit = [&](uint64_t cell_key, uint64_t key, const std::vector<Resident>& group) {
-        ++stats.groups;
+    auto consense_bucket = [&](size_t bucket, BucketOut& out) {
+        std::unique_ptr<FastqWriter> writer;
+        std::FILE* table = nullptr;
+        auto emit = [&](uint64_t cell_key, uint64_t key, const std::vector<Resident>& group) {
+        ++out.groups;
         {
             const std::string bases = unpack_barcode(key, stats.umi_length);
-            if (usage.empty()) usage.assign(bases.size(), {});
+            if (out.usage.empty()) out.usage.assign(bases.size(), {});
             for (size_t j = 0; j < bases.size(); ++j) {
                 const uint8_t c = base_code(bases[j]);
-                if (c != kInvalidBase) ++usage[j][c];
+                if (c != kInvalidBase) ++out.usage[j][c];
             }
         }
-        bin(stats.size_histogram, group.size());
+        bin(out.size_histogram, group.size());
         if (group.size() < request.min_reads) {
-            stats.reads_dropped += group.size();
+            out.reads_dropped += group.size();
             return;
         }
+        // The consensus sees at most kMaxReadsPerGroup of them; the molecule keeps all of them as
+        // its depth. Records arrive in src_index order, which is input order and carries no
+        // relation to the sequence, so the first N are an unbiased sample of the group and cost
+        // nothing to take.
+        const size_t depth = group.size();
+        const size_t used = std::min(depth, kMaxReadsPerGroup);
+        if (used < depth) {
+            ++out.groups_capped;
+            out.reads_over_cap += depth - used;
+        }
         std::vector<ConsensusRead> reads;
-        reads.reserve(group.size());
-        for (const Resident& r : group) reads.push_back({r.seq, r.qual});
+        reads.reserve(used);
+        for (size_t i = 0; i < used; ++i) reads.push_back({group[i].seq, group[i].qual});
         const std::vector<Consensus> molecules = assemble_group(reads, request.consensus);
         const uint32_t components = molecules.empty() ? 1 : molecules[0].components;
-        if (components > 1) { ++stats.groups_fragmented; stats.contigs += components; }
-        if (molecules.size() > components) ++stats.groups_split;
+        if (components > 1) { ++out.groups_fragmented; out.contigs += components; }
+        if (molecules.size() > components) ++out.groups_split;
         const std::string umi = unpack_barcode(key, stats.umi_length);
         const std::string cell =
             stats.cell_length ? unpack_barcode(cell_key, stats.cell_length) : std::string();
+        // The count is the true depth of the molecule whenever the group produced exactly one --
+        // capping the reads that were consensed must never cap the reads that were counted. When
+        // the group split or fragmented, each part reports what it actually held, because there is
+        // no honest way to divide the reads above the cap between them.
+        const bool whole = molecules.size() == 1 && components == 1;
         for (size_t m = 0; m < molecules.size(); ++m) {
             const Consensus& c = molecules[m];
-            ++stats.molecules;
+            const uint64_t reported_reads = whole ? depth : c.reads;
+            ++out.molecules;
             double q = 0.0;
             for (char ch : c.qual) q += phred_from_char(ch);
-            qual_sum += q;
-            qual_bases += c.qual.size();
-            err_sum += c.mean_error;
+            out.qual_sum += q;
+            out.qual_bases += c.qual.size();
+            out.err_sum += c.mean_error;
             // The name carries everything a downstream tool needs even when it drops the comment
             // -- dnaio does, so arda only ever sees the name.
             std::string name = stats.sample_id + "." +
@@ -222,19 +274,22 @@ AssembleStats assemble(const AssembleRequest& request) {
             if (molecules.size() > c.components) name += "." + std::to_string(m + 1);
             std::string tags = "RX:Z:" + umi + "\tBC:Z:" + stats.sample_id;
             if (!cell.empty()) tags += "\tCB:Z:" + cell;
-            tags += "\tMI:Z:" + name + "\tcD:i:" + std::to_string(c.reads);
-            writer.write(name, tags, c.seq, c.qual);
-            std::fprintf(table, "%s\t%s\t%u\t%u\t%zu\t%u\t%zu\t%.2f\t%.3e\t%.2f\n",
+            tags += "\tMI:Z:" + name + "\tcD:i:" + std::to_string(reported_reads);
+            writer->write(name, tags, c.seq, c.qual);
+            std::fprintf(table, "%s\t%s\t%u\t%u\t%zu\t%" PRIu64 "\t%u\t%zu\t%.2f\t%.3e\t%.2f\n",
                          cell.empty() ? "." : cell.c_str(), umi.c_str(), c.component + 1,
-                         c.components, m + 1, c.reads, c.seq.size(),
+                         c.components, m + 1, reported_reads, c.support, c.seq.size(),
                          c.qual.empty() ? 0.0 : q / c.qual.size(), c.mean_error, c.linkage);
+            if (c.support) {
+                out.support_reads += c.support;
+                out.support_of_reads += c.reads;  // the vote's reads, not the molecule's depth
+            }
         }
     };
 
-    for (size_t i = 0; i < n_buckets; ++i) {
         const std::filesystem::path path =
-            temp_dir / ("bucket." + std::to_string(i) + ".mig");
-        if (!std::filesystem::exists(path)) continue;
+            temp_dir / ("bucket." + std::to_string(bucket) + ".mig");
+        if (!std::filesystem::exists(path)) return;
         std::vector<Resident> records;
         {
             MigReader reader(path.string());
@@ -245,6 +300,13 @@ AssembleStats assemble(const AssembleRequest& request) {
             }
         }
         std::sort(records.begin(), records.end());
+
+        out.fastq_path = (temp_dir / ("out." + std::to_string(bucket) + ".fq.gz")).string();
+        out.table_path = (temp_dir / ("out." + std::to_string(bucket) + ".tsv")).string();
+        writer = std::make_unique<FastqWriter>(out.fastq_path, request.gzip_level);
+        table = std::fopen(out.table_path.c_str(), "w");
+        if (!table) throw MigecError("assemble: cannot write the per-molecule table");
+
         std::vector<Resident> group;
         for (size_t j = 0; j < records.size(); ++j) {
             if (!group.empty() && (records[j].umi != group.front().umi ||
@@ -255,11 +317,78 @@ AssembleStats assemble(const AssembleRequest& request) {
             group.push_back(std::move(records[j]));
         }
         if (!group.empty()) emit(group.front().cell, group.front().umi, group);
+        std::fclose(table);
+        table = nullptr;
+        writer->close();
+        writer.reset();
         std::filesystem::remove(path);
-    }
+    };
 
-    std::fclose(table);
-    writer.close();
+    parallel_for(n_buckets, threads, [&](size_t bucket, int) {
+        consense_bucket(bucket, outs[bucket]);
+    });
+
+    // ------------------------------------------------------------------ merge, in bucket order
+    //
+    // Bucket order is key order, so concatenating here is what makes the output sorted by barcode
+    // AND independent of the thread count. Concatenated gzip members are a valid gzip stream
+    // (RFC 1952 s2.2), which is the same property checkout relies on to compress on its workers.
+    const std::filesystem::path fastq_path =
+        out_dir / (stats.sample_id + ".consensus.fq" + (request.gzip_level > 0 ? ".gz" : ""));
+    {
+        std::FILE* fq = std::fopen(fastq_path.string().c_str(), "wb");
+        if (!fq) throw MigecError("assemble: cannot write " + fastq_path.string());
+        std::FILE* tsv =
+            std::fopen((out_dir / (stats.sample_id + ".mig.tsv")).string().c_str(), "w");
+        if (!tsv) throw MigecError("assemble: cannot write the per-molecule table");
+        std::fprintf(tsv,
+                     "cell\tumi\tcontig\tcontigs\tmolecule\treads\tsupport\tlength\t"
+                     "mean_quality\tconsensus_error\tlinkage\n");
+        std::vector<char> buf(1u << 20);
+        for (size_t i = 0; i < n_buckets; ++i) {
+            const BucketOut& o = outs[i];
+            for (const auto& [src, dst] : {std::pair<const std::string&, std::FILE*>(o.fastq_path, fq),
+                                           std::pair<const std::string&, std::FILE*>(o.table_path, tsv)}) {
+                if (src.empty()) continue;
+                std::FILE* in = std::fopen(src.c_str(), "rb");
+                if (!in) continue;
+                size_t n;
+                while ((n = std::fread(buf.data(), 1, buf.size(), in)) > 0) {
+                    if (std::fwrite(buf.data(), 1, n, dst) != n) {
+                        std::fclose(in);
+                        std::fclose(fq);
+                        std::fclose(tsv);
+                        throw MigecError("assemble: short write merging bucket outputs");
+                    }
+                }
+                std::fclose(in);
+                std::filesystem::remove(src);
+            }
+            stats.groups += o.groups;
+            stats.molecules += o.molecules;
+            stats.groups_split += o.groups_split;
+            stats.groups_fragmented += o.groups_fragmented;
+            stats.contigs += o.contigs;
+            stats.reads_dropped += o.reads_dropped;
+            stats.groups_capped += o.groups_capped;
+            stats.reads_over_cap += o.reads_over_cap;
+            qual_sum += o.qual_sum;
+            err_sum += o.err_sum;
+            qual_bases += o.qual_bases;
+            support_reads += o.support_reads;
+            support_of_reads += o.support_of_reads;
+            for (size_t b = 0; b < o.size_histogram.size(); ++b) {
+                if (stats.size_histogram.size() <= b) stats.size_histogram.resize(b + 1, 0);
+                stats.size_histogram[b] += o.size_histogram[b];
+            }
+            if (usage.size() < o.usage.size()) usage.resize(o.usage.size(), {});
+            for (size_t j = 0; j < o.usage.size(); ++j) {
+                for (int c = 0; c < 4; ++c) usage[j][static_cast<size_t>(c)] += o.usage[j][static_cast<size_t>(c)];
+            }
+        }
+        std::fclose(fq);
+        std::fclose(tsv);
+    }
     std::error_code ec;
     std::filesystem::remove(temp_dir, ec);
 
@@ -289,6 +418,10 @@ AssembleStats assemble(const AssembleRequest& request) {
     stats.mean_quality = qual_bases ? qual_sum / static_cast<double>(qual_bases) : 0.0;
     stats.mean_consensus_error =
         stats.molecules ? err_sum / static_cast<double>(stats.molecules) : 0.0;
+    stats.mean_support = support_reads && stats.molecules
+                             ? static_cast<double>(support_reads) /
+                                   static_cast<double>(support_of_reads)
+                             : 0.0;
     stats.wall_seconds = clock.seconds();
     return stats;
 }

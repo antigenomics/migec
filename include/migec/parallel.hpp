@@ -1,0 +1,83 @@
+// One thread helper, shared by every stage that has work to spread.
+//
+// Never: nothing may throw out of a worker thread. An escaping exception is std::terminate --
+// SIGABRT, no message, no flush, no output. Workers capture, the caller rethrows, and the first
+// exception by INDEX wins rather than the first by wall clock, so a failure reports the same way
+// whatever the thread count.
+//
+// Never: the work is indexed, never queued, and results go into per-index slots the caller owns.
+// A worker never appends to a shared container and never takes a lock on the hot path, which is
+// what makes "the output does not depend on -t" a property of the shape rather than a promise.
+
+#ifndef MIGEC_PARALLEL_HPP
+#define MIGEC_PARALLEL_HPP
+
+#include <atomic>
+#include <cstddef>
+#include <exception>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+#include "migec/resource.hpp"
+
+namespace migec {
+
+// Threads to use for `items` units of work: `requested`, or one per core when it is 0, never more
+// than there is work for and never fewer than one.
+inline int worker_count(int requested, size_t items) {
+    int n = requested > 0 ? requested : static_cast<int>(hardware_threads());
+    if (n < 1) n = 1;
+    if (items && static_cast<size_t>(n) > items) n = static_cast<int>(items);
+    return n;
+}
+
+// Runs `fn(i, worker)` for every i in [0, items), on `threads` threads. `worker` is a stable index
+// in [0, threads) so a caller can give each thread its own scratch without a lock.
+//
+// Work is claimed with an atomic counter rather than split into contiguous blocks: the per-item
+// cost here is wildly uneven -- one barcode's neighbourhood is empty and the next one's is full,
+// one bucket holds ten molecules and the next ten million -- and a static split would leave every
+// thread but one idle at the end.
+template <typename Fn>
+void parallel_for(size_t items, int threads, Fn&& fn) {
+    const int n = worker_count(threads, items);
+    if (items == 0) return;
+    if (n == 1) {
+        for (size_t i = 0; i < items; ++i) fn(i, 0);
+        return;
+    }
+
+    std::atomic<size_t> next{0};
+    std::mutex err_mutex;
+    std::exception_ptr err;
+    size_t err_at = items;
+
+    auto run = [&](int worker) {
+        for (;;) {
+            const size_t i = next.fetch_add(1, std::memory_order_relaxed);
+            if (i >= items) return;
+            try {
+                fn(i, worker);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(err_mutex);
+                if (i < err_at) {  // lowest index wins, so the message does not depend on timing
+                    err_at = i;
+                    err = std::current_exception();
+                }
+                return;
+            }
+        }
+    };
+
+    std::vector<std::thread> pool;
+    pool.reserve(static_cast<size_t>(n) - 1);
+    for (int t = 1; t < n; ++t) pool.emplace_back([&run, t] { run(t); });
+    run(0);
+    for (std::thread& th : pool) th.join();
+    if (err) std::rethrow_exception(err);
+}
+
+}  // namespace migec
+
+#endif  // MIGEC_PARALLEL_HPP

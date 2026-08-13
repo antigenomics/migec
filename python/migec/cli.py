@@ -112,6 +112,13 @@ def checkout(
     write_unmatched: bool = typer.Option(
         False, "--write-unmatched", help="Also write reads that matched no pattern."
     ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
 ) -> None:
     """Demultiplex by barcode pattern, extract and trim UMIs, write QC tables."""
     from migec.checkout import format_report, run
@@ -169,9 +176,14 @@ def checkout(
         write_unmatched=write_unmatched,
         threads=threads,
         max_offset=max_offset,
+        limit_reads=limit_read,
     )
     typer.echo(format_report(summary))
-    typer.echo(f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition}}.tsv")
+    typer.echo(
+        f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition,barcode_space,"
+        f"umi_quality,quality_calibration,pattern_positions,trimming}}.tsv"
+        f"\n      draw them with `migec plot {out_dir}`"
+    )
 
 
 @app.command()
@@ -190,6 +202,31 @@ def sheet(
     if barcodes is None:
         raise typer.BadParameter("give a barcode table, or --presets to list the named layouts")
     typer.echo(describe(read_barcodes(barcodes)))
+
+
+@app.command()
+def plot(
+    directory: Path = typer.Argument(
+        ..., help="A stage's output directory. Every table it finds there gets a figure."
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Where to write. Defaults to <directory>/plots."
+    ),
+    fmt: str = typer.Option("svg", "--format", help="svg, png or pdf."),
+) -> None:
+    """Draw the QC figures from the tables a stage already wrote.
+
+    Reads no reads and produces no pipeline output: every panel is a gnuplot script over a
+    committed TSV, so a figure can be redrawn from the table next to it long after the FASTQ is
+    gone. gnuplot itself is not a Python package -- without it the scripts are still written.
+    """
+    from migec.plot import format_report, run
+
+    try:
+        summary = run(directory, out_dir, fmt=fmt)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(format_report(summary))
 
 
 @app.command()
@@ -250,6 +287,25 @@ def refine(
         "is REPORTED, never applied: a molecule seen three times with no plausible parent is "
         "information, and cutting it discards real sequence.",
     ),
+    threads: int = typer.Option(
+        0, "--threads", "-t",
+        help="Worker threads for the neighbourhood scan and the read rewrite; 0 uses one per "
+        "core. The output is byte-identical whatever this is: the scan is a pure function of the "
+        "barcode table, and the merges it finds are applied serially afterwards.",
+    ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
+    limit_umi: int = typer.Option(
+        0,
+        "--limit-umi",
+        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
+        "these are the barcodes that happen to appear first, not a sample of them.",
+    ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
     ),
@@ -266,7 +322,8 @@ def refine(
     summary = run(
         reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
         use_payload=not no_payload, min_posterior=min_posterior, expect_cells=expect_cells,
-        cell_whitelist=cell_whitelist or "", target_fdr=target_fdr,
+        cell_whitelist=cell_whitelist or "", target_fdr=target_fdr, threads=threads,
+        limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
 
@@ -276,12 +333,15 @@ def assemble(
     reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
     sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
-    rt_error: float = typer.Option(
-        1e-4,
+    rt_error: str = typer.Option(
+        "rt",
         "--rt-error",
-        help="The RT/first-cycle-PCR error floor, which caps every emitted quality at "
-        "-10 log10 of it. Default measured on an HIV-1 Primer ID control (docs/quality_floor.rst); "
-        "the 1e-6 that gets assumed is excluded by two orders of magnitude.",
+        help="The pre-amplification error floor, which caps every emitted quality at -10 log10 of "
+        "it. Name the chemistry: 'rt' (1e-4, Q40) for anything with a reverse transcription step, "
+        "'medium' (1e-5, Q50) for an ordinary polymerase and no RT, 'high' (1e-6, Q60) for a "
+        "proofreading one -- or give the rate itself. It is the ONE-MOLECULE floor and every "
+        "record here is one molecule: 10x's Q60 needs two UMIs to agree, and combining molecules "
+        "is arda's job. See docs/quality_floor.rst for what measured each.",
     ),
     contig: bool = typer.Option(
         False,
@@ -291,6 +351,34 @@ def assemble(
         "X1 measured 27.3% of 10x groups holding more than one component (docs/fragmented.rst); "
         "one consensus over those asserts sequence no read covers.",
     ),
+    fast: bool = typer.Option(
+        False,
+        "--fast",
+        help="Counting mode: emit each group's most frequent EXACT sequence, with every base "
+        "carrying the best quality any read of that sequence reported. No column model, so no "
+        "per-base error correction and no sub-clustering -- use it when the deliverable is "
+        "molecule COUNTS (expression, clonotype abundance) rather than error-free sequence. "
+        "Incompatible with --contig, whose reads tile the molecule and share no exact sequence.",
+    ),
+    threads: int = typer.Option(
+        0, "--threads", "-t",
+        help="Workers for the consensus pass; 0 uses one per core. Buckets are the unit of work "
+        "and there are always at least 16 of them, so the output is byte-identical whatever this "
+        "is -- bucket order is barcode order, and the bucket count does not depend on -t.",
+    ),
+    limit_read: int = typer.Option(
+        0,
+        "--limit-read",
+        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
+        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
+        "limit describes the library. Use `migec subsample` when you want a fixture.",
+    ),
+    limit_umi: int = typer.Option(
+        0,
+        "--limit-umi",
+        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
+        "these are the barcodes that happen to appear first, not a sample of them.",
+    ),
     min_reads: int = typer.Option(
         1,
         "--min-reads",
@@ -299,11 +387,23 @@ def assemble(
     ),
 ) -> None:
     """Collapse the reads of each barcode (sample + cell + UMI) into a consensus."""
-    from migec.assemble import format_report, run
+    from migec.assemble import format_report, parse_rt_error, run
 
+    try:
+        rt_floor = parse_rt_error(rt_error)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    # Refused here, on the caller's thread, rather than producing one consensus per read: two
+    # fragments of one molecule are different strings by construction, so a modal vote over them
+    # returns whichever fragment was seen most and silently drops the rest of the molecule.
+    if fast and contig:
+        raise typer.BadParameter(
+            "--fast and --contig are incompatible. --contig places reads that TILE a molecule, "
+            "and tiling reads share no exact sequence for --fast to take a majority over"
+        )
     summary = run(
-        reads, out_dir, sample_id=sample_id, rt_floor=rt_error, contig=contig,
-        min_reads=min_reads,
+        reads, out_dir, sample_id=sample_id, rt_floor=rt_floor, contig=contig, fast=fast,
+        min_reads=min_reads, threads=threads, limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
 
@@ -358,11 +458,3 @@ def _inline_sheet(
     row = f"{sample_id}\t{pattern}" + (f"\t{slave}" if slave else "")
     path.write_text(row + "\n")
     return path
-
-
-def _not_yet(name: str, milestone: str) -> int:
-    typer.echo(
-        f"`migec {name}` is not implemented yet (planned for {milestone}). See ROADMAP.md.",
-        err=True,
-    )
-    return 2

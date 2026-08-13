@@ -89,7 +89,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
                          const std::vector<std::string>& patterns,
                           const std::vector<std::string>& slaves, const std::string& out_prefix,
                          const std::string& trim, int min_umi_quality, bool write_unmatched,
-                         int threads, int max_offset) {
+                         int threads, int max_offset, uint64_t limit_reads) {
     if (sample_ids.size() != patterns.size()) {
         throw MigecError("run_checkout: sample_ids and patterns have different lengths");
     }
@@ -115,6 +115,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     req.out_prefix = out_prefix;
     req.write_unmatched = write_unmatched;
     req.threads = threads;
+    req.limit_reads = limit_reads;
 
     // The clock covers the per-sample statistics below as well as the driver. They are serial,
     // single-threaded, and on a 12 nt UMI cost about 2 us per read -- four times the matching. A
@@ -179,6 +180,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         out["quality_calibration"] = cal;
     }
     out["match_seconds"] = stats.wall_seconds;
+    out["trimmed_bases"] = c.trimmed_bases;
     out["peak_rss_bytes"] = stats.peak_rss_bytes;
     out["umi_memory_bytes"] = stats.umi_memory_bytes;
 
@@ -216,6 +218,26 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
             per_pos.append(d);
         }
         s["composition"] = per_pos;
+
+        // The payload length distribution after trimming, and the mean. A pattern placed one base
+        // off trims one base off every read, and this is the only place that shows.
+        py::list lens;
+        double len_sum = 0.0, len_n = 0.0;
+        if (i < stats.sample_payload_len.size()) {
+            for (size_t L = 0; L < kPayloadHistLen; ++L) {
+                const uint64_t n = stats.sample_payload_len[i][L];
+                if (!n) continue;
+                py::dict e;
+                e["length"] = L;
+                e["reads"] = n;
+                e["at_least"] = L + 1 == kPayloadHistLen;  // the catch-all bin
+                lens.append(e);
+                len_sum += static_cast<double>(L * n);
+                len_n += static_cast<double>(n);
+            }
+        }
+        s["payload_lengths"] = lens;
+        s["mean_payload_length"] = len_n ? len_sum / len_n : 0.0;
 
         const CorrectionResult cr = correct_umis(umi_counts[i]);
         s["umi_error_rate"] = cr.estimated_error;
@@ -284,6 +306,13 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "migec native core: FASTQ IO, the .mig intermediate format, barcode primitives.";
     m.attr("__version__") = MIGEC_VERSION;
     m.attr("MIG_FORMAT_VERSION") = kMigFormatVersion;
+    // The two measured constants, exported so the CLI's help text and defaults read them rather
+    // than repeating them. X2 fitted the floor, X3 the split threshold; both live in
+    // consensus.hpp next to the comment that says what measured them.
+    m.attr("RT_FLOOR") = ConsensusParams{}.rt_floor;
+    m.attr("LINKAGE_THRESHOLD") = ConsensusParams{}.linkage_threshold;
+    // Also measured, and also in one place: level 6 spent 83% of refine's wall clock compressing.
+    m.attr("GZIP_LEVEL") = AssembleRequest{}.gzip_level;
 
     py::register_exception<MigecError>(m, "MigecError", PyExc_RuntimeError);
 
@@ -359,7 +388,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("slaves") = std::vector<std::string>(), py::arg("out_prefix") = std::string(),
           py::arg("trim") = "pattern", py::arg("min_umi_quality") = 0,
           py::arg("write_unmatched") = false, py::arg("threads") = 0,
-          py::arg("max_offset") = -1,
+          py::arg("max_offset") = -1, py::arg("limit_reads") = uint64_t{0},
           "Demultiplex a FASTQ (or an R1/R2 pair) by barcode pattern, extract and trim the UMI, "
           "and write one gzipped FASTQ per sample with RX/QX/BC tags in the header. Returns a "
           "summary dict including the per-sample coverage histogram, UMI composition, correction "
@@ -508,7 +537,7 @@ PYBIND11_MODULE(_core, m) {
             return d;
         },
         py::arg("input"), py::arg("output"), py::arg("per_10k") = 100u,
-        py::arg("by_cell") = true, py::arg("gzip_level") = 6,
+        py::arg("by_cell") = true, py::arg("gzip_level") = AssembleRequest{}.gzip_level,
         "Keep ALL the reads of a hash-selected fraction of the barcodes. Never a fraction of the "
         "reads, and never the first N barcodes: both destroy the MIG size distribution the "
         "fixture exists to preserve.");
@@ -518,7 +547,8 @@ PYBIND11_MODULE(_core, m) {
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
            int expect_cells, const std::string& cell_whitelist, double min_whitelist_posterior,
-           double target_fdr, int gzip_level) {
+           double target_fdr, int gzip_level, int threads, uint64_t limit_reads,
+           uint64_t limit_umis) {
             RefineRequest req;
             req.input = input;
             req.output_dir = out_dir;
@@ -532,6 +562,9 @@ PYBIND11_MODULE(_core, m) {
             req.whitelist.min_posterior = min_whitelist_posterior;
             req.target_fdr = target_fdr;
             req.gzip_level = gzip_level;
+            req.correction.threads = threads;
+            req.limit.reads = limit_reads;
+            req.limit.umis = limit_umis;
             RefineStats st;
             {
                 py::gil_scoped_release release;
@@ -572,6 +605,11 @@ PYBIND11_MODULE(_core, m) {
             d["whitelist"] = wl;
             d["table_bytes"] = st.table_bytes;
             d["wall_seconds"] = st.wall_seconds;
+            d["limited"] = st.limited;
+            d["table_seconds"] = st.table_seconds;
+            d["correct_seconds"] = st.correct_seconds;
+            d["rewrite_seconds"] = st.rewrite_seconds;
+            d["threads"] = st.threads;
             d["peak_rss_bytes"] = peak_rss_bytes();
             py::list hist;
             for (size_t b = 0; b < st.size_histogram.size(); ++b) {
@@ -589,7 +627,8 @@ PYBIND11_MODULE(_core, m) {
         py::arg("payload_width") = 32, py::arg("min_posterior") = 0.95,
         py::arg("expect_cells") = 3000, py::arg("cell_whitelist") = std::string(),
         py::arg("min_whitelist_posterior") = 0.975, py::arg("target_fdr") = 0.05,
-        py::arg("gzip_level") = 6,
+        py::arg("gzip_level") = RefineRequest{}.gzip_level, py::arg("threads") = 0,
+        py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
         "correction can be audited.");
@@ -597,8 +636,9 @@ PYBIND11_MODULE(_core, m) {
     m.def(
         "assemble",
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
-           double rt_floor, double linkage_threshold, bool contig, uint32_t min_reads,
-           int gzip_level, int bucket_bits) {
+           double rt_floor, double linkage_threshold, bool contig, bool fast, uint32_t min_reads,
+           int gzip_level, int bucket_bits, int threads, uint64_t limit_reads,
+           uint64_t limit_umis) {
             AssembleRequest req;
             req.input = input;
             req.output_dir = out_dir;
@@ -606,9 +646,13 @@ PYBIND11_MODULE(_core, m) {
             req.consensus.rt_floor = rt_floor;
             req.consensus.linkage_threshold = linkage_threshold;
             req.consensus.contig = contig;
+            req.consensus.fast = fast;
             req.min_reads = min_reads;
             req.gzip_level = gzip_level;
             req.bucket_bits = bucket_bits;
+            req.threads = threads;
+            req.limit.reads = limit_reads;
+            req.limit.umis = limit_umis;
             AssembleStats st;
             {
                 py::gil_scoped_release release;
@@ -625,6 +669,11 @@ PYBIND11_MODULE(_core, m) {
             d["groups_fragmented"] = st.groups_fragmented;
             d["contigs"] = st.contigs;
             d["contig_mode"] = contig;
+            d["fast_mode"] = fast;
+            d["mean_support"] = st.mean_support;
+            d["groups_capped"] = st.groups_capped;
+            d["reads_over_cap"] = st.reads_over_cap;
+            d["max_reads_per_group"] = static_cast<uint64_t>(kMaxReadsPerGroup);
             d["cell_length"] = st.cell_length;
             d["expected_molecules_per_group"] = st.expected_molecules_per_group;
             py::dict sp;
@@ -638,6 +687,8 @@ PYBIND11_MODULE(_core, m) {
             d["barcode_space"] = sp;
             d["umi_length"] = st.umi_length;
             d["buckets"] = st.buckets;
+            d["threads"] = st.threads;
+            d["limited"] = st.limited;
             d["mean_quality"] = st.mean_quality;
             d["mean_consensus_error"] = st.mean_consensus_error;
             d["quality_cap"] = -10.0 * std::log10(rt_floor);
@@ -656,9 +707,15 @@ PYBIND11_MODULE(_core, m) {
             return d;
         },
         py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
-        py::arg("rt_floor") = 1e-4, py::arg("linkage_threshold") = 8.68,
-        py::arg("contig") = false, py::arg("min_reads") = 1u, py::arg("gzip_level") = 6,
-        py::arg("bucket_bits") = 0,
+        // Defaulted off the header, never retyped: rt_floor is X2's measurement and
+        // linkage_threshold is X3's, and a second copy of a measured constant is a copy that
+        // drifts from the measurement that justifies it.
+        py::arg("rt_floor") = ConsensusParams{}.rt_floor,
+        py::arg("linkage_threshold") = ConsensusParams{}.linkage_threshold,
+        py::arg("contig") = false, py::arg("fast") = false,
+        py::arg("min_reads") = 1u, py::arg("gzip_level") = AssembleRequest{}.gzip_level,
+        py::arg("bucket_bits") = 0, py::arg("threads") = 0,
+        py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
         "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "
         "buckets and sorted one bucket at a time, so nothing scales with the library. Emitted "
         "quality is capped at -10 log10(rt_floor), the RT/first-cycle-PCR error that no consensus "
@@ -698,6 +755,19 @@ PYBIND11_MODULE(_core, m) {
                 cyc.append(e);
             }
             d["cycles"] = cyc;
+            py::list km;
+            for (const KmerHit& h : sg.profile.kmers) {
+                py::dict e;
+                e["kmer"] = h.kmer;
+                e["count"] = h.count;
+                e["expected"] = h.expected;
+                e["ratio"] = h.ratio;
+                e["mean_position"] = h.mean_position;
+                e["read_fraction"] = h.read_fraction;
+                km.append(e);
+            }
+            d["kmers"] = km;
+            d["kmers_scanned"] = sg.profile.kmers_scanned;
             py::list segs;
             for (const Segment& sm : sg.segments) {
                 py::dict e;

@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "migec/fastq.hpp"
+#include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
 
@@ -179,6 +180,7 @@ RefineStats refine(const RefineRequest& request) {
         return it == cell_remap.end() ? key : it->second;
     };
 
+    Stopwatch phase;
     // ---------------------------------------------------------------- pass 1: the barcode table
     // Counts only. The entry array is not final until every read has been seen, and the evidence
     // is indexed in parallel with it, so it cannot be filled in the same pass.
@@ -187,10 +189,20 @@ RefineStats refine(const RefineRequest& request) {
         FastqReader reader(request.input);
         FastqRecord rec;
         bool started = false;
+        IntakeLimit limit = request.limit;
         while (reader.next(rec)) {
             ++stats.reads;
             const std::string_view umi = tag_value(rec.comment, "RX:Z:");
             if (umi.empty()) { ++stats.reads_without_umi; continue; }
+            // After the barcode is known, so --limit-umi counts barcodes. Pass 3 stops at the same
+            // read count, so the rewritten file is exactly the prefix the table was built from --
+            // rewriting reads whose barcode was never in the table would emit uncorrected reads
+            // beside corrected ones with nothing saying which was which.
+            if (limit.active() && !limit.admit(stats.reads, pack_barcode(umi))) {
+                --stats.reads;
+                stats.limited = true;
+                break;
+            }
             const std::string_view cell = tag_value(rec.comment, "CB:Z:");
             if (!started) {
                 stats.umi_length = static_cast<int>(umi.size());
@@ -300,8 +312,14 @@ RefineStats refine(const RefineRequest& request) {
                          (request.use_quality ? sizeof(float) * static_cast<size_t>(L) : 0) +
                          static_cast<size_t>(pw));
 
+    stats.table_seconds = phase.seconds();
+
     // ---------------------------------------------------------------- correct
+    phase = Stopwatch();
+    stats.threads = worker_count(request.correction.threads, counts.entries().size());
     const CorrectionResult correction = correct_umis(counts, request.correction, evidence);
+    stats.correct_seconds = phase.seconds();
+    phase = Stopwatch();
     stats.merged = correction.merged;
     stats.merged_reads = correction.merged_reads;
     stats.merged_by_payload = correction.merged_by_payload;
@@ -315,16 +333,35 @@ RefineStats refine(const RefineRequest& request) {
     }
 
     // ---------------------------------------------------------------- pass 3: rewrite
+    //
+    // Chunked and parallel, the same shape checkout uses: a round of chunks is read serially,
+    // rewritten AND compressed on the workers, and appended in chunk order. Never: the chunk size is
+    // a constant, so the member boundaries -- and therefore the bytes -- do not depend on -t.
     const std::filesystem::path fastq_path =
         out_dir / (stats.sample_id + ".fq" + (request.gzip_level > 0 ? ".gz" : ""));
     {
-        FastqWriter writer(fastq_path.string(), request.gzip_level);
+        // Reads per chunk. A CONSTANT, so the gzip member boundaries -- and therefore the bytes
+        // -- do not depend on --threads. It is deliberately small: the rewrite holds one chunk of
+        // records plus one output buffer PER WORKER, so this number is multiplied by the thread
+        // count. 4096 x ~250 B is ~1 MB a thread each way; 16384 was four times that and showed
+        // up as 100 MB of fixed cost at 32 threads before anything had been read.
+        constexpr size_t kChunkReads = 4096;
+        const int rewrite_threads = worker_count(request.correction.threads, 64);
+        std::vector<std::vector<FastqOwned>> chunks(static_cast<size_t>(rewrite_threads));
+        std::vector<std::string> plain(static_cast<size_t>(rewrite_threads));
+        std::vector<std::string> packed(static_cast<size_t>(rewrite_threads));
+
+        std::FILE* fh = std::fopen(fastq_path.string().c_str(), "wb");
+        if (!fh) throw MigecError("refine: cannot write " + fastq_path.string());
         FastqReader reader(request.input);
         FastqRecord rec;
-        while (reader.next(rec)) {
-            const std::string_view umi = tag_value(rec.comment, "RX:Z:");
-            if (umi.empty()) continue;
-            const std::string_view cell = tag_value(rec.comment, "CB:Z:");
+        bool eof = false;
+        uint64_t written = 0;
+
+        auto rewrite_one = [&](const FastqOwned& r, std::string& dst) {
+            const std::string_view umi = tag_value(r.comment, "RX:Z:");
+            if (umi.empty()) return;
+            const std::string_view cell = tag_value(r.comment, "CB:Z:");
             const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));
             const size_t i = slot(cell.empty()
                                      ? pack_barcode(umi)
@@ -333,11 +370,11 @@ RefineStats refine(const RefineRequest& request) {
                 // Unreachable unless pass 1 and pass 3 disagree about the key. Pass the read
                 // through untouched rather than dropping it: emitting a read whose barcode was
                 // not corrected is recoverable, losing it silently is not.
-                writer.write(rec.name, rec.comment, rec.seq, rec.qual);
-                continue;
+                append_fastq(dst, r.name, r.comment, r.seq, r.qual);
+                return;
             }
             const uint32_t root = correction.root[i];
-            std::string comment(rec.comment);
+            std::string comment(r.comment);
             // The final barcode is the root's, which already carries the whitelist snap because
             // the snap happened before the table was built. Compare against what the READ said,
             // not against the root only: a barcode can be snapped by the whitelist without being
@@ -358,10 +395,47 @@ RefineStats refine(const RefineRequest& request) {
                 comment += "\tOC:Z:";
                 comment += cell;
             }
-            writer.write(rec.name, comment, rec.seq, rec.qual);
+            append_fastq(dst, r.name, comment, r.seq, r.qual);
+        };
+
+        while (!eof) {
+            size_t filled = 0;
+            for (; filled < chunks.size(); ++filled) {
+                std::vector<FastqOwned>& c = chunks[filled];
+                c.clear();
+                while (c.size() < kChunkReads && (!stats.limited || written < stats.reads) &&
+                       reader.next(rec)) {
+                    ++written;
+                    c.push_back({std::string(rec.name), std::string(rec.comment),
+                                 std::string(rec.seq), std::string(rec.qual)});
+                }
+                if (c.empty()) { eof = true; break; }
+                if (c.size() < kChunkReads) { ++filled; eof = true; break; }
+            }
+            if (filled == 0) break;
+
+            parallel_for(filled, rewrite_threads, [&](size_t t, int) {
+                std::string& dst = plain[t];
+                dst.clear();
+                for (const FastqOwned& r : chunks[t]) rewrite_one(r, dst);
+                if (request.gzip_level > 0) {
+                    gzip_member(dst, packed[t], request.gzip_level);
+                } else {
+                    packed[t] = dst;
+                }
+            });
+
+            for (size_t t = 0; t < filled; ++t) {
+                if (packed[t].empty()) continue;
+                if (std::fwrite(packed[t].data(), 1, packed[t].size(), fh) != packed[t].size()) {
+                    std::fclose(fh);
+                    throw MigecError("refine: short write");
+                }
+            }
         }
-        writer.close();
+        std::fclose(fh);
     }
+    stats.rewrite_seconds = phase.seconds();
 
     // ---------------------------------------------------------------- tables
     {

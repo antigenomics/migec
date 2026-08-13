@@ -38,6 +38,13 @@ def run(
                     f"{c['entropy']:.6f}\t{c['collision']:.6f}\t{c['consensus']}\t"
                     f"{c['consensus_fraction']:.6f}\t{c['deviation']:.6f}\t{c['mean_phred']:.2f}\n"
                 )
+        with open(out / "suggest.kmers.tsv", "w") as fh:
+            fh.write("kmer\tcount\texpected\tratio\tmean_position\tread_fraction\n")
+            for k in summary["kmers"]:
+                fh.write(
+                    f"{k['kmer']}\t{k['count']}\t{k['expected']:.1f}\t{k['ratio']:.3f}\t"
+                    f"{k['mean_position']:.1f}\t{k['read_fraction']:.6f}\n"
+                )
         with open(out / "suggest.segments.tsv", "w") as fh:
             fh.write("kind\tbegin\tend\tlength\tconsensus\tmean_deviation\n")
             for s in summary["segments"]:
@@ -95,6 +102,62 @@ def format_report(summary: dict) -> str:
         # A real tab, because that is what a barcode table needs and this line is meant to be
         # copied out of the terminal into one.
         lines.append(f"\npaste into a barcode table as:\n  S1\t{summary['pattern']}")
+    # Overrepresented k-mers: what synthetic sequence is still in these reads. On raw input that
+    # is the primer the pattern is about to be built from; run on trimmed or consensus output it
+    # is whatever the trim failed to remove, which is the only way to find out.
+    strong = [k for k in summary["kmers"] if k["ratio"] >= 5.0 and k["read_fraction"] >= 0.01]
+    if strong:
+        lines += [
+            "",
+            f"{'kmer':<10}{'count':>10}{'obs/exp':>10}{'reads':>9}{'mean pos':>10}",
+        ]
+        for k in strong[:10]:
+            lines.append(
+                f"{k['kmer']:<10}{k['count']:>10,}{k['ratio']:>10.1f}"
+                f"{k['read_fraction']:>8.1%}{k['mean_position']:>10.1f}"
+            )
+        joined = _stitch(strong)
+        if joined:
+            lines.append(f"\noverlapping into: {joined}")
+
     if summary["note"]:
         lines.append(f"\nwarning: {summary['note']}")
     return "\n".join(lines)
+
+
+def _stitch(hits: list[dict], min_count_ratio: float = 0.5) -> str:
+    """Greedily join overlapping k-mers back into the sequence they came from, both ways.
+
+    Eight bases name a primer but do not print one. Real synthetic sequence shows up as a run of
+    k-mers each shifted one base from the last, so following that chain out of the strongest hit
+    recovers the adapter itself, which is what the reader needs in order to act on it.
+
+    The chain stops where the count drops: a k-mer straddling the end of the primer is carried by
+    whatever follows it, so it is seen a quarter as often per base of overhang. Without that test
+    the walk keeps going one base at a time into the payload and prints an adapter that is partly
+    invented.
+    """
+    counts = {k["kmer"]: k["count"] for k in hits}
+    seed = hits[0]["kmer"]
+    floor = min_count_ratio * counts[seed]
+    k = len(seed)
+
+    def extend(seq: str, table: dict[str, int]) -> str:
+        seen = {seq[-k:]}
+        for _ in range(120):  # bounded: a repeat would otherwise walk forever
+            nxt = max(
+                (m for m in table
+                 if m.startswith(seq[-(k - 1):]) and table[m] >= floor and m not in seen),
+                key=table.get,
+                default=None,
+            )
+            if nxt is None:
+                break
+            seen.add(nxt)
+            seq += nxt[-1]
+        return seq
+
+    out = extend(seed, counts)
+    reversed_counts = {m[::-1]: c for m, c in counts.items()}
+    out = extend(out[::-1], reversed_counts)[::-1]
+    return out if len(out) > k else ""

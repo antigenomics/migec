@@ -107,13 +107,14 @@ than no output.
    which is a different claim from the one the amplicon literature makes, and it should not be
    blurred in anything migec publishes.
 
-Consequences for M1
--------------------
+What M1 shipped
+---------------
 
-* ``--mode {amplicon,fragmented}`` is explicit, not inferred. The two make opposite assumptions and
-  guessing wrong is silent in both directions.
-* ``fragmented`` partitions each group into overlap components by union-find and emits one
-  consensus per component. The contig path — "assemble overlapping read groups sharing a UMI" —
-  is that same code, not a separate feature.
-* A component must never be extended across a gap. Emit the components; let the caller decide
-  whether to scaffold them.
+* ``migec assemble --contig`` is explicit, not inferred. The two modes make opposite assumptions
+  and guessing wrong is silent in both directions, so the flag is the declaration.
+* ``--contig`` partitions each group into overlap components by union-find and emits one consensus
+  per component. The contig path — "assemble overlapping read groups sharing a UMI" — is that same
+  code, not a separate feature.
+* A component is never extended across a gap. The components are emitted; whether to scaffold them
+  is the caller's decision. Each consensus carries its component index in the read name
+  (``.c1``, ``.c2``) and in the ``contig``/``contigs`` columns of ``<sample>.mig.tsv``.

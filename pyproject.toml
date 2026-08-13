@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "migec"
-version = "2.0.0a2"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
+version = "2.0.0a3"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
 description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,9 +19,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C++",
 ]
+# typer and nothing else. Every stage writes its tables with the standard library, and the plots
+# are gnuplot reading those tables -- so a wheel installed to run the pipeline pulls no dataframe
+# library and no plotting stack. polars is the notebooks' dependency, and lives with them.
 dependencies = [
     "typer>=0.12",
-    "polars>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +32,9 @@ dependencies = [
 # magnitude. seqtree earns its place only for whitelist lookup at >=2 substitutions, N-wildcard
 # barcodes, and k-mer adapter discovery in `migec suggest` -- all opt-in.
 seqtree = ["seqtree>=0.6"]
-plots = ["matplotlib>=3.8"]
+# `migec plot` shells out to gnuplot, which is not a python package. These are what the marimo
+# notebooks under notebooks/ import.
+notebooks = ["polars>=1.0", "marimo", "matplotlib>=3.8"]
 docs = ["sphinx", "pydata-sphinx-theme"]
 test = ["pytest", "pytest-cov"]
 dev = ["ruff", "pytest", "pybind11", "marimo"]

@@ -19,6 +19,17 @@ struct LogTables {
     std::array<double, kMaxPhred + 1> match{}, mismatch{};
 };
 
+LogTables build_tables(const std::vector<float>& calibration);
+
+// Built once. `assemble_group` runs per molecule, and rebuilding 61 log/log1p pairs for every
+// group put ~122 transcendentals against the ~3 per emitted base that the posterior actually
+// needs. Same reason pattern.cpp keeps a `nominal_table()`; the calibrated path still builds its
+// own, because there the table depends on the data.
+const LogTables& nominal_tables() {
+    static const LogTables t = build_tables({});
+    return t;
+}
+
 LogTables build_tables(const std::vector<float>& calibration) {
     LogTables t;
     for (int q = 0; q <= kMaxPhred; ++q) {
@@ -229,6 +240,57 @@ Consensus call_consensus(const std::vector<ConsensusRead>& reads, const Consensu
     return out;
 }
 
+// Counting mode: the group's most frequent exact sequence, with each base carrying the best
+// quality any read of that sequence reported for it.
+//
+// Never: the max is taken over the reads that carry the WINNING sequence, not over every read in
+// the group. Maximising across variants would take its highest quality from exactly the reads that
+// disagree at that position, which asserts most confidence where the evidence conflicts.
+//
+// The RT floor is added as it is in the full path, so this path claims no more than that one.
+// What is missing by construction is error correction: a base is right because one read read it
+// well, not because n reads agreed on it.
+Consensus modal_consensus(const std::vector<ConsensusRead>& reads, const ConsensusParams& params) {
+    Consensus out;
+    out.reads = static_cast<uint32_t>(reads.size());
+
+    // Ties by the sequence itself, so the output does not depend on read order within the group.
+    std::unordered_map<std::string_view, uint32_t> votes;
+    votes.reserve(reads.size() * 2);
+    for (const ConsensusRead& r : reads) ++votes[r.seq];
+    std::string_view best;
+    uint32_t best_votes = 0;
+    for (const auto& [seq, n] : votes) {
+        if (n > best_votes || (n == best_votes && seq < best)) { best_votes = n; best = seq; }
+    }
+    out.support = best_votes;
+
+    const size_t width = best.size();
+    std::vector<uint8_t> quality(width, 0);
+    for (const ConsensusRead& r : reads) {
+        if (r.seq != best) continue;
+        const size_t n = std::min(width, r.qual.size());
+        for (size_t j = 0; j < n; ++j) {
+            quality[j] = std::max(quality[j], phred_from_char(r.qual[j]));
+        }
+    }
+
+    const uint8_t q_cap = static_cast<uint8_t>(
+        std::min<double>(kMaxPhred, std::floor(-10.0 * std::log10(params.rt_floor))));
+    out.seq.assign(best);
+    out.qual.resize(width);
+    double err_sum = 0.0;
+    for (size_t j = 0; j < width; ++j) {
+        const double p = phred_error(quality[j]);
+        err_sum += p;
+        int q = static_cast<int>(std::lround(-10.0 * std::log10(p + params.rt_floor)));
+        q = std::clamp(q, static_cast<int>(params.min_quality), static_cast<int>(q_cap));
+        out.qual[j] = char_from_phred(static_cast<uint8_t>(q));
+    }
+    out.mean_error = width ? err_sum / static_cast<double>(width) : 0.0;
+    return out;
+}
+
 // Union-find carrying an offset relative to the component root, so a component's reads come out
 // already placed against each other.
 struct OffsetUnion {
@@ -396,7 +458,14 @@ std::vector<Consensus> assemble_group(const std::vector<ConsensusRead>& reads,
                                       const ConsensusParams& params) {
     std::vector<Consensus> out;
     if (reads.empty()) return out;
-    const LogTables tables = build_tables(params.calibration);
+    // Before the tables are touched: the fast path computes no likelihood at all.
+    if (params.fast) {
+        out.push_back(modal_consensus(reads, params));
+        return out;
+    }
+    LogTables calibrated;
+    if (!params.calibration.empty()) calibrated = build_tables(params.calibration);
+    const LogTables& tables = params.calibration.empty() ? nominal_tables() : calibrated;
 
     if (!params.contig) {
         return assemble_component(reads, params, tables);

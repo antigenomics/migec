@@ -79,7 +79,8 @@ The acceptance threshold defaults to a Bonferroni bound over the offsets actuall
 Ambiguous is not the same as unmatched
 --------------------------------------
 
-A read whose best sample tag does not beat the runner-up by ``--min-margin`` bits is reported as
+A read whose best sample tag does not beat the runner-up by the placement margin (``min_margin``,
+5 bits, an internal parameter rather than a flag) is reported as
 **ambiguous** rather than assigned to one of them. That is a different diagnosis from *unmatched*:
 ambiguous means the barcodes in the sheet are too close together, unmatched means the pattern is
 wrong or absent. One counter cannot say both, so there are two.
@@ -96,8 +97,9 @@ This is not a convenience. Amplicon libraries are sequenced in both orientations
 both orientations of one molecule loses half its reads at consensus while nothing upstream reports
 it. The count of reads that were flipped is in the report and in ``normalised``.
 
-The mate is passed through whole: trimming it would need a second tag, and dual-end barcodes are
-not implemented yet (see :doc:`roadmap`). Both mates carry the ``RX``/``QX``/``BC`` tags, because a
+The mate is passed through whole, including when a dual-end (slave) pattern matched inside it:
+trimming it would need its own ``payload_begin`` carried alongside, and by then the mate's barcode
+bases are already in the UMI. Both mates carry the ``RX``/``QX``/``BC`` tags, because a
 downstream tool that sees only one of them cannot group the pair.
 
 Trimming

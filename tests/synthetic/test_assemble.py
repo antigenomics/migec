@@ -310,3 +310,141 @@ def test_shallow_consensus_error_is_the_read_error(tmp_path):
     # ...and the floor still caps what is claimed, however good or bad the input.
     assert shallow["mean_quality"] <= shallow["quality_cap"]
     assert deep["mean_quality"] <= deep["quality_cap"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Counting mode (`--fast`): the modal exact sequence, and the best quality any read of it carried.
+
+
+def test_fast_mode_takes_the_modal_sequence_and_the_best_quality(tmp_path):
+    """Three reads of one molecule, two agreeing. The majority string wins whole, and each of its
+    bases carries the best quality the reads that voted for it reported -- never a quality taken
+    from the read that disagreed."""
+    reads = tmp_path / "modal.fq"
+    reads.write_text(
+        "@a RX:Z:ACGTACGTACGT\tBC:Z:S1\nACGTACGT\n+\n5I5IIIII\n"
+        "@b RX:Z:ACGTACGTACGT\tBC:Z:S1\nACGTACGT\n+\nI5IIIIII\n"
+        "@c RX:Z:ACGTACGTACGT\tBC:Z:S1\nTTTTTTTT\n+\nIIIIIIII\n"
+    )
+    summary = run(reads, tmp_path / "asm", sample_id="S1", fast=True, rt_floor=1e-6)
+    assert summary["groups"] == 1
+    assert summary["molecules"] == 1
+    # All three reads counted towards the molecule; two of them carried what was emitted.
+    assert summary["mean_support"] == pytest.approx(2 / 3)
+
+    with gzip.open(tmp_path / "asm" / "S1.consensus.fq.gz", "rt") as fh:
+        _, seq, _, qual = (fh.readline().rstrip("\n") for _ in range(4))
+    assert seq == "ACGTACGT"
+    # Position 0 is Q40 in read b, position 1 is Q40 in read a: the per-base max over the two
+    # reads that carried this sequence. The Q20s ('5') are gone, and the Q40s of the read that
+    # voted for TTTTTTTT never entered.
+    assert [ord(c) - 33 for c in qual] == [40] * 8
+    assert summary["reads"] == 3
+
+
+def test_fast_mode_still_obeys_the_rt_floor(tmp_path):
+    reads = tmp_path / "one.fq"
+    reads.write_text("@a RX:Z:ACGTACGTACGT\tBC:Z:S1\nACGTACGT\n+\n" + "I" * 8 + "\n")
+    summary = run(reads, tmp_path / "asm", sample_id="S1", fast=True, rt_floor=1e-3)
+    with gzip.open(tmp_path / "asm" / "S1.consensus.fq.gz", "rt") as fh:
+        qual = fh.readlines()[3].rstrip("\n")
+    # Q40 reported, Q30 floor: an error made before amplification is in every read, and the fast
+    # path is no more entitled to claim past it than the full one.
+    assert max(ord(c) - 33 for c in qual) <= 30
+    assert summary["quality_cap"] == pytest.approx(30.0)
+
+
+def test_fast_mode_counts_the_same_molecules_as_the_full_path(tmp_path):
+    """What counting mode must preserve is the count. The sequence may differ from the full
+    consensus on a group whose reads disagree -- that is the trade -- but a molecule must not
+    appear or vanish."""
+    cfg = SimConfig(adapter=ADAPTER, n_molecules=800, n_clones=5, coverage=6.0, seq_error=5e-3)
+    sim = simulate(cfg, tmp_path / "sim")
+    (tmp_path / "bc.txt").write_text(f"S1\t{sim['pattern']}\n")
+    checkout_run(sim["reads"], tmp_path / "bc.txt", tmp_path / "co")
+
+    full = run(tmp_path / "co" / "S1.fq.gz", tmp_path / "full")
+    fast = run(tmp_path / "co" / "S1.fq.gz", tmp_path / "fast", fast=True)
+
+    assert fast["groups"] == full["groups"]
+    assert fast["reads"] == full["reads"]
+    # Never split, by construction: the linkage model is the column model, which fast mode skips.
+    assert fast["molecules"] == fast["groups"]
+    assert fast["molecules"] <= full["molecules"]
+    assert "counting mode" in format_report(fast)
+
+
+def test_fast_mode_does_not_correct_errors_and_says_so(tmp_path):
+    """The trade, measured: at 5e-3 per base and 8 reads the full path removes essentially every
+    sequencing error, and the fast path keeps whatever the majority string carried.
+
+    `umi_error=0` so that the two paths are compared on the consensus alone -- a barcode error
+    puts reads of one molecule under two keys and would charge both paths for it equally, which
+    is a different measurement (docs/refine.rst)."""
+    cfg = SimConfig(
+        adapter=ADAPTER, n_molecules=600, n_clones=4, coverage=8.0, seq_error=5e-3, umi_error=0.0
+    )
+    sim = simulate(cfg, tmp_path / "sim")
+    (tmp_path / "bc.txt").write_text(f"S1\t{sim['pattern']}\n")
+    checkout_run(sim["reads"], tmp_path / "bc.txt", tmp_path / "co")
+
+    truth = {}
+    with open(sim["truth_consensus"]) as fh:
+        umi = None
+        for line in fh:
+            if line.startswith(">"):
+                umi = next(f[4:] for f in line.split() if f.startswith("umi="))
+            else:
+                truth.setdefault(umi, []).append(line.rstrip("\n"))
+
+    def error_rate(out_dir, **kw):
+        """Per-base error against truth, over molecules seen five times or more.
+
+        Stratified, because a consensus over one read IS that read in both modes: averaging the
+        singletons in would measure the MIG size distribution rather than the two algorithms.
+        """
+        run(tmp_path / "co" / "S1.fq.gz", out_dir, **kw)
+        mm = bases = 0
+        with gzip.open(out_dir / "S1.consensus.fq.gz", "rt") as fh:
+            for i, line in enumerate(fh):
+                if i % 4 == 0:
+                    umi = next(f[5:] for f in line.split() if f.startswith("RX:Z:"))
+                    depth = int(next(f[5:] for f in line.split() if f.startswith("cD:i:")))
+                elif i % 4 == 1 and depth >= 5 and len(truth.get(umi, [])) == 1:
+                    a, b = line.rstrip("\n"), truth[umi][0]
+                    n = min(len(a), len(b))
+                    mm += sum(a[j] != b[j] for j in range(n))
+                    bases += n
+        return mm / bases
+
+    full = error_rate(tmp_path / "full")
+    fast = error_rate(tmp_path / "fast", fast=True)
+    # The M1 gate for the column model, and what majority-voting whole strings costs against it.
+    assert full <= 1e-5
+    assert fast > 10 * full
+
+
+def test_coverage_is_capped_for_the_consensus_but_never_for_the_count(tmp_path):
+    """10x's rule -- past ~10,000 reads a barcode adds nothing to the consensus and costs time and
+    memory -- applied to the reads that are consensed only. The molecule's depth is the other half
+    of what this pipeline produces, and capping it would flatten the abundance of exactly the
+    most-amplified molecules."""
+    over = 50
+    reads = tmp_path / "deep.fq"
+    payload = "ACGT" * 15
+    with open(reads, "w") as fh:
+        for i in range(10_000 + over):
+            fh.write(f"@r{i} RX:Z:ACGTACGTACGT\tBC:Z:S1\n{payload}\n+\n{'I' * len(payload)}\n")
+
+    summary = run(reads, tmp_path / "asm", sample_id="S1")
+    assert summary["groups"] == 1
+    assert summary["groups_capped"] == 1
+    assert summary["reads_over_cap"] == over
+    assert summary["max_reads_per_group"] == 10_000
+    assert "still counted" in format_report(summary)
+
+    with gzip.open(tmp_path / "asm" / "S1.consensus.fq.gz", "rt") as fh:
+        header = fh.readline()
+    assert "cD:i:10050" in header
+    row = (tmp_path / "asm" / "S1.mig.tsv").read_text().splitlines()[1].split("\t")
+    assert row[5] == "10050"

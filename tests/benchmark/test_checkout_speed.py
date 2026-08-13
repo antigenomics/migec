@@ -47,7 +47,11 @@ def corpus(tmp_path_factory):
     with gzip.open(path, "wt", compresslevel=1) as fh:
         i = 0
         while i < N_READS:
-            sample = list(TAGS)[i % 4]
+            # On the MOLECULE, not on the read counter: `i % 4` with four reads per molecule is
+            # always 0, so every read went to S1 and three of the four patterns never matched.
+            # The matching cost was right -- all four are still scored per read -- but the
+            # per-sample side of it was measuring one sample.
+            sample = list(TAGS)[(i // READS_PER_UMI) % 4]
             umi = "".join(rng.choice("ACGT") for _ in range(12))
             payload = "".join(rng.choice("ACGT") for _ in range(90))
             for _ in range(READS_PER_UMI):

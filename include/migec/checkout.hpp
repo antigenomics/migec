@@ -89,6 +89,10 @@ struct QualityCalibration {
     double error(int q) const;
 };
 
+// Exact payload lengths tracked, per sample. 512 covers every current read length; anything
+// longer lands in the last bin, which is labelled as the catch-all it is.
+inline constexpr size_t kPayloadHistLen = 512;
+
 struct CheckoutCounters {
     uint64_t total = 0;
     uint64_t assigned = 0;
@@ -105,6 +109,12 @@ struct CheckoutCounters {
     // the quality the instrument reported", which is the comparison that says whether to believe
     // either number.
     std::vector<std::array<uint64_t, 61>> umi_phred;
+    // Payload length after trimming, per sample, exact up to kPayloadHistLen-1 with the last bin a
+    // catch-all. This is the trim's own QC: a pattern matched at the wrong offset does not fail,
+    // it succeeds and leaves the payload a fixed number of bases short or long, and the length
+    // distribution is where that is visible. `trimmed_bases` is what was removed.
+    std::vector<std::array<uint64_t, kPayloadHistLen>> payload_len;
+    uint64_t trimmed_bases = 0;
     QualityCalibration calibration;
 
     void merge(const CheckoutCounters& o);
@@ -182,6 +192,9 @@ private:
 // The whole-file driver.
 
 struct CheckoutRequest {
+    // Stop after this many input reads; 0 reads all of them. A smoke test, never a sample: the
+    // first N reads of a FASTQ are one corner of one flowcell. `subsample` is the sampler.
+    uint64_t limit_reads = 0;
     std::string r1;                  // input FASTQ, plain or gzipped
     std::string r2;                  // empty for single-end
     std::string out_prefix;          // "<prefix><sample>_R1.fq.gz", or "<prefix><sample>.fq.gz"
@@ -209,6 +222,7 @@ struct CheckoutStats {
     std::vector<std::string> sample_ids;
     std::vector<uint64_t> sample_reads;                    // parallel to sample_ids
     std::vector<std::array<uint64_t, 61>> sample_phred;    // parallel to sample_ids
+    std::vector<std::array<uint64_t, kPayloadHistLen>> sample_payload_len;  // and so is this
     std::vector<UmiCounts> umi_counts;   // parallel to sample_ids
     double wall_seconds = 0.0;
     double reads_per_second = 0.0;

@@ -12,8 +12,27 @@ are never conflated in a table row.
 |---|---|---|---|
 | `tests/synthetic/_sim.py` output | none — generated | derived | `SimConfig(seed=...)`; every truth file is a pure function of the seed |
 | `tests/cpp/doctest.h` | [doctest](https://github.com/doctest/doctest) 2.4.11, MIT | vendored | copy from upstream release |
+| `assets/pipeline.svg` | `assets/pipeline.dot` | derived | `dot -Tsvg assets/pipeline.dot -o assets/pipeline.svg` |
+| `assets/benchmark_threads.tsv` + `.json` | this machine, 2026-08-13 | **experimental** (a timing measurement) | `python scripts/benchmark_threads.py --reads 2000000 -o assets/` |
+| `assets/SRR1763769.mig.tsv`, `assets/assemble.coverage.tsv` | `isalgo/umi_data` CI fixture | derived | `migec refine ci/SRR1763769_umi0.5pct.fq.gz -o r/ && migec assemble r/CTRL.fq.gz -o a/` |
+| `assets/*.svg`, `assets/*.gp` | the tables beside them | derived | `migec plot assets/ -o assets/` |
 
-Nothing else is committed. Test corpora live on HuggingFace (below) rather than in git.
+Result tables and figures are output, not data, so they live here next to the script that made
+them rather than in `isalgo/umi_data`. Test corpora go the other way: HuggingFace, never git.
+
+## Error-rate constants
+
+The pre-amplification floor (`--rt-error`) is a property of the protocol, so its values are cited
+rather than fitted. Nothing here was measured by us except the X2 row.
+
+| Value | What it is | Source | Provenance |
+|---|---|---|---|
+| 1e-4 per base | V(D)J RT reaction; single-UMI bases get Q40, bases covered by >=2 UMIs get Q60 | 10x Genomics Cell Ranger V(D)J algorithm documentation | vendor-stated |
+| 1.54e-4 [1.36e-4, 1.74e-4] | the same floor, fitted from `SRR1763769` as the intercept of `e_out(c) = p_floor + a/c` | X2, `docs/quality_floor.rst`, `scripts/quality_floor.py` | **experimental**, ours; an upper bound (49.6% barcode occupancy inflates it) |
+| 7.37e-5 (0.00737%) | TruSight Oncology 500 v2 error rate | Illumina product documentation | vendor-stated |
+| Taq 4.3e-5 +/- 1.8; Pfu 2.8e-6; Phusion 2.6e-6; Pwo 2.4e-6, per bp per template duplication | polymerase fidelity, no RT | McInerney P, Adams P, Hadi MZ. *Error Rate Comparison during Polymerase Chain Reaction by DNA Polymerase.* Mol Biol Int 2014:287430. doi:10.1155/2014/287430, PMID 25197572 | published, third party |
+| 0.3-6.6e-5 per base per cycle over nine polymerases; **linear-amplification errors 5 +/- 1x the per-cycle PCR rate** | why the FIRST cycle is the one that matters — it is copied into every read of the molecule | Shagin DA, Shagina IA, Zaretsky AR, Barsova EV, Kelmanson IV, Lukyanov S, Chudakov DM, Shugay M. *A high-throughput assay for quantitative measurement of PCR errors.* Sci Rep 2017;7:2718. doi:10.1038/s41598-017-02727-8, PMID 28578414 | published, ours |
+| 10,000 reads per barcode | coverage cap into the consensus (never into the count) | 10x Genomics: "Very high coverage (greater than 10,000 reads) of transcripts can be problematic because it degrades computational performance and adds little information." | vendor-stated |
 
 ## Benchmark data
 

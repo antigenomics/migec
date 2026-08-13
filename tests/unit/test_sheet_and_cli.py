@@ -392,3 +392,39 @@ def test_nothing_matched_says_so_and_says_nothing_else(tmp_path):
     # ...and none of the statistics computed from the reads that did not arrive.
     assert "base composition costs" not in report
     assert "under-sequenced" not in report
+
+
+# --------------------------------------------------------------------------------------------
+# The pre-amplification error floor: a named protocol class, or the rate itself.
+
+
+def test_rt_error_classes_and_custom_values():
+    from migec.assemble import RT_FLOORS, parse_rt_error
+
+    assert parse_rt_error("rt") == 1e-4      # a reverse transcription step (10x's V(D)J figure)
+    assert parse_rt_error("medium") == 1e-5  # Taq-class, no RT
+    assert parse_rt_error("HIGH") == 1e-6    # proofreading, no RT
+    assert parse_rt_error("7.37e-5") == 7.37e-5  # TruSight Oncology 500 v2, as published
+    assert set(RT_FLOORS) == {"rt", "medium", "high"}
+
+
+def test_an_unusable_rt_error_names_all_of_the_options():
+    from migec.assemble import parse_rt_error
+
+    with pytest.raises(ValueError, match="rt .1e-04, caps at Q40."):
+        parse_rt_error("phusion")
+    # A rate outside (0, 1) is a units mistake -- someone typed a Phred, or a percentage.
+    with pytest.raises(ValueError, match="per-base error rate"):
+        parse_rt_error("40")
+
+
+def test_fast_and_contig_are_refused_together(tmp_path):
+    """Tiling reads share no exact sequence, so a majority vote over whole strings returns one
+    fragment and silently drops the rest of the molecule."""
+    reads = tmp_path / "r.fq"
+    reads.write_text("@a RX:Z:ACGTACGTACGT\tBC:Z:S1\nACGT\n+\nIIII\n")
+    result = CliRunner().invoke(
+        app, ["assemble", str(reads), "-o", str(tmp_path / "out"), "--fast", "--contig"]
+    )
+    assert result.exit_code != 0
+    assert "incompatible" in result.output

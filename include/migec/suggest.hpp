@@ -44,10 +44,34 @@ struct CycleStats {
 
 enum class CycleKind { kUmi, kConstant, kVariable };
 
+// A k-mer that occurs more often than the read's own base composition predicts. What that flags is
+// synthetic sequence left in the reads: an adapter, a primer, a template-switch handle, a poly-A
+// tail. Run it on trimmed or on consensus output and it answers "did the trim actually remove the
+// primer" without needing to be told what the primer was.
+struct KmerHit {
+    std::string kmer;
+    uint64_t count = 0;
+    double expected = 0.0;    // from the mononucleotide composition of these same reads
+    double ratio = 0.0;       // observed / expected
+    double mean_position = 0.0;
+    double read_fraction = 0.0;  // reads carrying it at least once, over reads scanned
+};
+
+// 8, and a flat array rather than a hash map: 4^8 = 65,536 counters is 1 MB of exact counts, so
+// there is nothing to size, nothing to evict and no hashing in the inner loop. Long enough to name
+// a primer (an 8-mer occurs by chance every ~65 kb), short enough that a real one is seen often
+// enough to be significant. Overlapping hits are what recover the full adapter -- the report
+// stitches them.
+inline constexpr int kKmerLength = 8;
+
 struct CycleProfile {
     std::vector<CycleStats> cycles;
     uint64_t reads = 0;
     size_t read_length = 0;
+    // Overrepresented k-mers, strongest first, and the total scanned so a share can be computed.
+    std::vector<KmerHit> kmers;
+    uint64_t kmers_scanned = 0;
+    std::array<uint64_t, 4> base_counts{};
 };
 
 struct Segment {

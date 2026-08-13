@@ -17,8 +17,10 @@ count. `scripts/spikein_ratio.py` computes the published spike-in validation met
 `scripts/compare_calib.py` scores UMI grouping against Calib by adjusted Rand index with splitting
 and merging reported separately.
 
-**Throughput and footprint**: 1.18 M reads/s at 16 threads (2 M single-end 115 nt reads, four
-patterns), output byte-identical at any `-t`; ~22 bytes per distinct UMI against a hash map's ~48.
+**Throughput and footprint**: every stage threads and every stage is byte-identical at any `-t` --
+checkout 1.06 M reads/s end to end (1.68 M matching), refine 1.01 M, assemble 1.43 M, all at 16
+threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
+as well as by comparison at 1..16 threads.
 The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
 
 Milestones are ordered by risk, not by pipeline order: the consensus quality model is the
@@ -49,7 +51,8 @@ scientific claim and is validated before any throughput work.
 - [x] **X2 — emitted-quality calibration on a clonal control, stratified by MIG size.** Done,
       2026-08-13, on `SRR1763769` (2.12 M reads, HIV-1 Primer ID). **The floor is of order 1e-4,
       not 1e-6**: 1.54e-4 [1.36e-4, 1.74e-4] at MIGs of ≥80 reads, so no emitted quality above
-      **~Q38** is supportable, and the 1e-6 guess is excluded by two orders of magnitude. Matches
+      **Q40** is supportable by default, and a blanket 1e-6 is excluded for an RT protocol by two
+      orders of magnitude. Matches
       the ~1 in 10,000 the source paper reports (doi:10.1128/JVI.00522-15). Note: The curve is still
       declining at 80 reads, so this is an upper bound: the 9 nt Primer ID puts the library at
       49.6% occupancy and `checkout` flags it `saturated`, so collided MIGs contribute mismatches
@@ -95,14 +98,23 @@ scientific claim and is validated before any throughput work.
       2.00, which over-calls by 19x. Note: It implies a minimum group size: the strongest evidence a
       pair of columns can carry is `log10 C(n, n/2)`, so a 50/50 split needs ~34 reads to clear it
 - [x] Quality floor **added**, not compared: `Q = −10 log10(p_cons + p_floor)`, default 1e-4 from
-      X2, so nothing above ~Q38 is emitted
+      X2 and from 10x's own figure, so nothing above Q40 is emitted unless `--rt-error` names a
+      higher-fidelity chemistry (`medium` 1e-5, `high` 1e-6)
 - [x] The birthday arithmetic re-run on the barcodes assemble saw: `expected_molecules_per_group`
       says how many molecules a group holds when the UMI is short by design, and contig mode warns
       when that makes contigs untrustworthy
 - [x] Shallow libraries (1-3 reads/UMI) run, report the coverage histogram, threshold nothing, and
       say that the UMI is buying counting rather than error correction. Benchmarked as the
       memory-hostile shape: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct barcode
-- [ ] `--rt-error auto`, fitted per dataset rather than taken from the default
+- [x] **`--rt-error` names the chemistry** rather than guessing: `rt` 1e-4 (default, Q40 -- 10x's
+      figure for the V(D)J RT and X2's own measurement), `medium` 1e-5, `high` 1e-6, or the rate.
+      Never: it is the ONE-MOLECULE floor; 10x's Q60 needs two UMIs to agree and that is arda's job
+- [x] **`--fast`, counting mode**: the modal exact sequence per group with the per-base best
+      quality of the reads carrying it. No column model, so no error correction -- for when the
+      deliverable is a molecule count. Refused with `--contig`
+- [x] **Coverage capped at 10,000 reads per barcode into the consensus** (10x's rule). Never: the cap
+      is on the reads consensed, never on the reads counted
+- [ ] `--rt-error auto`, fitted per dataset rather than taken from a named class
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
 - Gate: per-base error ≤1e-5 at coverage ≥5 Done: (`tests/synthetic/test_assemble.py`, stratified by
   depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
@@ -234,7 +246,15 @@ model has to use the evidence that survives at one read:
       `RX`/`CB`/`MI` into a valid sorted BAM on 600/600 records; `arda amplicon` reads the
       consensus directly and its AIRR `sequence_id` **is** the molecule id; `salmon` and `kallisto`
       quantify it plainly. STAR unverified — the brew arm64 build reads 0 reads from any FASTQ
-- [ ] `sort`
+- [x] `plot` — sixteen QC panels drawn with gnuplot from the tables the stages already write, and
+      `assets/` holds the pipeline figure (graphviz) and the example panels the README shows
+- [x] **Overrepresented k-mers in `suggest`** — exact counts in a flat 4^8 array, measured against
+      the reads' own composition, stitched back into the sequence they came from. Run on a stage's
+      OUTPUT it answers "did the trim remove the primer", which nothing else here could
+- [x] **`checkout.trimming.tsv`** — the payload length distribution after trimming. A pattern
+      matched one base off still matches; this is where that shows
+- Never: `sort` is **not** a command. Partitioning happens inside `assemble` and exposing it would
+  document a third format with no independent meaning (`project/design-io-interop.md`).
 
 ## M5 — benchmarks and release
 

@@ -223,4 +223,37 @@ void FastqWriter::close() {
     if (im.raw) { std::fclose(im.raw); im.raw = nullptr; }
 }
 
+void append_fastq(std::string& dst, std::string_view name, std::string_view comment,
+                  std::string_view seq, std::string_view qual) {
+    dst += '@';
+    dst += name;
+    if (!comment.empty()) {
+        dst += ' ';
+        dst += comment;
+    }
+    dst += '\n';
+    dst += seq;
+    dst += "\n+\n";
+    dst += qual;
+    dst += '\n';
+}
+
+void gzip_member(std::string_view in, std::string& out, int level) {
+    z_stream zs{};
+    // 15 + 16: a 32 kB window with a gzip wrapper rather than a zlib one.
+    if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        throw MigecError("gzip_member: deflateInit2 failed");
+    }
+    out.resize(deflateBound(&zs, static_cast<uLong>(in.size())) + 32);
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.data()));
+    zs.avail_in = static_cast<uInt>(in.size());
+    zs.next_out = reinterpret_cast<Bytef*>(out.data());
+    zs.avail_out = static_cast<uInt>(out.size());
+    const int rc = deflate(&zs, Z_FINISH);
+    const size_t produced = out.size() - zs.avail_out;
+    deflateEnd(&zs);
+    if (rc != Z_STREAM_END) throw MigecError("gzip_member: deflate failed");
+    out.resize(produced);
+}
+
 }  // namespace migec
