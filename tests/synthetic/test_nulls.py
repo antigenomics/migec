@@ -23,8 +23,11 @@ from permutation_nulls import (  # noqa: E402
     graph_nulls,
     hypergeom_sf,
     independence_null,
+    jensen_shannon,
+    jsd_null,
     linkage_score,
     minor_matrix,
+    product_measure,
     solve_epsilon,
 )
 
@@ -57,9 +60,60 @@ def test_a_duplicated_position_is_detected():
 
 
 def test_collision_of_a_uniform_position_is_one_quarter():
+    """...to within 1/n. The estimator is the U-statistic, so a finite balanced sample comes in
+    just under 1/4 -- drawing two *distinct* items from 1000 is slightly less likely to collide
+    than drawing twice from the population they came from."""
     import collections
 
-    assert collision(collections.Counter("ACGT" * 250)) == pytest.approx(0.25)
+    assert collision(collections.Counter("ACGT" * 250)) == pytest.approx(0.25, abs=1e-3)
+    assert collision(collections.Counter("ACGT" * 250_000)) == pytest.approx(0.25, abs=1e-6)
+
+
+def test_the_collision_estimator_is_not_biased_by_the_alphabet_size():
+    """The plug-in `sum p_hat^2` is biased up by (1 - sum p^2)/n, which GROWS as the distribution
+    spreads -- so on k-mers it grows with k and reads as dependence accumulating with k. That is
+    the artefact this estimator exists to remove, so check it on independent draws where the true
+    answer is exactly 4^-k."""
+    import collections
+
+    rng = random.Random(11)
+    n = 200_000
+    for k in (1, 3, 5):
+        draws = ["".join(rng.choice(BASES) for _ in range(k)) for _ in range(n)]
+        assert collision(collections.Counter(draws)) == pytest.approx(4.0**-k, rel=0.02)
+
+
+def test_the_product_measure_is_a_distribution():
+    q = product_measure([{"A": 0.4, "C": 0.3, "G": 0.2, "T": 0.1},
+                         {"A": 0.25, "C": 0.25, "G": 0.25, "T": 0.25}])
+    assert len(q) == 16
+    assert sum(q.values()) == pytest.approx(1.0)
+    assert q["AA"] == pytest.approx(0.1)
+
+
+def test_jsd_to_a_distribution_from_itself_is_zero():
+    import collections
+
+    q = product_measure([{b: 0.25 for b in BASES}] * 2)
+    exact = collections.Counter({w: 1_000 for w in q})
+    assert jensen_shannon(exact, q, 16_000) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_jsd_null_separates_dependence_from_the_sparsity_floor():
+    """JSD to the product measure is bounded away from zero on any finite sample, because the
+    empirical distribution is sparse over 4^k cells. The column shuffle draws from the product
+    measure at exactly the observed n, so it measures that floor instead of assuming it."""
+    rng = random.Random(9)
+    clean = random_barcodes(20_000, 8, rng)
+    dependent = sorted({(lambda s: s[0] + s[0] + s[2:])(
+        "".join(rng.choice(BASES) for _ in range(8))) for _ in range(20_000)})
+
+    for row in jsd_null(clean, 8, rng, 3, (2, 3)):
+        assert row["jsd_null_mean"] > 0, "the sparsity floor is real and must be measured"
+        assert abs(row["z"]) < 5, "independent barcodes must not look dependent"
+    for row in jsd_null(dependent, 8, rng, 3, (2, 3)):
+        assert row["z"] > 50
+        assert row["excess"] > 10 * row["jsd_null_mean"]
 
 
 def test_column_shuffle_preserves_every_marginal():

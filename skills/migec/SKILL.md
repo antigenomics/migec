@@ -131,6 +131,12 @@ one barcode share no sequence — indistinguishable from two fragments of one. R
 `expected_molecules_per_group` in `assemble.json`: above 1 means a short UMI cannot tag every input
 molecule distinctly, which is a design choice, and the contigs are not trustworthy.
 
+⛔ **1-3 reads per UMI is normal, not broken.** Bulk repertoire and shallow 3' GEX both look like
+this. `--min-reads` defaults to 1 and nothing is thresholded away. Do not quote these numbers on
+such a library: the split threshold is inert (needs ~30 reads in a group), and the count-ratio
+error-child null has no dynamic range. What is reportable is the coverage histogram and the fact
+that the UMI is buying *counting*, not error correction.
+
 ⚠ **A tie is not an `N`.** It is resolved by base order and the emitted quality says so (~Q3). An
 `N` would throw away the fact that it is one of two.
 
@@ -174,7 +180,7 @@ is for every decision.
 ⚠ `Π_j m_j` assumes the positions are independent, so it is a *lower* bound on the collision
 probability. Measured against a model-free count on real data (`scripts/collision_check.py`),
 collisions ran **1.86×** the prediction — but a permutation puts the position-independence part of
-that at only **1.04×** (`scripts/permutation_nulls.py`), so the rest is the read threshold: a
+that at only **~1.01×** (`scripts/permutation_nulls.py`), so the rest is the read threshold: a
 collided barcode carries two molecules' reads and is over-represented among the MIGs big enough for
 a split to be visible.
 
@@ -202,12 +208,12 @@ analytic estimate sits 2.6× *below* it.
 
 ## Splitting a MIG into two consensuses
 
-⛔ **The threshold is a Bonferroni'd `-log10 p` of 9.61, not the nominal 2.00.** Reads are not
+⛔ **The threshold is a Bonferroni'd `-log10 p` of 8.68, not the nominal 2.00.** Reads are not
 exchangeable: a low-quality read carries a minor base at many positions at once, which is
 indistinguishable from a linked subclone if you only look at the columns. The false-positive curve
 comes from randomising the reads × positions minor-allele matrix while preserving **both** margins
 (per-position error count *and* per-read error load — a curveball swap). The nominal threshold
-calls 27.39% of MIGs as two molecules; the measured one calls 1.26%. `docs/nulls.rst`.
+calls 30.62% of MIGs as two molecules; the measured one calls 1.60%. `docs/nulls.rst`.
 
 ## Things that look like defects and are not
 

@@ -379,7 +379,7 @@ PYBIND11_MODULE(_core, m) {
             return d;
         },
         py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
-        py::arg("rt_floor") = 1e-4, py::arg("linkage_threshold") = 9.61,
+        py::arg("rt_floor") = 1e-4, py::arg("linkage_threshold") = 8.68,
         py::arg("contig") = false, py::arg("min_reads") = 1u, py::arg("gzip_level") = 6,
         py::arg("bucket_bits") = 0,
         "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "

@@ -11,8 +11,8 @@
 //  * `linkage_threshold` -- splitting a MIG into two consensuses is accepted on the strength of
 //    co-segregation, not on a count of polymorphic sites. X3 measured the false-positive curve by
 //    randomising the reads x positions minor-allele matrix while preserving BOTH margins
-//    (docs/nulls.rst): the 1% point is at a Bonferroni'd -log10 p of 9.61, where the nominal
-//    p < 0.01 the Poisson derivation gives calls 22x too many.
+//    (docs/nulls.rst): the 1% point is at a Bonferroni'd -log10 p of 8.68, where the nominal
+//    p < 0.01 the Poisson derivation gives calls 19x too many.
 //
 // Substitutions only, everywhere. Reads are already oriented and trimmed by checkout, so a group
 // is ungapped and left-anchored; the group's width is the shortest read in it.
@@ -31,7 +31,7 @@ struct ConsensusParams {
     // Measured in X2. Also the cap on emitted quality: -10 log10(rt_floor).
     double rt_floor = 1.0e-4;
     // Measured in X3. Raise it to split less.
-    double linkage_threshold = 9.61;
+    double linkage_threshold = 8.68;
     // A group smaller than this cannot show co-segregation worth testing.
     uint32_t min_split_reads = 6;
     // Positions considered for a split, strongest minor allele first.

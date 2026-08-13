@@ -27,9 +27,9 @@ first-cycle-PCR error is in every read of the molecule and no consensus removes 
 failure modes are independent and the emitted quality carries both. Default 1e-4 from X2, so
 nothing above ~Q38 is emitted.
 
-**Splitting a group uses X3's measured threshold**, 9.61, two-sided and Bonferroni'd within the
+**Splitting a group uses X3's measured threshold**, 8.68, two-sided and Bonferroni'd within the
 group. ⚠ It implies a minimum group size: the strongest evidence a pair of columns can carry is
-`log10 C(n, n/2)`, so a 50/50 split needs about 34 reads before it can clear 9.61 at all. Below
+`log10 C(n, n/2)`, so a 50/50 split needs about 34 reads before it can clear 8.68 at all. Below
 that the data cannot separate a subclone from two bad reads at a 1% false-positive rate.
 
 **`--contig` for random-primed libraries.** Reads sharing a barcode tile the molecule rather than
@@ -48,12 +48,23 @@ Each of these numbers came out of an argument that assumed something the data ha
 about. `scripts/permutation_nulls.py` measures all three on `SRR1763769` — 125,369 distinct 9 nt
 barcodes at 47.8% occupancy — and `docs/nulls.rst` has the tables.
 
-**Position independence holds.** Comparing the observed joint over *k* adjacent barcode positions
-against the product of that same data's own marginals gives 1.0051× per added position, 1.04× over
-the whole 9 nt. So `Π_j Σ_a p_j(a)²` stays, and the 1.86× collision excess measured from the
-sequences is the read threshold — a collided barcode carries two molecules' reads and is
-over-represented among the MIGs big enough to show a split. ⚠ Measured on *distinct* barcodes, so
-saturation damps it; this is a lower bound and a sparse library would settle it properly.
+**Position independence holds to ~1%.** The null is a *distribution* — the product measure
+`q(u) = Π_j p_j(u_j)` — so it is tested by Jensen-Shannon divergence against a same-size draw from
+`q` (a column shuffle), which measures the sparsity floor instead of assuming it. Invisible on all
+distinct barcodes (at 47.5% occupancy the observed set is nearly a complete enumeration, which is
+uniform by construction); clear once singletons are dropped, z up to 33; and **entirely
+nearest-neighbour** — every adjacent position pair positive, every distant pair zero.
+
+The cause is measurable: **0.55% of reads carry a barcode one base short**, a coupling step that
+did not fire, and a frameshift is exactly a nearest-neighbour correlation, largest next to the
+anchor. `Π_j Σ_a p_j(a)²` stays; the 1.86× collision excess is the read threshold.
+
+⚠ The first version of this null reported 1.04× and **all of it was artefact**. Two defects, both
+now guarded: an `N` counted as a fifth base let `m_j` fall to 0.2466 — below the mathematical floor
+of 1/4 — and printed an effective length of 9.01 nt for a 9 nt barcode; and the plug-in `Σ p̂²` is
+biased up by `(1 − Σp²)/n`, a bias that *grows* as the distribution spreads and so reads as
+dependence accumulating with k. `N` now folds to `A` as `pack_barcode` stores it, and the collision
+is the U-statistic `Σ nₐ(nₐ−1)/(N(N−1))`.
 
 **92% of distance-1 barcode pairs are coincidence.** 839,218 observed against 773,684 under a
 column shuffle, which keeps every marginal and destroys the error children. Shuffling the read
@@ -63,12 +74,30 @@ plateauing from a count ratio of 5 upward at z ≈ 48. The permuted background p
 3.4e-3, within 1.7× of the Phred + polymerase prediction, where the analytic estimate is 2.6×
 *below* it. M3's error model takes the permuted background.
 
-**The split threshold is 9.61, not 2.00.** Reads are not exchangeable: a low-quality read carries a
+**The split threshold is 8.68, not 2.00.** Reads are not exchangeable: a low-quality read carries a
 minor base at many positions at once and is indistinguishable from a linked subclone if you only
 look at the columns. Randomising the reads × positions minor-allele matrix while preserving *both*
-margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p` of 9.61. The
-nominal `p < 0.01` the derivation gives calls 27.39% of MIGs against 1.26% — a 22× over-call, every
+margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p` of 8.68. The
+nominal `p < 0.01` the derivation gives calls 30.62% of MIGs against 1.60% — a 19× over-call, every
 one of which would have become a spurious extra molecule.
+
+⚠ **A tail quantile is not a constant until its Monte Carlo error is smaller than the digits
+quoted.** This read 9.91, then 9.61, then 11.66 on reruns of ~8,000 randomisations. At 82,800 it is
+**8.68, bootstrap 95% CI [8.42, 9.14]**, and the interval is what the docs quote.
+
+### Shallow libraries are a first-class case
+
+Bulk repertoire profiling and shallow 3' single-cell both put the MIG size histogram's mass at 1–3
+reads per UMI. Nothing is thresholded away there — `--min-reads` defaults to 1, because a molecule
+seen once is still a molecule and the answer to a barcode error is correction, not a cut — and the
+report says that the UMI is buying counting rather than error correction. Three results calibrated
+on a deep library are documented as *not* transferring: the split threshold is inert (a column pair
+carries at most `log10 C(n, n/2)`, so it needs ~30 reads), the count-ratio error-child null has no
+dynamic range at 1–3 reads, and singleton filtering costs 79% of barcodes rather than 56%.
+
+It is also the memory-hostile shape, since distinct barcodes are what everything in `assemble`
+scales with, so the benchmarks use it: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per
+distinct barcode, still bounded by the bucket rather than the library.
 
 ### `migec suggest`: read the barcode layout off the reads
 

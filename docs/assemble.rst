@@ -89,9 +89,9 @@ Splitting a group into two molecules
 The discriminator is **linkage**, not a count of polymorphic sites. Independent PCR subclones
 almost never co-segregate; a real second molecule does, on the same reads.
 
-The threshold is **9.61**, a Bonferroni'd ``-log10 p`` over pairs of callable positions, and it is
+The threshold is **8.68**, a Bonferroni'd ``-log10 p`` over pairs of callable positions, and it is
 a :doc:`measured false-positive point <nulls>` rather than a derivation. The nominal ``p < 0.01``
-calls 27.39% of MIGs against 1.26% — a 22× over-call, because reads are not exchangeable and a
+calls 30.62% of MIGs against 1.60% — a 19× over-call, because reads are not exchangeable and a
 low-quality read carries a minor base at many positions at once.
 
 The test is two-sided: at a 50/50 split which allele is "major" is a coin toss taken separately
@@ -100,7 +100,7 @@ per column, so a genuine doublet's columns come out anti-correlated as often as 
 .. note::
 
    The threshold implies a **minimum group size**. The strongest evidence a pair of columns can
-   carry is ``log10 C(n, n/2)``, so a 50/50 split needs about 34 reads before it can clear 9.61 at
+   carry is ``log10 C(n, n/2)``, so a 50/50 split needs about 34 reads before it can clear 8.68 at
    all. Below that the data cannot separate a subclone from two bad reads at a 1% false-positive
    rate, and migec does not pretend otherwise.
 

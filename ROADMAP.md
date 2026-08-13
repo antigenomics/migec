@@ -58,18 +58,25 @@ scientific claim and is validated before any throughput work.
       `docs/quality_floor.rst`, `scripts/quality_floor.py`.
 - [x] **X3 — three permutation nulls on one deep real dataset.** Done, 2026-08-13, on
       `SRR1763769` — 125,369 distinct 9 nt barcodes at 47.8% occupancy. (1) **Position
-      independence holds** to 1.04% of the collision rate, extrapolated from the k-mer joint
-      against its own marginals, so `Π_j m_j` stays and the 1.86x collision excess is the read
-      threshold rather than the barcode. ⚠ measured on distinct barcodes, so saturation damps it;
-      a lower bound. (2) **92% of distance-1 pairs are chance** (839,218 observed, 773,684 under a
-      column shuffle), and a size-preserving *count* shuffle over the fixed graph finds
-      **~19,400 genuine error children**, plateauing from a count ratio of 5 upward. The
-      permutation background puts the barcode error at 3.4e-3, within 1.7x of the Phred +
-      polymerase prediction, against `checkout`'s analytic 8.0e-4 which is 2.6x *below* it — M3
-      takes the permuted background. (3) **The split threshold is 9.61, not 2.00**: a curveball
+      independence holds to ~1%** of the collision rate. Tested as a distribution — JSD against the
+      product measure `q(u) = Π_j p_j(u_j)`, floored by a same-size draw from `q` — not by one
+      functional. Invisible on all distinct barcodes (saturation), clear at reads ≥ 2 (z up to 33),
+      and **entirely nearest-neighbour**: every adjacent pair positive, every distant pair zero.
+      Cause measured: **0.55% of reads carry a barcode one base short**, a coupling that did not
+      fire, which frameshifts everything after it. `Π_j m_j` stays; the 1.86x collision excess is
+      the read threshold. ⚠ The first version reported 1.04x and all of it was artefact — N as a
+      fifth base, and the plug-in `Σ p̂²` whose bias grows with k.
+      (2) **97% of distance-1 pairs are chance** (844,243 observed, 817,358 under a column
+      shuffle), and a size-preserving *count* shuffle over the fixed graph finds **~18,000 genuine
+      error children**, plateauing from a count ratio of 5 upward. The permutation background puts
+      the barcode error at 1.4e-3, 0.70x of the Phred + polymerase prediction, against
+      `checkout`'s analytic 8.0e-4 at 0.39x — M3 takes the permuted background. (3) **The split threshold is 8.68, not 2.00**: a curveball
       randomisation preserving both margins of the reads x positions minor-allele matrix puts the
-      1% false-positive point 22x above the nominal `p < 0.01`, because a low-quality read carries
-      minor bases at many positions at once and mimics a linked subclone.
+      1% false-positive point 19x above the nominal `p < 0.01`, because a low-quality read carries
+      minor bases at many positions at once and mimics a linked subclone. ⚠ **bootstrap 95% CI
+      [8.42, 9.14]** over 82,800 randomisations; a tenth as many gave 9.61 and 11.66, so the
+      interval is the number. (4) **Shallow libraries (1-3 reads/UMI) are a separate regime** and
+      three of these results do not transfer to them — written up rather than quoted.
       `docs/nulls.rst`, `scripts/permutation_nulls.py`.
 
 ## M1 — `assemble`, the consensus and quality model ✅
@@ -83,15 +90,18 @@ scientific claim and is validated before any throughput work.
       per component, **never** bridged across a gap. This is one molecule's fragments only —
       full-length receptor assembly and doublet filtering are arda's job
 - [x] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
-- [x] Sub-clustering by *linkage*, not by count of polymorphic sites. Threshold 9.61 (`-log10 p`,
+- [x] Sub-clustering by *linkage*, not by count of polymorphic sites. Threshold 8.68 (`-log10 p`,
       two-sided, Bonferroni'd within the MIG) from X3's false-positive curve — **not** the nominal
-      2.00, which over-calls by 22x. ⚠ It implies a minimum group size: the strongest evidence a
+      2.00, which over-calls by 19x. ⚠ It implies a minimum group size: the strongest evidence a
       pair of columns can carry is `log10 C(n, n/2)`, so a 50/50 split needs ~34 reads to clear it
 - [x] Quality floor **added**, not compared: `Q = −10 log10(p_cons + p_floor)`, default 1e-4 from
       X2, so nothing above ~Q38 is emitted
 - [x] The birthday arithmetic re-run on the barcodes assemble saw: `expected_molecules_per_group`
       says how many molecules a group holds when the UMI is short by design, and contig mode warns
       when that makes contigs untrustworthy
+- [x] Shallow libraries (1-3 reads/UMI) run, report the coverage histogram, threshold nothing, and
+      say that the UMI is buying counting rather than error correction. Benchmarked as the
+      memory-hostile shape: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct barcode
 - [ ] `--rt-error auto`, fitted per dataset rather than taken from the default
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
 - Gate: per-base error ≤1e-5 at coverage ≥5 ✅ (`tests/synthetic/test_assemble.py`, stratified by

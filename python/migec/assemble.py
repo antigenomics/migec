@@ -19,7 +19,7 @@ def run(
     out_dir: str | Path,
     sample_id: str = "",
     rt_floor: float = 1e-4,
-    linkage_threshold: float = 9.61,
+    linkage_threshold: float = 8.68,
     contig: bool = False,
     min_reads: int = 1,
     gzip_level: int = 6,
@@ -107,7 +107,7 @@ def format_report(summary: dict) -> str:
     if s["groups"] and s["groups_split"] / s["groups"] > 0.05:
         warnings.append(
             f"{_pct(s['groups_split'], s['groups'])} of groups were split into more than one "
-            f"molecule. X3 measured a 1.26% rate on a real library at this threshold "
+            f"molecule. X3 measured a 1.60% rate on a real library at this threshold "
             f"({s['linkage_threshold']:.2f}); much more than that usually means UMI collisions, "
             f"not subclones -- check `p_multi` in checkout's barcode space table"
         )

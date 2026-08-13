@@ -262,3 +262,51 @@ def test_a_saturated_barcode_is_reported_not_assumed(tmp_path):
     summary = run(reads, tmp_path / "asm", sample_id="S1")
     assert summary["expected_molecules_per_group"] > 1.5
     assert "longer UMI" in format_report(summary)
+
+
+def test_a_shallow_library_is_reported_not_thresholded(tmp_path):
+    """1-3 reads per UMI, which is the common case rather than the exotic one: bulk repertoire
+    profiling and shallow 3' GEX both look like this. Nothing may be silently dropped, and the
+    report has to say that the UMI is buying counting rather than error correction."""
+    summary, consensus, _ = build(
+        tmp_path, n_molecules=8_000, n_clones=50, coverage=1.6, coverage_cv=0.35, umi_len=12
+    )
+    hist = {b["min_reads"]: b["groups"] for b in summary["coverage"]}
+    assert hist[1] > 0.5 * summary["groups"], "this fixture is meant to be singleton-dominated"
+
+    # Every read is accounted for: --min-reads defaults to 1, so nothing is thresholded away.
+    assert summary["reads_dropped"] == 0
+    assert summary["molecules"] == summary["groups"]
+    assert sum(len(v) for v in consensus.values()) == summary["molecules"]
+
+    report = format_report(summary)
+    assert "seen once" in report
+    assert "counting here, not error correction" in report
+
+
+def test_the_split_threshold_is_inert_when_no_group_is_deep_enough(tmp_path):
+    """A pair of columns can carry at most log10 C(n, n/2), so a 1-3 read library cannot reach
+    8.68 however the reads disagree. Zero splits there is correct, and it is not evidence that the
+    library has no doublets -- it is evidence there was nothing to test."""
+    summary, _, _ = build(
+        tmp_path, n_molecules=4_000, coverage=1.5, coverage_cv=0.3, seq_error=1e-2
+    )
+    assert summary["groups_split"] == 0
+
+
+def test_shallow_consensus_error_is_the_read_error(tmp_path):
+    """A consensus over one read IS that read, so its posterior is the read's own reported error
+    and no better. The reported number must show that rather than one borrowed from the deep case,
+    which is why the MIG size histogram is printed next to it."""
+    shallow, _, _ = build(
+        tmp_path / "shallow", n_molecules=4_000, coverage=1.2, coverage_cv=0.2, mean_qual=30
+    )
+    deep, _, _ = build(
+        tmp_path / "deep", n_molecules=1_000, coverage=20.0, coverage_cv=0.3, mean_qual=30
+    )
+    # A single Q30 read cannot do better than 1e-3, and that is what comes out.
+    assert shallow["mean_consensus_error"] == pytest.approx(1e-3, rel=0.5)
+    assert deep["mean_consensus_error"] < 0.1 * shallow["mean_consensus_error"]
+    # ...and the floor still caps what is claimed, however good or bad the input.
+    assert shallow["mean_quality"] <= shallow["quality_cap"]
+    assert deep["mean_quality"] <= deep["quality_cap"]

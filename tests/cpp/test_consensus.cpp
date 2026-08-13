@@ -79,7 +79,7 @@ TEST_CASE("a position no read calls is N at quality zero") {
 TEST_CASE("two molecules in one MIG are split on linkage, not on site count") {
     // 20 and 20. The threshold implies a minimum group size, because the strongest evidence a
     // pair of columns can carry is log10 C(n, n/2): a 50/50 split needs ~34 reads before it can
-    // clear 9.61 at all. That is the price of a measured false-positive rate.
+    // clear 8.68 at all. That is the price of a measured false-positive rate.
     ConsensusParams p;
     std::vector<std::string> seqs;
     for (int i = 0; i < 20; ++i) seqs.push_back("ACGTACGTACGTACGTACGT");

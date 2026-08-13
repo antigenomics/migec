@@ -63,9 +63,82 @@ def load_migs(fastq, window):
 
 
 def collision(counts):
-    """sum_a p(a)^2 for a Counter -- the probability two independent draws coincide."""
-    n = sum(counts.values())
-    return sum((v / n) ** 2 for v in counts.values()) if n else 0.0
+    """The probability two independent draws coincide, as an UNBIASED estimate.
+
+    `sum_a p_hat(a)^2` is biased upward by `(1 - sum p^2) / n`, and that bias grows as the
+    distribution spreads -- so it grows with the k-mer width, and reads as dependence that
+    accumulates with k. On the HIV library it produced a fake 1.007x over 9 nt out of nothing.
+    `sum_a n_a(n_a - 1) / (N(N - 1))` is the U-statistic and has no such bias.
+
+    Callers pass barcodes with N already folded to A, exactly as `pack_barcode` stores them: the
+    packed key is what every stage groups on, so it is the alphabet the collision rate is about.
+    Counting N as a fifth letter instead lets `m_j` fall below 1/4, which is impossible for a
+    four-letter distribution -- the bound is the check, and it shows up as an effective length
+    longer than the barcode.
+    """
+    values = list(counts.values())
+    n = sum(values)
+    return sum(v * (v - 1) for v in values) / (n * (n - 1)) if n > 1 else 0.0
+
+
+def jensen_shannon(counts, q, total):
+    """JSD in bits between an observed k-mer distribution and the product of its own marginals.
+
+    The independence null *is* a distribution -- q(u) = prod_j p_j(u_j), a product measure -- so
+    the honest test compares the whole of P against the whole of Q, not one functional of each.
+    KL(P || Q) over the full barcode is exactly the multi-information; JSD is its bounded
+    symmetric form and does not blow up on a cell the null gives zero weight.
+    """
+    total = float(total)
+    out = 0.0
+    for word, mass in q.items():
+        p = counts.get(word, 0) / total
+        m = 0.5 * (p + mass)
+        if p > 0:
+            out += 0.5 * p * math.log2(p / m)
+        if mass > 0:
+            out += 0.5 * mass * math.log2(mass / m)
+    return out
+
+
+def product_measure(marginals):
+    """q(u) = prod_j p_j(u_j) over every word of the window: the independence null itself."""
+    q = {"": 1.0}
+    for freq in marginals:
+        q = {w + b: m * freq[b] for w, m in q.items() for b in BASES if freq[b] > 0}
+    return q
+
+
+def jsd_null(barcodes, L, rng, reps, widths):
+    """Observed JSD to the product measure, against the JSD a sample of the same size gets by
+    chance. The floor matters: on 4^k cells and n barcodes the empirical distribution is sparse,
+    so JSD is bounded away from zero even under perfect independence. A column shuffle draws from
+    the product measure at exactly the observed n, which is that floor, measured rather than
+    derived.
+    """
+    n = len(barcodes)
+    freqs = []
+    for j in range(L):
+        c = collections.Counter(b[j] for b in barcodes)
+        freqs.append({b: c[b] / n for b in BASES})
+    shuffles = [column_shuffle(barcodes, rng) for _ in range(reps)]
+    rows = []
+    for k in widths:
+        obs, null = [], []
+        for j in range(0, L - k + 1):
+            q = product_measure(freqs[j : j + k])
+            obs.append(jensen_shannon(
+                collections.Counter(b[j : j + k] for b in barcodes), q, n))
+            for sh in shuffles:
+                null.append(jensen_shannon(
+                    collections.Counter(b[j : j + k] for b in sh), q, len(sh)))
+        mu = sum(null) / len(null)
+        sd = math.sqrt(sum((x - mu) ** 2 for x in null) / max(len(null) - 1, 1))
+        mean_obs = sum(obs) / len(obs)
+        rows.append({"k": k, "windows": len(obs), "jsd_observed": mean_obs,
+                     "jsd_null_mean": mu, "jsd_null_sd": sd,
+                     "excess": mean_obs - mu, "z": (mean_obs - mu) / sd if sd else 0.0})
+    return rows
 
 
 def independence_null(barcodes, L, max_k=None):
@@ -90,7 +163,7 @@ def independence_null(barcodes, L, max_k=None):
         for j in range(L - k + 1):
             obs = collision(collections.Counter(b[j : j + k] for b in barcodes))
             ind = math.prod(marg[j : j + k])
-            if ind > 0:
+            if ind > 0 and obs > 0:
                 ratios.append(math.log10(obs / ind))
         rows.append({"k": k, "windows": len(ratios),
                      "log10_excess": sum(ratios) / len(ratios) if ratios else 0.0})
@@ -350,6 +423,13 @@ def main(argv=None):
           f"({100 * summary['assigned'] / summary['total']:.1f}%), {L} nt UMI")
 
     migs = load_migs(out / "checkout" / "CTRL.fq.gz", a.window)
+    # N -> A, as pack_barcode does. Every stage groups on the packed key, so that is the barcode
+    # whose collision rate matters; the flag that a base was uncalled travels separately.
+    fold = str.maketrans({c: "A" for c in "NnRYSWKMBDHV"})
+    folded = collections.defaultdict(list)
+    for u, v in migs.items():
+        folded[u.translate(fold)] += v  # merge, never overwrite: N->A can land on a real barcode
+    migs = folded
     barcodes = sorted(migs)
     counts = {u: len(v) for u, v in migs.items()}
     print(f"          {len(barcodes):,} distinct UMIs over "
@@ -357,17 +437,41 @@ def main(argv=None):
 
     # ------------------------------------------------------------------------------ A
     print("\nA. ARE THE BARCODE POSITIONS INDEPENDENT?")
-    ind = independence_null(barcodes, L)
-    print(f"{'k':>4}{'windows':>9}{'observed/independent':>22}")
-    for r in ind["rows"]:
-        print(f"{r['k']:>4}{r['windows']:>9}{10 ** r['log10_excess']:>21.3f}x")
-    print(f"\n  per added position   {10 ** ind['log10_excess_per_position']:.4f}x")
-    print(f"  over {L} positions     {ind['predicted_excess_full_length']:.2f}x  "
-          f"-- the predicted collision excess over prod_j m_j")
-    print(f"  P_coll independent   {ind['p_coll_independent']:.3e}  "
-          f"(effective length {-math.log(ind['p_coll_independent'], 4):.2f} nt)")
-    print(f"  P_coll with the null {ind['p_coll_dependent']:.3e}  "
-          f"(effective length {-math.log(ind['p_coll_dependent'], 4):.2f} nt)")
+    # Distinct barcodes, never barcodes weighted by reads: read counts are set by amplification,
+    # so weighting would let one over-amplified molecule write the composition.
+    #
+    # ...but a hard read threshold throws away real molecules, which is the mistake this project
+    # refuses everywhere else. Singletons are the compromise that costs least: an error child is
+    # usually a singleton, so dropping them removes most of the barcodes that are not molecules
+    # while keeping every molecule seen twice. Both are reported, and if they disagree the answer
+    # is contamination by error children rather than dependence.
+    subsets = [("all distinct", barcodes),
+               ("reads >= 2", [b for b in barcodes if counts[b] >= 2])]
+    ind = None
+    for label, subset in subsets:
+        if len(subset) < 5000:
+            continue
+        res = independence_null(subset, L)
+        if ind is None:
+            ind = res
+        print(f"\n  {label}: {len(subset):,} barcodes")
+        print(f"{'k':>6}{'windows':>9}{'observed/independent':>22}")
+        for r in res["rows"]:
+            print(f"{r['k']:>6}{r['windows']:>9}{10 ** r['log10_excess']:>21.5f}x")
+        print(f"    per added position {10 ** res['log10_excess_per_position']:.5f}x, "
+              f"over {L} positions {res['predicted_excess_full_length']:.4f}x")
+        print(f"    effective length   {-math.log(res['p_coll_independent'], 4):.4f} nt "
+              f"-> {-math.log(res['p_coll_dependent'], 4):.4f} nt under the null")
+
+    # The collision rate is one functional of the distribution. The null IS a distribution -- the
+    # product measure q(u) = prod_j p_j(u_j) -- so compare the whole of P against the whole of Q.
+    print("\n  Jensen-Shannon divergence to the product measure (bits), against the floor a")
+    print("  sample of the same size gets by chance:")
+    jsd = jsd_null(barcodes, L, rng, max(a.reps // 5, 2), (2, 3, 4, 5))
+    print(f"{'k':>6}{'observed':>12}{'chance':>12}{'sd':>10}{'excess':>12}{'z':>8}")
+    for r in jsd:
+        print(f"{r['k']:>6}{r['jsd_observed']:>12.3e}{r['jsd_null_mean']:>12.3e}"
+              f"{r['jsd_null_sd']:>10.1e}{r['excess']:>12.3e}{r['z']:>8.1f}")
     print("  measured on distinct barcodes, so repeated draws are collapsed: a lower bound.")
 
     # ------------------------------------------------------------------------------ B
@@ -413,7 +517,7 @@ def main(argv=None):
 
     (out / "nulls.json").write_text(json.dumps(
         {"pattern": pattern, "umi_length": L, "distinct_umis": len(barcodes),
-         "independence": ind, "graph": g,
+         "independence": ind, "jsd": jsd, "graph": g,
          "linkage": {"migs": len(obs), "randomisations": len(null),
                      "thresholds": thresholds,
                      "null_quantiles": {str(q): quantile(null, q)

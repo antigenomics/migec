@@ -195,15 +195,46 @@ nothing. On the same HIV library — 125,369 distinct 9 nt barcodes, 47.8% occup
 
 | derived from a model | measured by permutation | |
 |---|---|---|
-| positions are independent | 1.04× excess over 9 nt | the assumption holds |
-| distance-1 pairs are error children | 92% are chance; ~19,400 are real | permute the background |
-| split a MIG at nominal `p < 0.01` | 1% false positives at `-log10 p` = 9.61 | **22× over-call** |
+| positions are independent | 1.01× excess, purely nearest-neighbour | holds, to ~1% |
+| distance-1 pairs are error children | 97% are chance; ~18,000 are real | permute the background |
+| split a MIG at nominal `p < 0.01` | 1% false positives at `-log10 p` = 8.68 | **19× over-call** |
+
+The independence null is a *distribution* — the product measure `q(u) = Π_j p_j(u_j)` — so it is
+tested with Jensen-Shannon divergence against a same-size draw from `q`, not with one functional of
+each. The residual dependence is entirely between **adjacent** positions, and it has a cause: 0.55%
+of reads carry a barcode one base short, a coupling step that did not fire, which frameshifts
+everything after it.
 
 The last one is the one that mattered. Reads are not exchangeable — a low-quality read carries a
 minor base at many positions at once and looks exactly like a linked subclone — so the null has to
 preserve *both* margins of the reads × positions matrix, per-position error count and per-read
-error load. The nominal threshold calls 27.39% of MIGs as two molecules; the permutation calls
-1.26%. See [docs/nulls.rst](docs/nulls.rst).
+error load. The nominal threshold calls 30.62% of MIGs as two molecules; the permutation calls
+1.60%. The threshold is a Monte Carlo estimate and its error is quoted: **8.68, bootstrap 95% CI
+[8.42, 9.14]** over 82,800 randomisations — a tail quantile from a tenth as many gave 9.61 and
+11.66, so the interval is the number, not the point. See [docs/nulls.rst](docs/nulls.rst).
+
+### Most UMIs have 1–3 reads, and that is the normal case
+
+Bulk repertoire profiling and shallow 3' single-cell both put the MIG size histogram's mass at 1–3
+reads. migec runs there and says what it can support rather than quoting a number calibrated on a
+deep library: the split threshold is inert (a pair of columns can carry at most `log10 C(n, n/2)`,
+so it needs ~30 reads), the count-ratio error-child null has no dynamic range, and **nothing is
+thresholded away** — `--min-reads` defaults to 1, because a molecule seen once is still a molecule
+and the answer to a barcode error is to correct it, not to delete it.
+
+```
+    MIG size      groups    share
+           1      31,888    79.4%
+         2-3       8,176    20.4%
+         4-7         112     0.3%
+
+warning: 79.4% of molecules were seen once. A consensus over one read is that read --
+  the UMI is buying counting here, not error correction
+```
+
+It is also the memory-hostile case, because distinct barcodes are what everything scales with, so
+it is what the benchmarks use: 190,595 reads/s at 1.02 reads/UMI, 259 B resident per distinct
+barcode, still bounded by the bucket rather than the library.
 
 ### Speed and memory are reported, not assumed
 

@@ -138,3 +138,61 @@ def test_contig_mode_costs_what_it_costs(corpus):
     ratio = contig["wall_seconds"] / plain["wall_seconds"]
     print(f"\n  contig mode is {ratio:.2f}x amplicon at {READS_PER_UMI} reads per barcode")
     assert ratio < 10.0, f"contig placement cost {ratio:.1f}x, not the small multiple expected"
+
+
+@pytest.fixture(scope="module")
+def shallow_corpus(tmp_path_factory):
+    """1-3 reads per UMI, the memory-hostile case.
+
+    Distinct barcodes are what everything in assemble scales with -- the sort, the bucket, the
+    group loop -- and a shallow library maximises them for a given read count. Bulk repertoire
+    profiling and shallow 3' GEX both look like this, so it is the shape to benchmark, not the
+    deeply-sequenced amplicon where four reads collapse to one group.
+    """
+    d = tmp_path_factory.mktemp("bench_shallow")
+    path = d / "S1.fq.gz"
+    rng = random.Random(1)
+    with gzip.open(path, "wt", compresslevel=1) as fh:
+        for i in range(N_READS):
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(PAYLOAD))
+            fh.write(
+                f"@r{i} RX:Z:{umi}\tQX:Z:{'I' * 12}\tBC:Z:S1\n{payload}\n+\n{'I' * PAYLOAD}\n"
+            )
+    return d, path
+
+
+def test_shallow_throughput(shallow_corpus):
+    from migec.assemble import run
+
+    d, path = shallow_corpus
+    s = run(path, d / "out", gzip_level=1)
+    rate = s["reads"] / s["wall_seconds"]
+    print(f"\n  shallow: {rate:,.0f} reads/s, {s['groups']:,} groups from {s['reads']:,} reads "
+          f"({s['reads'] / s['groups']:.2f} reads/UMI)")
+    assert s["groups"] > 0.9 * s["reads"], "this fixture is meant to be one read per UMI"
+    # Every read is its own group, so the per-group work runs N_READS times instead of N_READS/4.
+    # That is the worst case and it still has to clear the same bar.
+    assert rate > 20_000, f"shallow throughput collapsed to {rate:,.0f} reads/s"
+
+
+def test_shallow_memory_is_still_bounded_by_the_bucket(shallow_corpus, tmp_path):
+    """The case that would break first if anything held the library: one distinct barcode per read.
+
+    A hash map keyed by barcode would be ~48 B x N_READS here. The bucket has to be what bounds it.
+    """
+    d, path = shallow_corpus
+    one = _peak_rss_in_a_fresh_process(path, tmp_path / "s1", 0)
+    many = _peak_rss_in_a_fresh_process(path, tmp_path / "s16", 4)
+    print(f"\n  shallow  1 bucket:  {one['rss'] / 2**20:6.0f} MB"
+          f"\n  shallow 16 buckets: {many['rss'] / 2**20:6.0f} MB "
+          f"({one['rss'] / max(many['rss'], 1):.2f}x less), {many['groups']:,} groups")
+    assert many["rss"] < one["rss"]
+    assert many["rss"] < 0.75 * one["rss"]
+    assert (one["groups"], one["molecules"]) == (many["groups"], many["molecules"])
+    # Per distinct barcode, at the finest partition. The sorted (key, count) array in checkout is
+    # ~22 B; assemble additionally holds the payload of one bucket, so this is looser -- it is here
+    # to catch a hash map reappearing, not to police bytes.
+    per_group = many["rss"] / many["groups"]
+    print(f"  {per_group:.0f} B per distinct barcode resident")
+    assert per_group < 1_000
