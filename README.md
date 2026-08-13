@@ -141,7 +141,9 @@ warning: CTRL: the barcode error estimate (2.7e-04) is not reliable here -- 50% 
 
 `scripts/collision_check.py` checks that prediction against something model-free — two molecules
 sharing a barcode with *different sequences* are visible in the reads — and finds 1.86× more
-collisions than predicted, which is the size of the position-independence assumption in `Π_j m_j`.
+collisions than predicted. That is *not* the position-independence assumption in `Π_j m_j`, which a
+permutation puts at 1.04× — it is the read threshold, since a collided barcode carries two
+molecules' reads and is over-represented among the MIGs big enough to show a split.
 
 The barcode error rate is estimated from the distance-1 excess and reported next to what the
 reported Phred and the polymerase predict. ⚠ The estimator has a working range: it recovers 0.92×
@@ -150,6 +152,23 @@ flagged unreliable past 5% neighbourhood occupancy rather than quietly believed.
 
 Full derivations in [docs/barcode_space.rst](docs/barcode_space.rst); `notebooks/barcode_space.py`
 draws it.
+
+### Every derivation has a permutation that checks it
+
+`scripts/permutation_nulls.py` measures three quantities the pipeline otherwise derives, assuming
+nothing. On the same HIV library — 125,369 distinct 9 nt barcodes, 47.8% occupancy:
+
+| derived from a model | measured by permutation | |
+|---|---|---|
+| positions are independent | 1.04× excess over 9 nt | the assumption holds |
+| distance-1 pairs are error children | 92% are chance; ~19,400 are real | permute the background |
+| split a MIG at nominal `p < 0.01` | 1% false positives at `-log10 p` = 9.91 | **26× over-call** |
+
+The last one is the one that mattered. Reads are not exchangeable — a low-quality read carries a
+minor base at many positions at once and looks exactly like a linked subclone — so the null has to
+preserve *both* margins of the reads × positions matrix, per-position error count and per-read
+error load. The nominal threshold calls 31.13% of MIGs as two molecules; the permutation calls
+1.20%. See [docs/nulls.rst](docs/nulls.rst).
 
 ### Speed and memory are reported, not assumed
 

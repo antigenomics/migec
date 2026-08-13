@@ -56,17 +56,30 @@ scientific claim and is validated before any throughput work.
       counted here as error. Not the `p_floor + a/c` least-squares fit the plan specified — that
       model is wrong for a majority vote and returned a negative probability on simulated data.
       `docs/quality_floor.rst`, `scripts/quality_floor.py`.
-- [ ] **X3 — three permutation nulls on one deep real dataset.** Split-half UMI collision (a
-      model-free estimate of `Σ p_u²`), size-preserving UMI shuffle (calibrates the observed
-      1-mismatch excess), within-MIG read re-partition (sets the split threshold from a measured
-      false-positive curve rather than from a Poisson derivation). **Blocks M3's error model.**
+- [x] **X3 — three permutation nulls on one deep real dataset.** Done, 2026-08-13, on
+      `SRR1763769` — 125,369 distinct 9 nt barcodes at 47.8% occupancy. (1) **Position
+      independence holds** to 1.04% of the collision rate, extrapolated from the k-mer joint
+      against its own marginals, so `Π_j m_j` stays and the 1.86x collision excess is the read
+      threshold rather than the barcode. ⚠ measured on distinct barcodes, so saturation damps it;
+      a lower bound. (2) **92% of distance-1 pairs are chance** (839,218 observed, 773,684 under a
+      column shuffle), and a size-preserving *count* shuffle over the fixed graph finds
+      **~19,400 genuine error children**, plateauing from a count ratio of 5 upward. The
+      permutation background puts the barcode error at 3.4e-3, within 1.7x of the Phred +
+      polymerase prediction, against `checkout`'s analytic 8.0e-4 which is 2.6x *below* it — M3
+      takes the permuted background. (3) **The split threshold is 9.91, not 2.00**: a curveball
+      randomisation preserving both margins of the reads x positions minor-allele matrix puts the
+      1% false-positive point 26x above the nominal `p < 0.01`, because a low-quality read carries
+      minor bases at many positions at once and mimics a linked subclone.
+      `docs/nulls.rst`, `scripts/permutation_nulls.py`.
 
 ## M1 — `assemble`, the consensus and quality model
 
 - [ ] Group dedup, modal draft, offset placement (`--mode amplicon`), overlap components
       (`--mode fragmented`) — the latter also gives contig assembly for free
 - [ ] Column log-likelihood posterior: `LL[j][b] = Σ_i (r==b ? log(1−e) : log(e/3))`
-- [ ] Sub-clustering by *linkage*, not by count of polymorphic sites; ΔBIC over bases, not reads
+- [ ] Sub-clustering by *linkage*, not by count of polymorphic sites; ΔBIC over bases, not reads.
+      Threshold 9.91 (`-log10 p`, Bonferroni'd within the MIG), from X3's false-positive curve —
+      **not** the nominal 2.00, which over-calls by 26x
 - [ ] Quality floor `p_floor = ε_RT + 2·ε_pol`, `--rt-error auto` fitted from data
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
 - [ ] Doublet call from *lineages*, not raw variant counts
@@ -97,7 +110,8 @@ scientific claim and is validated before any throughput work.
 
 - [ ] Barcode table, three error-rate estimators, sequencing vs quality-independent separation
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
-      polymerase mixture component for early-cycle PCR children
+      polymerase mixture component for early-cycle PCR children. The distance-1 background comes
+      from X3's column shuffle, not from `C(n,2)·P_coll·shell`
 - [ ] MIG-size model and threshold at a target FDR; keep-orphan retention
 - [ ] Cell calling (OrdMag + knee), QC tables and plots
 - Gate: estimated ε within 20% of injected; ≥95% of no-parent 3–5-read MIGs retained

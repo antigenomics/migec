@@ -6,6 +6,34 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### X3: three derivations replaced by three permutations
+
+Each of these numbers came out of an argument that assumed something the data had never been asked
+about. `scripts/permutation_nulls.py` measures all three on `SRR1763769` — 125,369 distinct 9 nt
+barcodes at 47.8% occupancy — and `docs/nulls.rst` has the tables.
+
+**Position independence holds.** Comparing the observed joint over *k* adjacent barcode positions
+against the product of that same data's own marginals gives 1.0051× per added position, 1.04× over
+the whole 9 nt. So `Π_j Σ_a p_j(a)²` stays, and the 1.86× collision excess measured from the
+sequences is the read threshold — a collided barcode carries two molecules' reads and is
+over-represented among the MIGs big enough to show a split. ⚠ Measured on *distinct* barcodes, so
+saturation damps it; this is a lower bound and a sparse library would settle it properly.
+
+**92% of distance-1 barcode pairs are coincidence.** 839,218 observed against 773,684 under a
+column shuffle, which keeps every marginal and destroys the error children. Shuffling the read
+*counts* over the fixed distance-1 graph — the graph, the composition and the count distribution
+all unchanged, only which count sits on which node — finds **~19,400 genuine parent/child pairs**,
+plateauing from a count ratio of 5 upward at z ≈ 48. The permuted background puts barcode error at
+3.4e-3, within 1.7× of the Phred + polymerase prediction, where the analytic estimate is 2.6×
+*below* it. M3's error model takes the permuted background.
+
+**The split threshold is 9.91, not 2.00.** Reads are not exchangeable: a low-quality read carries a
+minor base at many positions at once and is indistinguishable from a linked subclone if you only
+look at the columns. Randomising the reads × positions minor-allele matrix while preserving *both*
+margins (curveball) puts the 1% false-positive point at a Bonferroni'd `-log10 p` of 9.91. The
+nominal `p < 0.01` the derivation gives calls 31.13% of MIGs against 1.20% — a 26× over-call, every
+one of which would have become a spurious extra molecule.
+
 ### `migec suggest`: read the barcode layout off the reads
 
 A UMI cycle is one the synthesiser mixed — all four bases near 1/4, ~2 bits. A constant cycle is

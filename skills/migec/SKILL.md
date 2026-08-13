@@ -142,7 +142,10 @@ is for every decision.
 
 ⚠ `Π_j m_j` assumes the positions are independent, so it is a *lower* bound on the collision
 probability. Measured against a model-free count on real data (`scripts/collision_check.py`),
-collisions ran **1.86×** the prediction.
+collisions ran **1.86×** the prediction — but a permutation puts the position-independence part of
+that at only **1.04×** (`scripts/permutation_nulls.py`), so the rest is the read threshold: a
+collided barcode carries two molecules' reads and is over-represented among the MIGs big enough for
+a split to be visible.
 
 ### The error budget (same file)
 
@@ -159,6 +162,21 @@ real barcodes that is a small difference of two large numbers. Against an inject
 recovered 0.92× at 0.3% occupancy, 0.65× at 16%, 0.23× at 50%, 0.001× at 93%. `err_unreliable` is
 set past 5% neighbourhood occupancy — **do not quote the estimate when it is set**, quote the
 prediction and say the barcode is too short.
+
+Where it is set, `scripts/permutation_nulls.py` does better: it replaces the derived coincidence
+expectation with a **column shuffle** of the observed barcodes (every marginal kept, every error
+child destroyed). On the HIV library that background is 92% of all distance-1 pairs, and the
+resulting estimate is 3.4·10⁻³ — within 1.7× of the Phred + polymerase prediction, where the
+analytic estimate sits 2.6× *below* it.
+
+## Splitting a MIG into two consensuses
+
+⛔ **The threshold is a Bonferroni'd `-log10 p` of 9.91, not the nominal 2.00.** Reads are not
+exchangeable: a low-quality read carries a minor base at many positions at once, which is
+indistinguishable from a linked subclone if you only look at the columns. The false-positive curve
+comes from randomising the reads × positions minor-allele matrix while preserving **both** margins
+(per-position error count *and* per-read error load — a curveball swap). The nominal threshold
+calls 31.13% of MIGs as two molecules; the measured one calls 1.20%. `docs/nulls.rst`.
 
 ## Things that look like defects and are not
 
@@ -211,6 +229,6 @@ makes both variants count as zero and the metric look perfect.
 ## References in the repo
 
 - `docs/checkout.rst`, `docs/umi_statistics.rst`, `docs/performance.rst`, `docs/grouping.rst`,
-  `docs/validation.rst`, `docs/formats.rst`
+  `docs/validation.rst`, `docs/formats.rst`, `docs/nulls.rst`
 - `CLAUDE.md` — the non-negotiables and why each exists
 - `project/` — the design record: six subsystem designs and two critiques, with 25 corrected errors

@@ -63,6 +63,11 @@ correction is written up in `project/review-algorithms.md`.
 - ⛔ **Never emit a quality above the RT/first-cycle-PCR floor.** An error made before
   amplification is in every read and no consensus removes it. `p_floor = ε_RT + 2·ε_pol`, fitted
   from data as the intercept of `e_out(c) = p_floor + a/c`, never hard-coded.
+- ⛔ **A null that permutes reads column by column is the wrong null.** A low-quality read carries
+  a minor base at many positions at once, so column permutation hands every read an average error
+  load and calls the resulting co-segregation significant. Preserve *both* margins of the
+  reads × positions matrix (curveball). Measured: the nominal `p < 0.01` split threshold calls
+  31.13% of MIGs, the both-margins null puts the 1% false-positive point 26x higher, at 9.91.
 - ⛔ **Range partition, never hash partition.** A hash sends a barcode and its 1-mismatch
   neighbours to uncorrelated buckets, which makes correction impossible to apply and splits the
   molecule permanently — and the halves each look like a well-formed MIG, so nothing detects it.
@@ -143,9 +148,14 @@ correction is written up in `project/review-algorithms.md`.
   `checkout.barcode_space.tsv` / `checkout.umi_quality.tsv`, warned on, documented in
   `docs/barcode_space.rst`, drawn in `notebooks/barcode_space.py` and tested in
   `tests/synthetic/test_barcode_space.py`.
-- Next: **X3** (the three permutation nulls — blocks M3's error model), then **M1** (`assemble`:
-  overlap components per X1, consensus, quality capped per X2). X3's first null is partly answered
-  already: collisions run 1.86x the independent-positions prediction.
+- **X3 is done (2026-08-13).** Position independence holds (1.04x over 9 nt), so `Π_j m_j` stays
+  and the 1.86x collision excess is the read threshold, not the barcode. 92% of distance-1 pairs
+  are chance at 47.8% occupancy; the column-shuffle background puts barcode error at 3.4e-3 —
+  within 1.7x of the Phred + polymerase prediction, where the analytic estimate is 2.6x below it,
+  so **M3 takes the permuted background**. The split threshold is **9.91, not 2.00**.
+  `docs/nulls.rst`, `scripts/permutation_nulls.py`, `tests/synthetic/test_nulls.py`.
+- Next: **M1** (`assemble`: overlap components per X1, consensus, quality capped per X2,
+  sub-clustering at X3's threshold).
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.
