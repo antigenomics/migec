@@ -344,6 +344,8 @@ def test_a_disagreement_between_ordmag_and_the_knee_is_reported(tmp_path):
         "cell_length": 16, "cells_observed": 10_000, "cells_called": 5_000,
         "molecules_in_called": 90, "cell_threshold": 2, "knee_rank": 300,
         "knee_molecules": 40, "min_posterior": 0.95,
+        "whitelist": {"barcodes": 0, "exact": 0, "corrected": 0, "off_list": 0,
+                      "reads_corrected": 0, "far": 0, "background_prior": 0.0},
     }
     report = format_report(summary)
     assert "OrdMag calls" in report
@@ -359,3 +361,84 @@ def test_a_bulk_library_has_no_cells_to_call(tmp_path):
     assert s["cells_observed"] == 0
     assert s["cells_called"] == 0
     assert not (tmp_path / "ref" / "S1.cells.tsv").exists()
+
+
+def test_a_whitelist_snaps_errors_and_refuses_strangers(tmp_path):
+    """The two halves of the same decision. A barcode one substitution off a heavily-used list
+    entry is a miscall; a barcode that is nobody's neighbour is a real off-list barcode and must
+    be left exactly where it is."""
+    import gzip
+    import random
+
+    rng = random.Random(4)
+    listed = ["".join(rng.choice("ACGT") for _ in range(16)) for _ in range(5_000)]
+    (tmp_path / "wl.txt").write_text("\n".join(listed) + "\n")
+
+    reads, i = [], 0
+    def emit(cb, n, qual_at_end=40):
+        nonlocal i
+        for _ in range(n):
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            pay = "".join(rng.choice("ACGT") for _ in range(60))
+            cy = "I" * 15 + chr(33 + qual_at_end)
+            reads.append(
+                f"@r{i} RX:Z:{umi}\tQX:Z:{'I' * 12}\tCB:Z:{cb}\tCY:Z:{cy}\tBC:Z:S1\n"
+                f"{pay}\n+\n{'I' * 60}\n"
+            )
+            i += 1
+
+    # 200 real cells, deeply used, from the list.
+    for cb in listed[:200]:
+        emit(cb, 400)
+    # One of them mis-sequenced at the last base, called at Q3 -- a base the instrument itself
+    # says it is unsure of. The posterior scales as (parent reads) x e/3, so a snap needs both a
+    # well-used parent and a genuinely poor base; a confident base is never overridden.
+    off_by_one = listed[0][:15] + ("A" if listed[0][15] != "A" else "C")
+    emit(off_by_one, 20, qual_at_end=3)
+    # ...and a swarm of barcodes that are nobody's neighbour: ambient, hopped, undeclared.
+    strangers = []
+    while len(strangers) < 3_000:
+        cb = "".join(rng.choice("ACGT") for _ in range(16))
+        if cb not in set(listed):
+            strangers.append(cb)
+    for cb in strangers:
+        emit(cb, 1)
+
+    with gzip.open(tmp_path / "r.fq.gz", "wt") as fh:
+        fh.write("".join(reads))
+
+    s = run(tmp_path / "r.fq.gz", tmp_path / "ref", cell_whitelist=tmp_path / "wl.txt")
+    w = s["whitelist"]
+    assert w["exact"] == 200
+    assert w["barcodes"] == 200 + 1 + len(strangers)
+    # The mis-sequenced barcode is snapped back...
+    assert w["corrected"] == 1
+    assert w["reads_corrected"] == 20
+    # ...and not one of the 3,000 strangers is absorbed into a neighbour.
+    assert w["off_list"] >= len(strangers)
+    assert w["background_prior"] > 0
+
+    # The snap is applied to the reads and audited, whether or not the posterior also merged it.
+    fixed = 0
+    with gzip.open(tmp_path / "ref" / "S1.fq.gz", "rt") as fh:
+        for j, line in enumerate(fh):
+            if j % 4 != 0:
+                continue
+            tags = dict(f.split(":Z:") for f in line.split() if ":Z:" in f)
+            if tags.get("OC") == off_by_one:
+                fixed += 1
+                assert tags["CB"] == listed[0]
+    assert fixed == 20
+
+
+def test_a_whitelist_of_the_wrong_length_is_refused(tmp_path):
+    import gzip
+
+    (tmp_path / "wl.txt").write_text("ACGTACGT\nTTTTGGGG\n")
+    with gzip.open(tmp_path / "r.fq.gz", "wt") as fh:
+        fh.write(
+            f"@r0 RX:Z:ACGTACGTACGT\tQX:Z:{'I' * 12}\tCB:Z:ACGTACGTACGTACGT\t"
+            f"CY:Z:{'I' * 16}\tBC:Z:S1\nACGT\n+\nIIII\n"
+        )
+    with pytest.raises(RuntimeError, match="whitelist holds"):
+        run(tmp_path / "r.fq.gz", tmp_path / "ref", cell_whitelist=tmp_path / "wl.txt")

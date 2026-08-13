@@ -22,6 +22,8 @@ def run(
     payload_width: int = 32,
     min_posterior: float = 0.95,
     expect_cells: int = 3000,
+    cell_whitelist: str | Path = "",
+    min_whitelist_posterior: float = 0.975,
     gzip_level: int = 6,
 ) -> dict:
     """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`."""
@@ -29,7 +31,7 @@ def run(
     out.mkdir(parents=True, exist_ok=True)
     summary = _core.refine(
         str(reads), str(out), sample_id, use_quality, use_payload, payload_width,
-        min_posterior, expect_cells, gzip_level,
+        min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior, gzip_level,
     )
     summary["input"] = str(reads)
     summary["min_posterior"] = min_posterior
@@ -67,6 +69,16 @@ def format_report(summary: dict) -> str:
         ),
         "",
     ]
+    w = s["whitelist"]
+    if w["barcodes"]:
+        lines += [
+            f"whitelist   {w['exact']:,} of {w['barcodes']:,} cell barcodes were on the list",
+            f"            {w['corrected']:,} snapped to it ({w['reads_corrected']:,} reads), "
+            f"{w['off_list']:,} left off it",
+            f"            {w['far']:,} are further than one substitution from every entry -- "
+            f"which is what measures the off-list prior, {w['background_prior']:.2e} per barcode",
+            "",
+        ]
     if s["cell_length"]:
         lines += [
             f"cells       {s['cells_called']:,} called of {s['cells_observed']:,} barcodes seen, "

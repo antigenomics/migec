@@ -105,6 +105,48 @@ to merge into and correctly stays put:
    missed correction only inflates a count, and the count is reported next to the coverage
    histogram that explains it. ``--min-posterior`` is where you move along that trade.
 
+Whitelists: ``--cell-whitelist``
+--------------------------------
+
+10x ships the list of cell barcodes it actually synthesised. An observed barcode one substitution
+away from a list entry is usually a miscall of it — and *usually* is not *always*, which is the
+whole difficulty.
+
+.. code-block:: text
+
+   whitelist   200 of 3,201 cell barcodes were on the list
+               1 snapped to it (20 reads), 3,000 left off it
+               3,000 are further than one substitution from every entry -- which is what
+               measures the off-list prior, 1.59e-05 per barcode
+
+⛔ **The posterior needs a background hypothesis.** Without one the model asserts "the true barcode
+is one of these 737,000", so every observed barcode is assigned to *some* entry with posterior 1.0
+— an index-hopped read, an undeclared sample, free-floating ambient sequence, all silently absorbed
+into whichever entry happens to be nearest. With it, "this barcode is not on the list and was read
+correctly" competes, and for those it wins.
+
+The prior on that background is **measured**: barcodes at distance ≥2 from every entry cannot be
+single substitutions of anything on the list, so the share of reads they carry is a lower bound on
+how much of the library is genuinely off-list.
+
+.. warning::
+
+   It is a prior on **this barcode**, not on the library. The whitelist prior is a share of
+   ``1 − background`` spread over every entry, so a 737,000-entry list gives each candidate ~10⁻⁶.
+   A background quoted as "1% of the library is off-list" would be four orders of magnitude larger
+   than any candidate and would win every time. The comparable quantity is the off-list read share
+   **divided by** the number of distinct off-list barcodes.
+
+The posterior scales roughly as ``n_parent · e/3``, where ``e`` is the error at the base that
+differs. So a snap needs **both** a well-used parent and a base the instrument is unsure of: at
+Q30 nothing is overridden however popular the neighbour, and a barcode seen twice never wins an
+argument. That is deliberate — a wrong snap moves a molecule into another cell and nothing
+downstream can tell.
+
+An ``N`` is **expanded, not discarded**: it is a base the instrument declined to call, consistent
+with all four at ``e = 0.75``, so a barcode carrying one is still correctable rather than thrown
+away with the molecule it tagged.
+
 Cell calling
 ------------
 

@@ -225,8 +225,14 @@ correction is written up in `project/review-algorithms.md`.
   droplet library. ⚠ The cell key is the TOP `2*cell_length` bits of the packed barcode, not
   "everything above the UMI" -- those coincide only when cell+UMI fill all 32 bases, and getting it
   wrong silently shatters cells into fragments that still look like cells.
+- **Whitelists work (2026-08-13)**, `refine --cell-whitelist`. ⛔ The posterior needs the
+  background hypothesis or every hopped/undeclared barcode is absorbed into its nearest entry with
+  posterior 1.0. ⚠ That prior is per **barcode**, not per library: the whitelist prior is
+  `1-background` spread over every entry (~1e-6 each for 737k), so a library-level "1% off-list"
+  is four orders of magnitude too big and wins every time. Use the off-list read share divided by
+  the distinct off-list barcodes, both measured.
 - Next: M3's remainder (three error-rate estimators, the FDR number), then the M2 remainder
-  (whitelists, dual-end barcodes, `.mig` bucket output from checkout, i7xi5).
+  (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
 - ⚠ **Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point

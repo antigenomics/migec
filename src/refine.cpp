@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <functional>
 #include <filesystem>
+#include <unordered_map>
 
 #include "migec/fastq.hpp"
 #include "migec/resource.hpp"
@@ -39,6 +40,16 @@ uint64_t pack_key(std::string_view cell, std::string_view umi) {
     return pack_barcode(joined);
 }
 
+// The same key, with the cell barcode replaced by its whitelist-corrected form.
+uint64_t pack_key_snapped(uint64_t snapped_cell, int cell_length, std::string_view umi) {
+    if (!cell_length) return pack_barcode(umi);
+    std::string joined;
+    joined.reserve(static_cast<size_t>(cell_length) + umi.size());
+    joined.append(unpack_barcode(snapped_cell, cell_length));
+    joined.append(umi);
+    return pack_barcode(joined);
+}
+
 void bin(std::vector<uint64_t>& histogram, uint64_t n) {
     size_t b = 0;
     while ((n >> b) > 1) ++b;
@@ -55,6 +66,102 @@ RefineStats refine(const RefineRequest& request) {
 
     std::filesystem::path out_dir(request.output_dir);
     std::filesystem::create_directories(out_dir);
+
+    // ------------------------------------------------------- pass 0: snap cells to the whitelist
+    // Before anything else, because every downstream key contains the cell barcode: correcting it
+    // afterwards would mean rebuilding the whole table.
+    std::unordered_map<uint64_t, uint64_t> cell_remap;  // observed key -> whitelist key
+    if (!request.cell_whitelist.empty()) {
+        const Whitelist list = Whitelist::load(request.cell_whitelist);
+        // Distinct observed cell barcodes and their read counts. Bounded by the cells, not the
+        // reads -- and on a droplet run the ambient barcodes dominate that count, which is
+        // exactly the population the background prior is about.
+        std::unordered_map<uint64_t, uint32_t> seen;
+        std::unordered_map<uint64_t, std::string> quals;
+        uint64_t total_reads = 0;
+        {
+            FastqReader reader(request.input);
+            FastqRecord rec;
+            while (reader.next(rec)) {
+                const std::string_view cell = tag_value(rec.comment, "CB:Z:");
+                if (cell.empty()) continue;
+                if (static_cast<int>(cell.size()) != list.length()) {
+                    throw MigecError(
+                        "refine: the reads carry a " + std::to_string(cell.size()) +
+                        " nt cell barcode and the whitelist holds " +
+                        std::to_string(list.length()) + " nt entries");
+                }
+                const uint64_t key = pack_barcode(cell);
+                ++seen[key];
+                ++total_reads;
+                if (quals.find(key) == quals.end()) {
+                    quals.emplace(key, std::string(tag_value(rec.comment, "CY:Z:")));
+                }
+            }
+        }
+        stats.whitelist.barcodes = seen.size();
+
+        std::vector<uint32_t> counts(list.size(), 0);
+        std::vector<uint64_t> off;
+        for (const auto& kv : seen) {
+            const size_t at = list.index_of(kv.first);
+            if (at != static_cast<size_t>(-1)) {
+                counts[at] = kv.second;
+                ++stats.whitelist.exact;
+            } else {
+                off.push_back(kv.first);
+            }
+        }
+        // Barcodes with no distance-1 entry cannot be single substitutions of anything on the
+        // list, so their reads measure how much of this library is genuinely off-list.
+        uint64_t far_reads = 0;
+        std::vector<uint64_t> near;
+        for (uint64_t key : off) {
+            bool has_neighbour = false;
+            for (int j = 0; j < list.length() && !has_neighbour; ++j) {
+                const int shift = 62 - 2 * j;
+                const uint64_t cur = (key >> shift) & 3u;
+                for (uint64_t b = 0; b < 4; ++b) {
+                    if (b == cur) continue;
+                    if (list.contains((key & ~(uint64_t{3} << shift)) | (b << shift))) {
+                        has_neighbour = true;
+                        break;
+                    }
+                }
+            }
+            if (has_neighbour) {
+                near.push_back(key);
+            } else {
+                ++stats.whitelist.far;
+                far_reads += seen[key];
+            }
+        }
+        stats.whitelist.background_prior =
+            request.whitelist.background_prior >= 0.0
+                ? request.whitelist.background_prior
+                : Whitelist::measure_background(far_reads, total_reads, off.size());
+
+        for (uint64_t key : near) {
+            const std::string observed = unpack_barcode(key, list.length());
+            const std::string fixed =
+                list.correct(observed, quals[key], counts, request.whitelist,
+                             stats.whitelist.background_prior);
+            if (fixed.empty()) {
+                ++stats.whitelist.off_list;
+            } else {
+                cell_remap[key] = pack_barcode(fixed);
+                ++stats.whitelist.corrected;
+                stats.whitelist.reads_corrected += seen[key];
+            }
+        }
+        stats.whitelist.off_list += stats.whitelist.far;
+    }
+
+    auto snap = [&cell_remap](uint64_t key) {
+        if (cell_remap.empty()) return key;
+        auto it = cell_remap.find(key);
+        return it == cell_remap.end() ? key : it->second;
+    };
 
     // ---------------------------------------------------------------- pass 1: the barcode table
     // Counts only. The entry array is not final until every read has been seen, and the evidence
@@ -91,7 +198,9 @@ RefineStats refine(const RefineRequest& request) {
                                  "with " + std::to_string(stats.umi_length) +
                                  " -- these are two runs concatenated, not one sample");
             }
-            counts.add(pack_key(cell, umi));
+            counts.add(cell.empty()
+                           ? pack_barcode(umi)
+                           : pack_key_snapped(snap(pack_barcode(cell)), stats.cell_length, umi));
         }
     }
     if (!stats.umi_length) throw MigecError("refine: no read carried an RX:Z: tag");
@@ -125,7 +234,10 @@ RefineStats refine(const RefineRequest& request) {
             const std::string_view umi = tag_value(rec.comment, "RX:Z:");
             if (umi.empty()) continue;
             const std::string_view cell = tag_value(rec.comment, "CB:Z:");
-            const size_t i = slot(pack_key(cell, umi));
+            const size_t i = slot(cell.empty()
+                                     ? pack_barcode(umi)
+                                     : pack_key_snapped(snap(pack_barcode(cell)),
+                                                        stats.cell_length, umi));
             if (request.use_quality) {
                 // The whole key's quality, cell part first, to line up with the packed key.
                 std::string qx(tag_value(rec.comment, "CY:Z:"));
@@ -190,27 +302,31 @@ RefineStats refine(const RefineRequest& request) {
             const std::string_view umi = tag_value(rec.comment, "RX:Z:");
             if (umi.empty()) continue;
             const std::string_view cell = tag_value(rec.comment, "CB:Z:");
-            const size_t i = slot(pack_key(cell, umi));
+            const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));
+            const size_t i = slot(cell.empty()
+                                     ? pack_barcode(umi)
+                                     : pack_key_snapped(snapped, stats.cell_length, umi));
             const uint32_t root = correction.root[i];
             std::string comment(rec.comment);
-            if (root != i) {
-                // Rewrite RX (and CB, if the substitution landed there) to the parent, and record
-                // what they were. A correction that cannot be audited is one nobody can check.
-                const std::string whole = unpack_barcode(entries[root].key, L);
-                const std::string new_cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
-                const std::string new_umi = whole.substr(static_cast<size_t>(stats.cell_length));
-                if (new_umi != umi) {
-                    const size_t at = comment.find("RX:Z:");
-                    comment.replace(at + 5, umi.size(), new_umi);
-                    comment += "\tOX:Z:";
-                    comment += umi;
-                }
-                if (!cell.empty() && new_cell != cell) {
-                    const size_t at = comment.find("CB:Z:");
-                    comment.replace(at + 5, cell.size(), new_cell);
-                    comment += "\tOC:Z:";
-                    comment += cell;
-                }
+            // The final barcode is the root's, which already carries the whitelist snap because
+            // the snap happened before the table was built. Compare against what the READ said,
+            // not against the root only: a barcode can be snapped by the whitelist without being
+            // merged by the posterior, and rewriting it only in the second case would leave the
+            // CB tag disagreeing with the key everything else was grouped on.
+            const std::string whole = unpack_barcode(entries[root].key, L);
+            const std::string new_cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
+            const std::string new_umi = whole.substr(static_cast<size_t>(stats.cell_length));
+            if (new_umi != umi) {
+                const size_t at = comment.find("RX:Z:");
+                comment.replace(at + 5, umi.size(), new_umi);
+                comment += "\tOX:Z:";
+                comment += umi;
+            }
+            if (!cell.empty() && new_cell != cell) {
+                const size_t at = comment.find("CB:Z:");
+                comment.replace(at + 5, cell.size(), new_cell);
+                comment += "\tOC:Z:";
+                comment += cell;
             }
             writer.write(rec.name, comment, rec.seq, rec.qual);
         }

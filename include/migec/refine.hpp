@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "migec/umi_stats.hpp"
+#include "migec/whitelist.hpp"
 
 namespace migec {
 
@@ -49,6 +50,10 @@ struct RefineRequest {
     // make every comparison against their calls unreachable by construction rather than by
     // measurement.
     int expect_cells = 3000;
+    // Snap cell barcodes to a list of the barcodes that were actually synthesised, before any of
+    // the rest of this runs. Empty disables it.
+    std::string cell_whitelist;
+    WhitelistParams whitelist;
     // Turn the evidence off, to measure what the count ratio alone would have done.
     bool use_quality = true;
     bool use_payload = true;
@@ -76,6 +81,7 @@ struct RefineStats {
     uint32_t cell_threshold = 0;   // molecules a cell needs, from OrdMag
     uint64_t knee_rank = 0;        // where the curve breaks, reported next to the threshold
     uint32_t knee_molecules = 0;
+    WhitelistStats whitelist;
     std::string sample_id;
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.

@@ -34,6 +34,7 @@ add_library(migec_core STATIC
   src/consensus.cpp
   src/refine.cpp
   src/subsample.cpp
+  src/whitelist.cpp
   src/assemble.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)
@@ -58,6 +59,7 @@ if(MIGEC_TESTS)
     tests/cpp/test_checkout.cpp
     tests/cpp/test_checkout_run.cpp
     tests/cpp/test_consensus.cpp
+    tests/cpp/test_whitelist.cpp
   )
   target_link_libraries(migec_tests PRIVATE migec_core)
   target_include_directories(migec_tests PRIVATE tests/cpp)

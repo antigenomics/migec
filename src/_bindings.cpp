@@ -469,7 +469,8 @@ PYBIND11_MODULE(_core, m) {
         "refine",
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
-           int expect_cells, int gzip_level) {
+           int expect_cells, const std::string& cell_whitelist, double min_whitelist_posterior,
+           int gzip_level) {
             RefineRequest req;
             req.input = input;
             req.output_dir = out_dir;
@@ -479,6 +480,8 @@ PYBIND11_MODULE(_core, m) {
             req.payload_width = payload_width;
             req.correction.min_posterior = min_posterior;
             req.expect_cells = expect_cells;
+            req.cell_whitelist = cell_whitelist;
+            req.whitelist.min_posterior = min_whitelist_posterior;
             req.gzip_level = gzip_level;
             RefineStats st;
             {
@@ -506,6 +509,15 @@ PYBIND11_MODULE(_core, m) {
             d["cell_threshold"] = st.cell_threshold;
             d["knee_rank"] = st.knee_rank;
             d["knee_molecules"] = st.knee_molecules;
+            py::dict wl;
+            wl["barcodes"] = st.whitelist.barcodes;
+            wl["exact"] = st.whitelist.exact;
+            wl["corrected"] = st.whitelist.corrected;
+            wl["off_list"] = st.whitelist.off_list;
+            wl["reads_corrected"] = st.whitelist.reads_corrected;
+            wl["far"] = st.whitelist.far;
+            wl["background_prior"] = st.whitelist.background_prior;
+            d["whitelist"] = wl;
             d["table_bytes"] = st.table_bytes;
             d["wall_seconds"] = st.wall_seconds;
             d["peak_rss_bytes"] = peak_rss_bytes();
@@ -523,7 +535,8 @@ PYBIND11_MODULE(_core, m) {
         py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
         py::arg("use_quality") = true, py::arg("use_payload") = true,
         py::arg("payload_width") = 32, py::arg("min_posterior") = 0.95,
-        py::arg("expect_cells") = 3000, py::arg("gzip_level") = 6,
+        py::arg("expect_cells") = 3000, py::arg("cell_whitelist") = std::string(),
+        py::arg("min_whitelist_posterior") = 0.975, py::arg("gzip_level") = 6,
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
         "correction can be audited.");

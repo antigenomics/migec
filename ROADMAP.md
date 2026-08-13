@@ -119,7 +119,11 @@ scientific claim and is validated before any throughput work.
 - [x] **Barcode space and error budget built in** — nominal vs effective space, occupancy, Poisson
       λ, `p_multi`, and the Phred + polymerase error prediction against the distance-1 estimate.
       Logged, warned on, documented, notebooked, tested.
-- [ ] Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded
+- [x] **Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded.**
+      `--cell-whitelist` in `refine`. The background prior is measured from barcodes at distance
+      ≥2 from every entry, and it is a prior on *this barcode* -- the off-list read share divided
+      by the distinct off-list barcodes -- because the whitelist prior is spread over every entry.
+      Snapping scales as `n_parent · e/3`, so it needs a well-used parent *and* a poor base
 - [x] Paired-end input; strand normalisation (tag searched in either mate, pair swapped)
 - [x] Multi-core, byte-identical output at any thread count; compression on the workers
 - [x] Speed and memory reported per run; `tests/benchmark/` regressions

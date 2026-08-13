@@ -143,6 +143,14 @@ def refine(
         "barcodes, over ten. Ignored without cell barcodes. EmptyDrops-style rescue of low-count "
         "cells is Cell Ranger's job and is deliberately not reproduced.",
     ),
+    cell_whitelist: Optional[Path] = typer.Option(
+        None,
+        "--cell-whitelist",
+        help="List of the cell barcodes that were actually synthesised (10x ships one). Observed "
+        "barcodes one substitution away are snapped to it, weighed against the measured prior "
+        "that a barcode is genuinely off-list -- without which every hopped or undeclared barcode "
+        "is absorbed into whichever entry happens to be nearest.",
+    ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
     ),
@@ -159,6 +167,7 @@ def refine(
     summary = run(
         reads, out_dir, sample_id=sample_id, use_quality=not no_quality,
         use_payload=not no_payload, min_posterior=min_posterior, expect_cells=expect_cells,
+        cell_whitelist=cell_whitelist or "",
     )
     typer.echo(format_report(summary))
 
