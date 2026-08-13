@@ -4,6 +4,7 @@
 #ifndef MIGEC_CHECKOUT_HPP
 #define MIGEC_CHECKOUT_HPP
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -46,6 +47,11 @@ struct CheckoutCounters {
     // reverse-complemented (single-end) because the pattern was only found the other way round.
     uint64_t normalised = 0;
     std::vector<uint64_t> per_sample;
+    // Reported Phred over the *barcode* bases, per sample. 61 counters is 488 bytes a sample, and
+    // it is what turns "the estimated error rate is 2.7e-4" into "...against 1.8e-3 predicted by
+    // the quality the instrument reported", which is the comparison that says whether to believe
+    // either number.
+    std::vector<std::array<uint64_t, 61>> umi_phred;
 
     void merge(const CheckoutCounters& o);
 };
@@ -142,7 +148,8 @@ struct CheckoutStats {
     // one output file, one UMI counter. Opening a file per row instead means two handles on one
     // path, whose interleaved writes are not even a valid gzip stream.
     std::vector<std::string> sample_ids;
-    std::vector<uint64_t> sample_reads;  // parallel to sample_ids
+    std::vector<uint64_t> sample_reads;                    // parallel to sample_ids
+    std::vector<std::array<uint64_t, 61>> sample_phred;    // parallel to sample_ids
     std::vector<UmiCounts> umi_counts;   // parallel to sample_ids
     double wall_seconds = 0.0;
     double reads_per_second = 0.0;

@@ -79,6 +79,11 @@ scientific claim and is validated before any throughput work.
 - [x] UMI extraction from non-contiguous runs, trimming, SAM-style header transfer
 - [x] Coverage histogram, composition/entropy/information, collision entropy, count correction
 - [ ] Bit-parallel matcher (the current scan is O(offsets x pattern) and is not the bottleneck yet)
+- [x] **`suggest`** — per-cycle PWM segmented into UMI / constant / payload, paste-ready pattern.
+      Done early (2026-08-13) because X2 needed it; recovered SRR1763769's layout unaided.
+- [x] **Barcode space and error budget built in** — nominal vs effective space, occupancy, Poisson
+      λ, `p_multi`, and the Phred + polymerase error prediction against the distance-1 estimate.
+      Logged, warned on, documented, notebooked, tested.
 - [ ] Whitelists with a background hypothesis in the posterior; `N` expanded, not discarded
 - [x] Paired-end input; strand normalisation (tag searched in either mate, pair swapped)
 - [x] Multi-core, byte-identical output at any thread count; compression on the workers

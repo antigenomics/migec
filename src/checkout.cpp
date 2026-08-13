@@ -25,11 +25,16 @@ void CheckoutCounters::merge(const CheckoutCounters& o) {
     normalised += o.normalised;
     if (per_sample.size() < o.per_sample.size()) per_sample.resize(o.per_sample.size(), 0);
     for (size_t i = 0; i < o.per_sample.size(); ++i) per_sample[i] += o.per_sample[i];
+    if (umi_phred.size() < o.umi_phred.size()) umi_phred.resize(o.umi_phred.size());
+    for (size_t i = 0; i < o.umi_phred.size(); ++i) {
+        for (size_t q = 0; q < 61; ++q) umi_phred[i][q] += o.umi_phred[i][q];
+    }
 }
 
 Checkout::Checkout(const PatternSet& patterns, CheckoutParams params)
     : patterns_(patterns), params_(std::move(params)) {
     counters_.per_sample.assign(patterns.size(), 0);
+    counters_.umi_phred.assign(patterns.size(), {});
 }
 
 std::string Checkout::header_tags(const std::string& umi, const std::string& umi_qual,
@@ -168,6 +173,7 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     ++counters_.assigned;
     if (normalised) ++counters_.normalised;
     ++counters_.per_sample[static_cast<size_t>(a.sample)];
+    for (char ch : m.umi_qual) ++counters_.umi_phred[static_cast<size_t>(a.sample)][phred_from_char(ch)];
     return out;
 }
 
@@ -512,7 +518,12 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     for (const Worker& w : workers) stats.counters.merge(w.co->counters());
     stats.counters.per_sample.resize(n_samples, 0);
     stats.sample_reads.assign(n_files, 0);
-    for (size_t i = 0; i < n_samples; ++i) stats.sample_reads[file_of[i]] += stats.counters.per_sample[i];
+    stats.sample_phred.assign(n_files, {});
+    stats.counters.umi_phred.resize(n_samples);
+    for (size_t i = 0; i < n_samples; ++i) {
+        stats.sample_reads[file_of[i]] += stats.counters.per_sample[i];
+        for (size_t q = 0; q < 61; ++q) stats.sample_phred[file_of[i]][q] += stats.counters.umi_phred[i][q];
+    }
     stats.wall_seconds = clock.seconds();
     stats.reads_per_second =
         stats.wall_seconds > 0.0 ? static_cast<double>(stats.counters.total) / stats.wall_seconds

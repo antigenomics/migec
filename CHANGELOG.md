@@ -6,6 +6,60 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased — 2.0.0.dev0
 
+### `migec suggest`: read the barcode layout off the reads
+
+A UMI cycle is one the synthesiser mixed — all four bases near 1/4, ~2 bits. A constant cycle is
+one base near 100%. `suggest` segments the per-cycle composition on that and prints a paste-ready
+pattern. On `SRR1763769`, with nothing supplied but the FASTQ, it recovered a 9 nt Primer ID
+followed by `CAGTTTAACTTTTGGGCCAT`, and checking that pattern out assigned 95.0% of reads.
+
+⚠ The pattern stops at the last *constant* run. Composition alone cannot tell a UMI from diverse
+payload — both are four flat lines at 25% — and what separates them is that a barcode is anchored
+and payload is not. A uniform run with nothing constant after it is reported in the note and left
+out, because claiming it would produce a pattern that matches everywhere.
+
+### The barcode space and the error budget, reported on every run
+
+Both were arithmetic anyone could do from the existing output and nobody did, and both change what
+the numbers mean.
+
+**Barcode space.** `4^L` over the *captured* positions (`NNNNtNNNNtNNNN` captures 12, not 14) is
+nominal; a real oligo mix is not 25/25/25/25, so the usable space is `1 / Π_j Σ_a p_j(a)²` and
+`bias_loss` is the shortfall. From there the birthday problem in the form that survives a full
+space: molecules land independently, so occupancy is Poisson, `occupied = S(1 − e^−λ)` pins λ, and
+**`p_multi` = P(k>1 | k≥1)** is the fraction of MIGs that are two or more molecules pooled. That is
+the number that matters — their consensus is a mixture of templates and over-sequencing cannot fix
+it. `checkout` warns past 5%.
+
+**Error budget.** The distance-1 estimate is now printed next to what predicts it: `⟨10^(−Q/10)⟩`
+over the barcode bases plus `ε_pol × cycles`. ⚠ The Phred term is the mean of the *probabilities*,
+not `10^(−mean Q/10)` — the function is convex, so half at Q40 and half at Q10 is 5%, not the 0.3%
+"mean Q25" suggests.
+
+Written to `checkout.barcode_space.tsv` and `checkout.umi_quality.tsv`, warned on in the report,
+derived in `docs/barcode_space.rst`, drawn in `notebooks/barcode_space.py`, tested in
+`tests/synthetic/test_barcode_space.py`.
+
+### Two errors the checks found
+
+⛔ **The UMI error estimator was 3× low, everywhere.** Its expected-children term used ε where it
+had to use ε/3: a sequencing miscall has to land on one specific alternative base out of three, and
+using ε makes the expectation 3× too large and the solved rate 3× too small. Against an injected
+3·10⁻³ it returned 0.31× at every occupancy from 0.3% up. It now returns 0.92×.
+
+⛔ **...and it fails downward as the barcode space fills.** The estimator subtracts the coincidence
+expectation from the observed distance-1 pair count; once most of a barcode's 3L neighbours are
+themselves real barcodes, that is a small difference of two large numbers. Measured against the
+same injected rate: 0.92× at 0.3% occupancy, 0.65× at 16%, 0.23× at 50%, 0.001× at 93%. The
+collapse is always downward, so a crowded library under-reports its own barcode error and
+under-corrects. `err_unreliable` is set past 5% neighbourhood occupancy.
+
+**The birthday prediction checks out to within a factor of two, in the direction it should.**
+`scripts/collision_check.py` measures collisions model-free — two molecules sharing a barcode with
+different sequences are visible in the reads — and finds 1.86× the prediction on the HIV library.
+`Π_j m_j` assumes the positions are independent and is a *lower* bound on the collision
+probability, so more collisions than predicted is what a real synthesiser should produce.
+
 ### Audit fixes
 
 A read of the checkout path start to finish, each finding reproduced before it was fixed.

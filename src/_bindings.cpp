@@ -13,6 +13,7 @@
 #include "migec/mig_record.hpp"
 #include "migec/pattern.hpp"
 #include "migec/resource.hpp"
+#include "migec/suggest.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
 #include "migec/version.hpp"
@@ -168,6 +169,51 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
 
         const CorrectionResult cr = correct_umis(umi_counts[i]);
         s["umi_error_rate"] = cr.estimated_error;
+
+        // The barcode space, as the birthday problem sees it: how full it is, how many molecules
+        // that implies, and how many MIGs are really two molecules pooled.
+        const BarcodeSpace bs = barcode_space(comp, umi_counts[i].distinct());
+        py::dict space;
+        space["length"] = bs.length;
+        space["nominal_space"] = bs.nominal_space;
+        space["effective_space"] = bs.effective_space;
+        space["effective_length"] = bs.effective_length;
+        space["bias_loss"] = bs.bias_loss;
+        space["observed"] = bs.observed;
+        space["occupancy"] = bs.occupancy;
+        space["lambda"] = bs.lambda;
+        space["molecules"] = bs.molecules;
+        space["hidden"] = bs.hidden;
+        space["p_multi"] = bs.p_multi;
+        space["saturated"] = bs.saturated;
+        s["barcode_space"] = space;
+
+        // ...and the error budget: what the reported Phred and the polymerase predict, against
+        // what the distance-1 excess actually found.
+        const ErrorBudget eb =
+            error_budget(comp, stats.sample_phred[i], cr.estimated_error, umi_counts[i].distinct());
+        py::dict budget;
+        budget["from_phred"] = eb.from_phred;
+        budget["mean_phred"] = eb.mean_phred;
+        budget["from_polymerase"] = eb.from_polymerase;
+        budget["predicted"] = eb.predicted;
+        budget["estimated"] = eb.estimated;
+        budget["ratio"] = eb.ratio;
+        budget["barcodes_with_error"] = eb.barcodes_with_error;
+        budget["neighbour_occupancy"] = eb.neighbour_occupancy;
+        budget["estimate_unreliable"] = eb.estimate_unreliable;
+        s["error_budget"] = budget;
+
+        py::list phred;
+        for (int q = 0; q <= 60; ++q) {
+            if (stats.sample_phred[i][static_cast<size_t>(q)]) {
+                py::dict d;
+                d["phred"] = q;
+                d["bases"] = stats.sample_phred[i][static_cast<size_t>(q)];
+                phred.append(d);
+            }
+        }
+        s["umi_phred"] = phred;
         s["umis_merged"] = cr.merged;
         s["reads_merged"] = cr.merged_reads;
         s["molecules_observed"] = cr.molecules_observed;
@@ -268,6 +314,60 @@ PYBIND11_MODULE(_core, m) {
           "statistics, and the wall clock, throughput and peak RSS of the run. The whole file is "
           "processed in C++ with the GIL released, across `threads` workers (0 = one per core); "
           "the output is byte-identical whatever that is set to.");
+
+    m.def(
+        "suggest",
+        [](const std::string& path, int cycles, uint64_t max_reads, double umi_deviation) {
+            Suggestion sg;
+            {
+                py::gil_scoped_release release;
+                sg = suggest_pattern(profile_cycles(path, cycles, max_reads), umi_deviation);
+            }
+            py::dict d;
+            d["pattern"] = sg.pattern;
+            d["umi_length"] = sg.umi_length;
+            d["anchor_length"] = sg.anchor_length;
+            d["note"] = sg.note;
+            d["reads"] = sg.profile.reads;
+            d["read_length"] = sg.profile.read_length;
+            py::list cyc;
+            for (const CycleStats& c : sg.profile.cycles) {
+                const std::array<double, 4> f = c.frequencies();
+                py::dict e;
+                e["cycle"] = c.cycle;
+                e["A"] = f[0];
+                e["C"] = f[1];
+                e["G"] = f[2];
+                e["T"] = f[3];
+                e["entropy"] = c.entropy();
+                e["collision"] = c.collision();
+                e["consensus"] = std::string(1, c.consensus());
+                e["consensus_fraction"] = c.consensus_fraction();
+                e["deviation"] = c.deviation_from_uniform() / 2.0;
+                e["mean_phred"] = c.mean_phred();
+                cyc.append(e);
+            }
+            d["cycles"] = cyc;
+            py::list segs;
+            for (const Segment& sm : sg.segments) {
+                py::dict e;
+                e["kind"] = sm.kind == CycleKind::kUmi ? "umi"
+                            : sm.kind == CycleKind::kConstant ? "constant" : "variable";
+                e["begin"] = sm.begin;
+                e["end"] = sm.end;
+                e["length"] = sm.length();
+                e["consensus"] = sm.consensus;
+                e["mean_deviation"] = sm.mean_deviation;
+                segs.append(e);
+            }
+            d["segments"] = segs;
+            return d;
+        },
+        py::arg("path"), py::arg("cycles") = 60, py::arg("max_reads") = 200000,
+        py::arg("umi_deviation") = 0.18,
+        "Read the barcode layout off the reads: per-cycle base composition, segmented into UMI "
+        "(all four bases near 1/4), constant (one base near 1) and variable runs, and a "
+        "paste-ready pattern.");
 
     m.def("peak_rss_bytes", &peak_rss_bytes,
           "Peak resident set size of this process in bytes, 0 if the platform will not say.");

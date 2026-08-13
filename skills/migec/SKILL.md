@@ -54,9 +54,19 @@ migec checkout ... -t 8                                 # threads; output identi
 migec checkout ... --trim none                          # keep the read whole, UMI in header only
 migec checkout ... --min-umi-quality 15                 # MIGEC v1 behaviour; NOT the default
 migec checkout ... --write-unmatched
+migec suggest reads.fq.gz -o out/                       # where is the barcode? read it off the data
+migec suggest reads.fq.gz --cycles 40 --umi-deviation 0.18
 migec sheet barcodes.txt
 migec info
 ```
+
+`suggest` before `checkout` when the layout is unknown or the protocol description is doubtful. It
+segments the per-cycle base composition: a UMI cycle is one the synthesiser mixed (all four bases
+near 1/4, ~2 bits), a constant cycle is one base near 100%, the rest is payload. It prints a
+paste-ready pattern. ⚠ It stops the pattern at the last *constant* run — a uniform stretch with no
+anchor after it is what diverse payload looks like, and claiming it would give a pattern that
+matches everywhere. If the UMI is genuinely 3', raise `--cycles`. For paired data with no UMI in R1,
+try R2; the note says so.
 
 Python:
 
@@ -65,9 +75,13 @@ from migec.checkout import run, format_report
 summary = run("reads.fq.gz", "barcodes.txt", "out/", reads2=None, threads=0)
 print(format_report(summary))
 
+from migec.suggest import run as suggest_run, format_report as suggest_report
+print(suggest_report(suggest_run("reads.fq.gz", cycles=40)))
+
 from migec import _core
 _core.match_pattern("aaACTcagtggtatcaacgcagagtNNNNtNNNNtNNNN", seq, qual)  # inspect one read
 _core.umi_statistics(["ACGTACGTACGT", ...])                                 # histogram + entropy
+_core.suggest("reads.fq.gz", cycles=60)                                     # per-cycle PWM + pattern
 ```
 
 ## Output
@@ -78,7 +92,11 @@ _core.umi_statistics(["ACGTACGTACGT", ...])                                 # hi
 | `checkout.summary.tsv` | per sample: yields, UMI stats, correction, saturation |
 | `checkout.coverage.tsv` | reads and distinct UMIs per power-of-two MIG size |
 | `checkout.umi_composition.tsv` | per position: A/C/G/T, entropy, information, collision |
+| `checkout.barcode_space.tsv` | nominal vs effective space, occupancy, λ, molecules, `p_multi`, the error budget |
+| `checkout.umi_quality.tsv` | reported Phred histogram over barcode bases |
 | `checkout.json` | all of the above, machine-readable |
+| `suggest.cycles.tsv` | per cycle: A/C/G/T, entropy, collision, 1/4 deviation, mean Q |
+| `suggest.segments.tsv` | the UMI / constant / variable runs and their consensus |
 
 Header format: `@<name> RX:Z:<umi>\tQX:Z:<umi qual>\tBC:Z:<sample>`. Both mates carry the tags.
 
@@ -106,6 +124,41 @@ downstream Python tool needs must be in the read *name*.
 `Π_j Σ_a p_j(a)²`. Since H₂ ≤ H₁, Shannon overstates the usable space and understates collisions —
 the direction that silently merges distinct molecules. Shannon is for the logo; the collision form
 is for every decision.
+
+### The barcode space and the birthday problem (`checkout.barcode_space.tsv`)
+
+- `nominal_space` — `4^L` over the *captured* positions. `NNNNtNNNNtNNNN` captures 12, not 14: the
+  `t`s are scored pattern positions, not barcode.
+- `effective_space`, `bias_loss` — what the observed base composition supports, and how much the
+  synthesiser mix cost. A real oligo "N" is not 25/25/25/25.
+- `occupancy`, `lambda`, `molecules` — molecules land independently, so occupancy is Poisson and
+  what you see is the *occupied* count: `occupied = S(1 − e^−λ)`, `molecules = S·λ`.
+- **`p_multi`** — `P(k>1 | k≥1)`, the fraction of MIGs that are two or more molecules pooled. This
+  is the number to read. Their consensus is a mixture of templates, and over-sequencing cannot fix
+  it. `checkout` warns past 5%.
+- `saturated` — past 90% occupancy the estimate is declined, because `S` is inferred from the
+  observed barcodes and the inversion would report "no collisions" for the most collided library
+  there can be.
+
+⚠ `Π_j m_j` assumes the positions are independent, so it is a *lower* bound on the collision
+probability. Measured against a model-free count on real data (`scripts/collision_check.py`),
+collisions ran **1.86×** the prediction.
+
+### The error budget (same file)
+
+`err_estimated` comes from the excess of barcode pairs at Hamming distance 1. `err_predicted` is
+`⟨10^(−Q/10)⟩ + ε_pol·cycles`.
+
+⚠ **The Phred term is the mean of the probabilities, not `10^(−mean Q/10)`.** The function is
+convex, so the low-Q tail carries nearly all the error: half at Q40 and half at Q10 is 5%, not the
+0.3% "mean Q25" suggests.
+
+⛔ **The distance-1 estimator has a working range, and fails downward.** It subtracts the
+coincidence expectation from the observed pair count; once a barcode's `3L` neighbours are mostly
+real barcodes that is a small difference of two large numbers. Against an injected 3·10⁻³ it
+recovered 0.92× at 0.3% occupancy, 0.65× at 16%, 0.23× at 50%, 0.001× at 93%. `err_unreliable` is
+set past 5% neighbourhood occupancy — **do not quote the estimate when it is set**, quote the
+prediction and say the barcode is too short.
 
 ## Things that look like defects and are not
 

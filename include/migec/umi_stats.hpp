@@ -66,6 +66,84 @@ struct UmiComposition {
     double expected_collisions(double n_molecules) const;
 };
 
+// ---------------------------------------------------------------------------------------------
+// How full the barcode space is, and what that costs. Every field here is arithmetic on the
+// composition and the observed count -- no fitting -- but it is the arithmetic that decides
+// whether a molecule count means anything, so it is reported rather than left to the reader.
+//
+// Molecules land in the barcode space independently, so occupancy per barcode is Poisson(lambda).
+// What is observed is the number of *occupied* barcodes, and that is what pins lambda:
+//
+//     occupied = S (1 - e^-lambda)   =>   lambda = -ln(1 - observed/S),   molecules = S * lambda
+//
+// This is the birthday problem in its useful form. The naive "expected collided pairs ~ n^2/2S" is
+// its small-lambda limit and is badly wrong once the space is half full, which is exactly when
+// somebody wants the number.
+struct BarcodeSpace {
+    // The nominal space is 4^L over the L *captured* positions. Fixed letters written between the
+    // N runs are not part of it: `NNNNtNNNNtNNNN` captures 12 bases, not 14, and its nominal space
+    // is 4^12. The t's are scored pattern positions like any other constant.
+    int length = 0;                 // L, the number of captured positions
+    double nominal_space = 0.0;     // 4^L, if the synthesiser were perfect
+    // ...which it is not. An oligo synthesiser mixing "N" does not deliver 25% of each base, so
+    // the usable space is always smaller than 4^L. `effective_space` is what the observed base
+    // composition actually supports, and `bias_loss` is how much was lost to that skew.
+    double effective_space = 0.0;   // 1 / prod_j m_j  <=  4^L
+    double effective_length = 0.0;  // -sum_j log4(m_j)  <=  L
+    double bias_loss = 0.0;         // 1 - effective_space / nominal_space
+    uint64_t observed = 0;          // distinct barcodes seen
+    double occupancy = 0.0;         // observed / effective_space
+    double lambda = 0.0;            // molecules per barcode
+    double molecules = 0.0;         // S * lambda: the collision-corrected molecule count
+    double hidden = 0.0;            // molecules - observed: molecules no barcode reports
+    // P(a barcode holds more than one molecule | it holds at least one). This is the fraction of
+    // MIGs that are really two or more molecules pooled, and it is the number that says whether a
+    // consensus per barcode is meaningful at all.
+    double p_multi = 0.0;
+    // Beyond this occupancy the estimates above stop being estimates: S is inferred from the
+    // observed barcodes, so as the space fills, `molecules` collapses onto `observed` and would
+    // report "no collisions" for the most collided library possible.
+    bool saturated = false;
+};
+
+BarcodeSpace barcode_space(const UmiComposition& comp, uint64_t observed_barcodes,
+                           double saturation = 0.9);
+
+// ---------------------------------------------------------------------------------------------
+// What the barcode error rate *should* be, from first principles, next to what was estimated.
+//
+// Two independent processes put a substitution in a barcode, and they are predicted by things we
+// already know rather than fitted:
+//
+//   sequencing -- the reported Phred, averaged as the mean of 10^(-Q/10) over the barcode bases.
+//                 Not 10^(-mean Q/10): the low-Q tail dominates the error and averaging Q first
+//                 hides it. On a 2-colour instrument the nominal value is itself unreliable, which
+//                 is why the measured calibration table exists -- see MatchParams.
+//   polymerase -- eps_pol per base per cycle, over the cycles that matter.
+//
+// Their sum is what the distance-1 estimator has to reproduce. When it does not, one of them is
+// wrong, and the ratio says which way.
+struct ErrorBudget {
+    double from_phred = 0.0;     // mean 10^(-Q/10) over observed barcode bases
+    double mean_phred = 0.0;     // the (misleading) arithmetic mean of Q, for contrast
+    double from_polymerase = 0.0;  // eps_pol * cycles
+    double predicted = 0.0;      // the two together
+    double estimated = 0.0;      // what estimate_umi_error() found in the data
+    double ratio = 0.0;          // estimated / predicted
+    // Fraction of barcodes expected to carry at least one error: 1 - (1 - predicted)^L.
+    double barcodes_with_error = 0.0;
+    // The distance-1 estimator subtracts the independent-pair expectation from the observed pair
+    // count. Once most of a barcode's 3L neighbours are themselves real barcodes, that is a small
+    // difference of two large numbers and the estimate collapses towards zero. Measured on
+    // simulated data: 0.9x of truth at 4% occupancy, 0.25x at 50%, 0.001x at 93%.
+    double neighbour_occupancy = 0.0;  // fraction of the 3L shell expected to be occupied
+    bool estimate_unreliable = false;
+};
+
+ErrorBudget error_budget(const UmiComposition& comp, const std::array<uint64_t, 61>& phred_counts,
+                         double estimated, uint64_t observed_barcodes,
+                         double polymerase_error = 1e-5, int pcr_cycles = 25);
+
 // Observed UMI counts. Keys are packed barcodes (see types.hpp).
 //
 // Storage is a bounded append buffer that is periodically sorted and run-length reduced into a

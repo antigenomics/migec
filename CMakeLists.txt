@@ -30,6 +30,7 @@ add_library(migec_core STATIC
   src/pattern.cpp
   src/umi_stats.cpp
   src/checkout.cpp
+  src/suggest.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)
 target_link_libraries(migec_core PUBLIC Threads::Threads ZLIB::ZLIB)

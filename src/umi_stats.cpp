@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <array>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
@@ -278,10 +279,17 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
     if (excess <= 0.0) return 0.0;
 
     // Bisect on log(eps) against the parent-child plus sibling expectation.
+    //
+    // For one parent with c reads and one specific neighbour (position j, base b), the chance some
+    // read carries *that* error is 1 - (1 - eps/3)^c ~ 1 - exp(-c eps/3): eps/3, not eps, because a
+    // miscall has to land on that one alternative base out of three. There are 3L such neighbours,
+    // hence the 3L factor outside. Using eps in the exponent makes the expectation 3x too large at
+    // small c*eps and so returns an eps 3x too small -- which it did, uniformly, at every
+    // occupancy from 0.3% upwards.
     auto expected = [&](double eps) {
         double parent_child = 0.0, sibling = 0.0;
         for (const UmiCounts::Entry& e : m) {
-            const double t = 1.0 - std::exp(-static_cast<double>(e.count) * eps);
+            const double t = 1.0 - std::exp(-static_cast<double>(e.count) * eps / 3.0);
             parent_child += t;
             sibling += t * t;
         }
@@ -300,6 +308,77 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp) {
         }
     }
     return std::sqrt(lo * hi);
+}
+
+BarcodeSpace barcode_space(const UmiComposition& comp, uint64_t observed_barcodes,
+                           double saturation) {
+    BarcodeSpace b;
+    b.length = comp.length;
+    b.nominal_space = std::pow(4.0, static_cast<double>(comp.length));
+    b.effective_space = comp.effective_space();
+    b.effective_length = comp.effective_length();
+    b.bias_loss = b.nominal_space > 0.0 ? 1.0 - b.effective_space / b.nominal_space : 0.0;
+    b.observed = observed_barcodes;
+    const double n = static_cast<double>(observed_barcodes);
+    const double S = b.effective_space;
+    if (S <= 0.0 || n <= 0.0) return b;
+
+    b.occupancy = n / S;
+    b.saturated = b.occupancy >= saturation;
+    if (b.saturated) {
+        // S is inferred from the observed barcodes, so at saturation the inversion collapses onto
+        // the observed count and would report "no collisions" for the most collided library there
+        // can be. Decline rather than mislead; the fields stay at their observed values.
+        b.molecules = n;
+        b.lambda = 0.0;
+        return b;
+    }
+    b.lambda = -std::log1p(-b.occupancy);
+    b.molecules = S * b.lambda;
+    b.hidden = b.molecules - n;
+    // P(k > 1 | k >= 1) for k ~ Poisson(lambda).
+    const double e = std::exp(-b.lambda);
+    const double occupied = 1.0 - e;
+    b.p_multi = occupied > 0.0 ? (occupied - b.lambda * e) / occupied : 0.0;
+    return b;
+}
+
+ErrorBudget error_budget(const UmiComposition& comp, const std::array<uint64_t, 61>& phred_counts,
+                         double estimated, uint64_t observed_barcodes, double polymerase_error,
+                         int pcr_cycles) {
+    ErrorBudget b;
+    uint64_t total = 0;
+    double sum_e = 0.0, sum_q = 0.0;
+    for (int q = 0; q <= kMaxPhred; ++q) {
+        const uint64_t n = phred_counts[static_cast<size_t>(q)];
+        if (!n) continue;
+        total += n;
+        sum_e += static_cast<double>(n) * phred_error(static_cast<uint8_t>(q));
+        sum_q += static_cast<double>(n) * q;
+    }
+    if (total) {
+        // The mean of 10^(-Q/10), not 10^(-mean Q/10). Averaging Q first hides the low-Q tail,
+        // which is where nearly all of the error is.
+        b.from_phred = sum_e / static_cast<double>(total);
+        b.mean_phred = sum_q / static_cast<double>(total);
+    }
+    b.from_polymerase = polymerase_error * std::max(1, pcr_cycles);
+    b.predicted = b.from_phred + b.from_polymerase;
+    b.estimated = estimated;
+    b.ratio = b.predicted > 0.0 ? estimated / b.predicted : 0.0;
+    if (comp.length > 0 && b.predicted > 0.0 && b.predicted < 1.0) {
+        b.barcodes_with_error = 1.0 - std::pow(1.0 - b.predicted, comp.length);
+    }
+    // The distance-1 shell around a barcode holds 3L neighbours. If a large share of those are
+    // themselves real barcodes, the observed pair count is dominated by coincidence and the excess
+    // the estimator reads is a small difference of two large numbers.
+    const double S = comp.effective_space();
+    if (S > 0.0 && comp.length > 0) {
+        const double occ = static_cast<double>(observed_barcodes) / S;
+        b.neighbour_occupancy = occ > 1.0 ? 1.0 : occ;
+        b.estimate_unreliable = b.neighbour_occupancy > 0.05;
+    }
+    return b;
 }
 
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params) {

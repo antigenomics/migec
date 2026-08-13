@@ -39,6 +39,14 @@ sphinx-build -W --keep-going -b html docs docs/_build/html      # zero warnings 
 These exist because the alternative was tried, or because a first-pass design got it wrong and the
 correction is written up in `project/review-algorithms.md`.
 
+- ⛔ **Every model-derived number is reported next to something that checks it.** The birthday
+  collision rate has `scripts/collision_check.py` (model-free, from the sequences); the barcode
+  error estimate has the Phred + polymerase prediction; the emitted quality has the measured RT
+  floor. A formula that nothing tests is a formula that will be wrong silently — all three of
+  these were, and the check is what found it.
+- ⛔ **The distance-1 barcode-error estimator fails downward as the space fills** (0.92x of truth
+  at 0.3% occupancy, 0.23x at 50%, 0.001x at 93%). `err_unreliable` is set past 5% neighbourhood
+  occupancy. Never quote the estimate when it is set.
 - ⛔ **Five commands: `checkout`, `suggest`, `refine`, `assemble`, plus `sort`/`subsample`.** A
   sixth command or a new CLI flag requires a *failing benchmark that the default cannot pass*.
   Constants live in headers next to the measurement that justifies them, so adding a flag means
@@ -126,8 +134,18 @@ correction is written up in `project/review-algorithms.md`.
   still fits per dataset (the floor is a property of the enzyme and cycle count), but the
   **default is 1e-4**. ⚠ Still an upper bound — that library is 49.6% occupied on a 9 nt barcode
   and `checkout` calls it saturated, so collisions inflate it. `docs/quality_floor.rst`.
+- **`migec suggest` is implemented** (2026-08-13), ahead of its M4 slot, because X2 needed it: it
+  segments the per-cycle base composition into UMI (all four bases near 1/4), constant and payload
+  runs and prints a paste-ready pattern. Recovered the 9 nt + `CAGTTTAACTTTTGGGCCAT` layout of
+  SRR1763769 unaided. ⚠ It stops the pattern at the last *constant* run — composition alone cannot
+  tell a UMI from diverse payload, only the anchor can.
+- **The barcode-space and error-budget arithmetic is built in**, logged to
+  `checkout.barcode_space.tsv` / `checkout.umi_quality.tsv`, warned on, documented in
+  `docs/barcode_space.rst`, drawn in `notebooks/barcode_space.py` and tested in
+  `tests/synthetic/test_barcode_space.py`.
 - Next: **X3** (the three permutation nulls — blocks M3's error model), then **M1** (`assemble`:
-  overlap components per X1, consensus, quality capped per X2).
+  overlap components per X1, consensus, quality capped per X2). X3's first null is partly answered
+  already: collisions run 1.86x the independent-positions prediction.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point
   `~/backup/migec-local-mirror-2026-08-13.git`. ⚠ The canonical repo is **antigenomics/migec**;
   `mikessh/migec` is a redirect, and `gh` commands must use the former.

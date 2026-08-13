@@ -78,6 +78,35 @@ def _write_tables(out: Path, summary: dict) -> None:
                 if reads or units:
                     fh.write(f"{s['sample_id']}\t{2**b}\t{reads}\t{units}\n")
 
+    # The birthday arithmetic and the error budget: every number here is derived from the two
+    # above, but they are the numbers that say whether a molecule count means anything.
+    with open(out / "checkout.barcode_space.tsv", "w") as fh:
+        fh.write(
+            "sample_id\tumi_length\tnominal_space\teffective_space\teffective_length\tbias_loss\t"
+            "observed_barcodes\toccupancy\tlambda\tmolecules\thidden\tp_multi\tsaturated\t"
+            "err_from_phred\tmean_phred\terr_from_polymerase\terr_predicted\terr_estimated\t"
+            "err_ratio\tbarcodes_with_error\tneighbour_occupancy\terr_unreliable\n"
+        )
+        for x in summary["samples"]:
+            b, e = x["barcode_space"], x["error_budget"]
+            fh.write(
+                f"{x['sample_id']}\t{b['length']}\t{b['nominal_space']:.0f}\t"
+                f"{b['effective_space']:.1f}\t{b['effective_length']:.4f}\t{b['bias_loss']:.6f}\t"
+                f"{b['observed']}\t{b['occupancy']:.6f}\t{b['lambda']:.6f}\t"
+                f"{b['molecules']:.1f}\t{b['hidden']:.1f}\t{b['p_multi']:.6f}\t"
+                f"{int(b['saturated'])}\t{e['from_phred']:.6e}\t{e['mean_phred']:.2f}\t"
+                f"{e['from_polymerase']:.6e}\t{e['predicted']:.6e}\t{e['estimated']:.6e}\t"
+                f"{e['ratio']:.4f}\t{e['barcodes_with_error']:.6f}\t"
+                f"{e['neighbour_occupancy']:.6f}\t{int(e['estimate_unreliable'])}\n"
+            )
+
+    # Reported Phred over the barcode bases -- the input to the predicted error rate.
+    with open(out / "checkout.umi_quality.tsv", "w") as fh:
+        fh.write("sample_id\tphred\tbases\terror_probability\n")
+        for x in summary["samples"]:
+            for q in x["umi_phred"]:
+                fh.write(f"{x['sample_id']}\t{q['phred']}\t{q['bases']}\t{10 ** (-q['phred'] / 10):.6e}\n")
+
     # Per-position base usage and information content -- the numbers a sequence logo draws.
     with open(out / "checkout.umi_composition.tsv", "w") as fh:
         fh.write("sample_id\tposition\tA\tC\tG\tT\tentropy_bits\tinformation_bits\tcollision\n")
@@ -132,6 +161,21 @@ def format_report(summary: dict) -> str:
             f"{s['mean_reads_per_umi']:>11.2f}{s['umi_length']:>9}{s['effective_length']:>9.2f}"
         )
 
+    # The birthday arithmetic, per sample. Occupancy is the number that decides whether the
+    # molecule count means anything, and it is not visible from reads/UMI alone.
+    lines.append("")
+    lines.append(
+        f"{'sample':<12}{'space':>13}{'occupancy':>11}{'MIGs >1 mol':>13}{'molecules':>12}"
+        f"{'err pred':>11}{'err est':>10}"
+    )
+    for s in summary["samples"]:
+        b, e = s["barcode_space"], s["error_budget"]
+        lines.append(
+            f"{s['sample_id']:<12}{b['effective_space']:>13,.0f}{100 * b['occupancy']:>10.1f}%"
+            f"{100 * b['p_multi']:>12.1f}%{b['molecules']:>12,.0f}"
+            f"{e['predicted']:>11.1e}{e['estimated']:>10.1e}"
+        )
+
     warnings = []
     # The UMI counters are the one allocation that grows with the library rather than with the
     # chunk size, so they are the thing that decides whether a run fits. Range partitioning is
@@ -169,6 +213,37 @@ def format_report(summary: dict) -> str:
             warnings.append(
                 f"{s['sample_id']}: observed UMIs are a large fraction of the usable space; "
                 f"molecule counts are biased low and correction is deliberately conservative"
+            )
+        b, e = s["barcode_space"], s["error_budget"]
+        # The birthday problem is not a warning until it is: a barcode space that is 30% full puts
+        # a sixth of all MIGs on two or more molecules, and no consensus repairs that.
+        if b["p_multi"] > 0.05:
+            warnings.append(
+                f"{s['sample_id']}: {100 * b['p_multi']:.0f}% of MIGs hold more than one molecule "
+                f"({100 * b['occupancy']:.0f}% of a {b['effective_space']:,.0f} barcode space is "
+                f"occupied). Their consensus is a mixture of templates, not a molecule"
+            )
+        if b["bias_loss"] > 0.25:
+            warnings.append(
+                f"{s['sample_id']}: base composition costs {100 * b['bias_loss']:.0f}% of the "
+                f"barcode space -- 4^{b['length']} = {b['nominal_space']:,.0f} nominal against "
+                f"{b['effective_space']:,.0f} usable. That is the synthesiser mix, and it makes "
+                f"collisions more frequent than the length suggests"
+            )
+        if e["estimate_unreliable"]:
+            warnings.append(
+                f"{s['sample_id']}: the barcode error estimate ({e['estimated']:.1e}) is not "
+                f"reliable here -- {100 * e['neighbour_occupancy']:.0f}% of each barcode's "
+                f"1-substitution neighbourhood is itself occupied, so the distance-1 excess it "
+                f"reads is a small difference of two large numbers. Phred and polymerase predict "
+                f"{e['predicted']:.1e}"
+            )
+        elif e["predicted"] > 0 and not 0.3 < e["ratio"] < 3.0:
+            warnings.append(
+                f"{s['sample_id']}: barcode error estimated at {e['estimated']:.1e} against "
+                f"{e['predicted']:.1e} predicted from the reported Phred ({e['from_phred']:.1e}) "
+                f"and polymerase ({e['from_polymerase']:.1e}) -- {e['ratio']:.2f}x. One of the two "
+                f"is wrong; on a 2-colour instrument suspect the nominal Phred first"
             )
     if warnings:
         lines.append("")

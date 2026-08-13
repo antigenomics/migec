@@ -102,10 +102,26 @@ def sheet(
 
 @app.command()
 def suggest(
-    reads: Optional[Path] = typer.Argument(None),
+    reads: Path = typer.Argument(..., help="FASTQ to profile. For paired data try both mates."),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Write suggest.cycles.tsv, suggest.segments.tsv, suggest.json."
+    ),
+    cycles: int = typer.Option(60, "--cycles", help="Leading cycles to profile."),
+    max_reads: int = typer.Option(
+        200_000, "--max-reads", help="Reads to profile. The composition converges long before this."
+    ),
+    umi_deviation: float = typer.Option(
+        0.18,
+        "--umi-deviation",
+        help="How far a cycle may sit from a flat 1/4 base composition and still be called UMI. "
+        "Real synthesiser mixes are routinely 20/30/30/20, which is 0.05.",
+    ),
 ) -> None:
-    """Infer UMI/primer/cell-barcode placement from the reads. (M4)"""
-    raise typer.Exit(_not_yet("suggest", "M4"))
+    """Infer where the UMI and primer are, from the per-cycle base composition."""
+    from migec.suggest import format_report, run
+
+    summary = run(reads, out_dir, cycles=cycles, max_reads=max_reads, umi_deviation=umi_deviation)
+    typer.echo(format_report(summary))
 
 
 @app.command()

@@ -94,6 +94,63 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 alongside `checkout.summary.tsv`, `checkout.coverage.tsv` (the MIG size histogram) and
 `checkout.umi_composition.tsv` (per-position base usage, entropy, information content).
 
+### It tells you where the barcode is
+
+`migec suggest` reads the layout off the reads rather than off the protocol. A UMI cycle is one the
+synthesiser mixed — all four bases near 1/4, ~2 bits. A constant cycle is one base near 100%.
+Everything else is payload.
+
+```
+ cycle      A      C      G      T  1/4 dev     Q  layout
+     0  0.271  0.205  0.257  0.267    0.045    33  N  UMI
+     ...
+     9  0.020  0.971  0.004  0.006    0.721    37  |  constant
+
+segments:
+    0-8   umi         9 nt  (mean 1/4 deviation 0.038)
+    9-31  constant   23 nt  (mean 1/4 deviation 0.718)  CAGTTTAACTTTTGGGCCATCCA
+
+pattern  NNNNNNNNNcagtttaacttttgggccatcca
+```
+
+That is a real HIV Primer ID library (SRR1763769) with nothing supplied but the FASTQ. The pattern
+pastes straight into a barcode table, and checking it out assigns 95.0% of reads.
+
+### It tells you whether the barcode was big enough
+
+A 12 nt UMI is 4¹² = 16,777,216 sequences — if the synthesiser delivered exactly 25% of each base.
+It never does, so the usable space is the **collision** (Rényi-2) entropy, `1 / Π_j Σ_a p_j(a)²`,
+never Shannon: `H₂ ≤ H₁`, so Shannon overstates the space and understates collisions, which is the
+direction that silently merges molecules.
+
+From there the birthday problem, in the form that survives a full space:
+
+```
+occupied = S·(1 − e^−λ)     molecules = S·λ     P(k>1 | k≥1) = (1 − e^−λ − λe^−λ)/(1 − e^−λ)
+```
+
+```
+sample              space  occupancy  MIGs >1 mol   molecules   err pred   err est
+CTRL              250,902      49.9%        30.6%     173,482    2.0e-03   2.7e-04
+
+warning: CTRL: 31% of MIGs hold more than one molecule (50% of a 250,902 barcode space is
+  occupied). Their consensus is a mixture of templates, not a molecule
+warning: CTRL: the barcode error estimate (2.7e-04) is not reliable here -- 50% of each barcode's
+  1-substitution neighbourhood is itself occupied ...
+```
+
+`scripts/collision_check.py` checks that prediction against something model-free — two molecules
+sharing a barcode with *different sequences* are visible in the reads — and finds 1.86× more
+collisions than predicted, which is the size of the position-independence assumption in `Π_j m_j`.
+
+The barcode error rate is estimated from the distance-1 excess and reported next to what the
+reported Phred and the polymerase predict. ⚠ The estimator has a working range: it recovers 0.92×
+of an injected rate at 0.3% occupancy and 0.23× at 50%, always collapsing *downward*, so it is
+flagged unreliable past 5% neighbourhood occupancy rather than quietly believed.
+
+Full derivations in [docs/barcode_space.rst](docs/barcode_space.rst); `notebooks/barcode_space.py`
+draws it.
+
 ### Speed and memory are reported, not assumed
 
 `--threads` defaults to one per core and **the output is byte-identical whatever it is set to** —
