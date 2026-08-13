@@ -135,7 +135,8 @@ The answer, and what it settles
 
 **The floor is of order 10⁻⁴, not 10⁻⁶.** At MIGs of 80 reads or more it is
 1.54·10⁻⁴ with a 95% upper bound of 1.74·10⁻⁴. The guess that it might be 10\ :sup:`-6` is
-excluded by more than two orders of magnitude, and with it any emitted quality above about **Q38**.
+excluded by more than two orders of magnitude for a protocol with an RT step, and with it any
+emitted quality above **Q40**.
 For comparison, the paper this library comes from measures a residual error rate of about 1 in
 10,000 (Zhou, Jones, Mieczkowski & Swanstrom, *J Virol* 89:8540–8555, 2015,
 `doi:10.1128/JVI.00522-15 <https://doi.org/10.1128/JVI.00522-15>`_).

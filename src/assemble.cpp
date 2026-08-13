@@ -1,6 +1,7 @@
 #include "migec/assemble.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -172,11 +173,15 @@ AssembleStats assemble(const AssembleRequest& request) {
     std::FILE* table = std::fopen((out_dir / (stats.sample_id + ".mig.tsv")).string().c_str(), "w");
     if (!table) throw MigecError("assemble: cannot write the per-molecule table");
     std::fprintf(table,
-                 "cell\tumi\tcontig\tcontigs\tmolecule\treads\tlength\tmean_quality\t"
+                 "cell\tumi\tcontig\tcontigs\tmolecule\treads\tsupport\tlength\tmean_quality\t"
                  "consensus_error\tlinkage\n");
 
     double qual_sum = 0.0, err_sum = 0.0;
     uint64_t qual_bases = 0;
+    // Counting mode: reads that carried the emitted sequence, over reads in the groups that
+    // emitted one. A ratio of two counts rather than a mean of ratios, so a group of 100 reads
+    // does not weigh the same as a group of 2.
+    uint64_t support_reads = 0, support_of_reads = 0;
     // Per-position base usage over DISTINCT barcodes, which is what the birthday arithmetic needs
     // -- weighting by reads would let one over-amplified molecule set the composition.
     std::vector<std::array<uint64_t, 4>> usage;
@@ -196,9 +201,19 @@ AssembleStats assemble(const AssembleRequest& request) {
             stats.reads_dropped += group.size();
             return;
         }
+        // The consensus sees at most kMaxReadsPerGroup of them; the molecule keeps all of them as
+        // its depth. Records arrive in src_index order, which is input order and carries no
+        // relation to the sequence, so the first N are an unbiased sample of the group and cost
+        // nothing to take.
+        const size_t depth = group.size();
+        const size_t used = std::min(depth, kMaxReadsPerGroup);
+        if (used < depth) {
+            ++stats.groups_capped;
+            stats.reads_over_cap += depth - used;
+        }
         std::vector<ConsensusRead> reads;
-        reads.reserve(group.size());
-        for (const Resident& r : group) reads.push_back({r.seq, r.qual});
+        reads.reserve(used);
+        for (size_t i = 0; i < used; ++i) reads.push_back({group[i].seq, group[i].qual});
         const std::vector<Consensus> molecules = assemble_group(reads, request.consensus);
         const uint32_t components = molecules.empty() ? 1 : molecules[0].components;
         if (components > 1) { ++stats.groups_fragmented; stats.contigs += components; }
@@ -206,8 +221,14 @@ AssembleStats assemble(const AssembleRequest& request) {
         const std::string umi = unpack_barcode(key, stats.umi_length);
         const std::string cell =
             stats.cell_length ? unpack_barcode(cell_key, stats.cell_length) : std::string();
+        // The count is the true depth of the molecule whenever the group produced exactly one --
+        // capping the reads that were consensed must never cap the reads that were counted. When
+        // the group split or fragmented, each part reports what it actually held, because there is
+        // no honest way to divide the reads above the cap between them.
+        const bool whole = molecules.size() == 1 && components == 1;
         for (size_t m = 0; m < molecules.size(); ++m) {
             const Consensus& c = molecules[m];
+            const uint64_t reported_reads = whole ? depth : c.reads;
             ++stats.molecules;
             double q = 0.0;
             for (char ch : c.qual) q += phred_from_char(ch);
@@ -222,12 +243,16 @@ AssembleStats assemble(const AssembleRequest& request) {
             if (molecules.size() > c.components) name += "." + std::to_string(m + 1);
             std::string tags = "RX:Z:" + umi + "\tBC:Z:" + stats.sample_id;
             if (!cell.empty()) tags += "\tCB:Z:" + cell;
-            tags += "\tMI:Z:" + name + "\tcD:i:" + std::to_string(c.reads);
+            tags += "\tMI:Z:" + name + "\tcD:i:" + std::to_string(reported_reads);
             writer.write(name, tags, c.seq, c.qual);
-            std::fprintf(table, "%s\t%s\t%u\t%u\t%zu\t%u\t%zu\t%.2f\t%.3e\t%.2f\n",
+            std::fprintf(table, "%s\t%s\t%u\t%u\t%zu\t%" PRIu64 "\t%u\t%zu\t%.2f\t%.3e\t%.2f\n",
                          cell.empty() ? "." : cell.c_str(), umi.c_str(), c.component + 1,
-                         c.components, m + 1, c.reads, c.seq.size(),
+                         c.components, m + 1, reported_reads, c.support, c.seq.size(),
                          c.qual.empty() ? 0.0 : q / c.qual.size(), c.mean_error, c.linkage);
+            if (c.support) {
+                support_reads += c.support;
+                support_of_reads += c.reads;  // the reads the vote was taken over, not the depth
+            }
         }
     };
 
@@ -289,6 +314,10 @@ AssembleStats assemble(const AssembleRequest& request) {
     stats.mean_quality = qual_bases ? qual_sum / static_cast<double>(qual_bases) : 0.0;
     stats.mean_consensus_error =
         stats.molecules ? err_sum / static_cast<double>(stats.molecules) : 0.0;
+    stats.mean_support = support_reads && stats.molecules
+                             ? static_cast<double>(support_reads) /
+                                   static_cast<double>(support_of_reads)
+                             : 0.0;
     stats.wall_seconds = clock.seconds();
     return stats;
 }

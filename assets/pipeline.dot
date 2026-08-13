@@ -1,0 +1,59 @@
+// The migec pipeline, as a figure. Regenerate with:
+//
+//     dot -Tsvg assets/pipeline.dot -o assets/pipeline.svg
+//
+// Topology first, in graphviz, because that is what has to be right; a TikZ version belongs in a
+// manuscript, not in a README, and GitHub renders SVG.
+//
+// Colours are ColorBrewer Dark2, the same qualitative set `migec plot` uses: stages in green,
+// the data path in grey, tables in purple, the tools that read no reads in orange.
+
+digraph migec {
+    rankdir = LR;
+    bgcolor = "white";
+    node [fontname = "Helvetica", fontsize = 11, shape = box, style = "rounded,filled",
+          penwidth = 0, height = 0.42, margin = "0.16,0.08"];
+    edge [fontname = "Helvetica", fontsize = 9, color = "#666666", arrowsize = 0.7,
+          penwidth = 1.1];
+
+    // The data path.
+    node [fillcolor = "#f0f0f0", fontcolor = "#333333"];
+    fastq   [label = "FASTQ"];
+    tagged  [label = "tagged FASTQ\nRX QX CB BC"];
+    fixed   [label = "corrected\nOX keeps the original"];
+    cons    [label = "consensus FASTQ\none record = one molecule"];
+
+    // The stages.
+    node [fillcolor = "#1b9e77", fontcolor = "white", style = "rounded,filled,bold"];
+    checkout [label = "checkout\nfind, trim, demultiplex"];
+    refine   [label = "refine\ncorrect barcodes, call cells"];
+    assemble [label = "assemble\ncollapse to a consensus"];
+
+    // Reads no reads, writes no pipeline output.
+    node [fillcolor = "#d95f02", fontcolor = "white"];
+    suggest   [label = "suggest\nwhere is the barcode?"];
+    plot      [label = "plot\ngnuplot over the tables"];
+    subsample [label = "subsample\nwhole barcodes, never reads"];
+
+    fastq -> checkout -> tagged -> refine -> fixed -> assemble -> cons;
+
+    fastq  -> suggest   [style = dashed, label = "profile"];
+    tagged -> subsample [style = dashed];
+
+    // Every stage writes plain TSV beside its output; `plot` draws those and nothing else. The
+    // tables themselves are listed in docs/plots.rst rather than here -- naming all thirteen in
+    // the figure trebles its width and the figure is meant to be read, not audited.
+    checkout -> plot [style = dotted, label = "tables"];
+    refine   -> plot [style = dotted];
+    assemble -> plot [style = dotted];
+
+    // Downstream: the contract that was measured, not assumed (docs/downstream.rst).
+    node [fillcolor = "#ffffff", fontcolor = "#666666", shape = box, style = "rounded,filled",
+          penwidth = 1, color = "#cccccc", fontsize = 9.5];
+    down [label = "minimap2 -y · bwa -C\narda · salmon · kallisto"];
+    cons -> down [label = "RX CB MI survive"];
+
+    // No rank constraints. Pinning the stages to one rank pulls the QC notes out of line with the
+    // stage that wrote them and the data path ends up reading diagonally, which is worse than
+    // whatever dot does on its own.
+}

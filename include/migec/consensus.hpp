@@ -5,8 +5,9 @@
 //
 //  * `rt_floor` -- an error made during reverse transcription or the first PCR cycle is in every
 //    read of the molecule, and no consensus removes it. X2 measured it at 1.54e-4 on an HIV-1
-//    Primer ID control (docs/quality_floor.rst), which caps every emitted quality at ~Q38. The
-//    1e-6 that a first-pass design assumed is excluded by two orders of magnitude.
+//    Primer ID control (docs/quality_floor.rst) and by 10x for their V(D)J RT, which caps every
+//    emitted quality at Q40. A blanket 1e-6 is excluded by two orders of magnitude for an RT
+//    protocol -- and is right for a DNA one, which is why the floor is named per chemistry.
 //
 //  * `linkage_threshold` -- splitting a MIG into two consensuses is accepted on the strength of
 //    co-segregation, not on a count of polymorphic sites. X3 measured the false-positive curve by
@@ -28,8 +29,33 @@
 namespace migec {
 
 struct ConsensusParams {
-    // Measured in X2. Also the cap on emitted quality: -10 log10(rt_floor).
+    // The RT/first-cycle-PCR error that is in every read of a molecule and that no consensus
+    // removes. Also the cap on emitted quality: -10 log10(rt_floor), so 1e-4 caps at Q40.
+    //
+    // Never: this is the ONE-MOLECULE floor, and every record migec emits is one molecule. 10x
+    // states it exactly: "The estimated error rate for the V(D)J RT reaction is 1e-4 per base.
+    // Therefore, assembled bases that are covered by a single UMI are assigned Q40, and bases
+    // covered by at least two UMIs are assigned Q60." The Q60 branch is available only after
+    // several molecules agree -- an RT error is common-mode within a molecule and independent
+    // between them -- and combining molecules is arda's job, not this one. A per-molecule record
+    // claiming Q50 is claiming the two-UMI confidence on one-UMI evidence.
+    //
+    // X2's own measurement agrees with 10x's number: 1.54e-4 [1.36e-4, 1.74e-4] on SRR1763769,
+    // itself an upper bound (that library is 49.6% occupied on a 9 nt barcode, so collided MIGs
+    // pool two templates and the disagreement is charged to the RT).
+    //
+    //     1e-4   default: V(D)J / RepSeq off an ordinary RT, and 10x's stated figure (caps at Q40)
+    //     1e-5   ctDNA and exome -- 2-10x less, and cfDNA assays often have no RT at all, only a
+    //            first cycle of a high-fidelity polymerase (caps at Q50)
+    //     1e-6   a DNA-only workflow with a high-fidelity polymerase and few pre-amplification
+    //            cycles, where the read-out is a low-frequency variant (caps at Q60)
     double rt_floor = 1.0e-4;
+    // Counting mode: emit the group's most frequent EXACT sequence, with each base carrying the
+    // best quality any read of that sequence reported for it. No column model, so no per-base
+    // error correction and no sub-clustering -- what it buys is molecule counts, fast. A read that
+    // disagrees anywhere is a different string and votes for nothing, which is why this is the
+    // wrong mode for error suppression and the right one for a count.
+    bool fast = false;
     // Measured in X3. Raise it to split less.
     double linkage_threshold = 8.68;
     // A group smaller than this cannot show co-segregation worth testing.
@@ -82,6 +108,10 @@ struct Consensus {
     // Mean posterior error over the emitted bases, before the floor is added. This is what the
     // consensus itself achieved; the floor is what the chemistry costs on top.
     double mean_error = 0.0;
+    // Reads carrying the emitted sequence exactly. Set by the fast path, where it is the whole of
+    // the evidence: `support` of `reads` agreed, and the rest voted for some other string. Zero in
+    // the full path, where the consensus is a per-column call that need match no read at all.
+    uint32_t support = 0;
 };
 
 // The strongest co-segregation of minor alleles over any pair of callable positions, as a

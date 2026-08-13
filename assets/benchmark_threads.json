@@ -1,0 +1,47 @@
+{
+  "reads": 2000000,
+  "reads_per_umi": 4,
+  "payload_nt": 90,
+  "rows": [
+    {
+      "threads": 1,
+      "reads_per_second": 202717.32437457907,
+      "matching_reads_per_second": 217505.79928235867,
+      "peak_rss_mb": 59.523072,
+      "wall_seconds": 9.865955,
+      "match_seconds": 9.195157125
+    },
+    {
+      "threads": 2,
+      "reads_per_second": 362485.90199213586,
+      "matching_reads_per_second": 412855.196097445,
+      "peak_rss_mb": 77.692928,
+      "wall_seconds": 5.517455959,
+      "match_seconds": 4.8443135
+    },
+    {
+      "threads": 4,
+      "reads_per_second": 603772.7114629938,
+      "matching_reads_per_second": 758800.7851081048,
+      "peak_rss_mb": 97.4848,
+      "wall_seconds": 3.312504792,
+      "match_seconds": 2.635737916
+    },
+    {
+      "threads": 8,
+      "reads_per_second": 910499.9421019915,
+      "matching_reads_per_second": 1335790.6315158927,
+      "peak_rss_mb": 136.47872,
+      "wall_seconds": 2.196595417,
+      "match_seconds": 1.497240625
+    },
+    {
+      "threads": 16,
+      "reads_per_second": 1056471.784378863,
+      "matching_reads_per_second": 1684654.0336566502,
+      "peak_rss_mb": 217.25184,
+      "wall_seconds": 1.893093625,
+      "match_seconds": 1.187187375
+    }
+  ]
+}

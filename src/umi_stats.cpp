@@ -105,7 +105,14 @@ double UmiComposition::collision(int j) const {
 }
 double UmiComposition::effective_length() const {
     double l = 0.0;
-    for (int j = 0; j < length; ++j) l -= std::log(collision(j)) / std::log(4.0);
+    for (int j = 0; j < length; ++j) {
+        const double m = collision(j);
+        // A sample that got no reads has no composition, so every m_j is 0 and the sum is +inf.
+        // Infinity is not an effective length; it is the absence of one, and printing it into a
+        // TSV column that everything downstream parses as a number is worse than saying zero.
+        if (m <= 0.0) return 0.0;
+        l -= std::log(m) / std::log(4.0);
+    }
     return l;
 }
 double UmiComposition::effective_space() const {

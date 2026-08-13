@@ -179,6 +179,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         out["quality_calibration"] = cal;
     }
     out["match_seconds"] = stats.wall_seconds;
+    out["trimmed_bases"] = c.trimmed_bases;
     out["peak_rss_bytes"] = stats.peak_rss_bytes;
     out["umi_memory_bytes"] = stats.umi_memory_bytes;
 
@@ -216,6 +217,26 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
             per_pos.append(d);
         }
         s["composition"] = per_pos;
+
+        // The payload length distribution after trimming, and the mean. A pattern placed one base
+        // off trims one base off every read, and this is the only place that shows.
+        py::list lens;
+        double len_sum = 0.0, len_n = 0.0;
+        if (i < stats.sample_payload_len.size()) {
+            for (size_t L = 0; L < kPayloadHistLen; ++L) {
+                const uint64_t n = stats.sample_payload_len[i][L];
+                if (!n) continue;
+                py::dict e;
+                e["length"] = L;
+                e["reads"] = n;
+                e["at_least"] = L + 1 == kPayloadHistLen;  // the catch-all bin
+                lens.append(e);
+                len_sum += static_cast<double>(L * n);
+                len_n += static_cast<double>(n);
+            }
+        }
+        s["payload_lengths"] = lens;
+        s["mean_payload_length"] = len_n ? len_sum / len_n : 0.0;
 
         const CorrectionResult cr = correct_umis(umi_counts[i]);
         s["umi_error_rate"] = cr.estimated_error;
@@ -284,6 +305,11 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "migec native core: FASTQ IO, the .mig intermediate format, barcode primitives.";
     m.attr("__version__") = MIGEC_VERSION;
     m.attr("MIG_FORMAT_VERSION") = kMigFormatVersion;
+    // The two measured constants, exported so the CLI's help text and defaults read them rather
+    // than repeating them. X2 fitted the floor, X3 the split threshold; both live in
+    // consensus.hpp next to the comment that says what measured them.
+    m.attr("RT_FLOOR") = ConsensusParams{}.rt_floor;
+    m.attr("LINKAGE_THRESHOLD") = ConsensusParams{}.linkage_threshold;
 
     py::register_exception<MigecError>(m, "MigecError", PyExc_RuntimeError);
 
@@ -597,7 +623,7 @@ PYBIND11_MODULE(_core, m) {
     m.def(
         "assemble",
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
-           double rt_floor, double linkage_threshold, bool contig, uint32_t min_reads,
+           double rt_floor, double linkage_threshold, bool contig, bool fast, uint32_t min_reads,
            int gzip_level, int bucket_bits) {
             AssembleRequest req;
             req.input = input;
@@ -606,6 +632,7 @@ PYBIND11_MODULE(_core, m) {
             req.consensus.rt_floor = rt_floor;
             req.consensus.linkage_threshold = linkage_threshold;
             req.consensus.contig = contig;
+            req.consensus.fast = fast;
             req.min_reads = min_reads;
             req.gzip_level = gzip_level;
             req.bucket_bits = bucket_bits;
@@ -625,6 +652,11 @@ PYBIND11_MODULE(_core, m) {
             d["groups_fragmented"] = st.groups_fragmented;
             d["contigs"] = st.contigs;
             d["contig_mode"] = contig;
+            d["fast_mode"] = fast;
+            d["mean_support"] = st.mean_support;
+            d["groups_capped"] = st.groups_capped;
+            d["reads_over_cap"] = st.reads_over_cap;
+            d["max_reads_per_group"] = static_cast<uint64_t>(kMaxReadsPerGroup);
             d["cell_length"] = st.cell_length;
             d["expected_molecules_per_group"] = st.expected_molecules_per_group;
             py::dict sp;
@@ -656,8 +688,13 @@ PYBIND11_MODULE(_core, m) {
             return d;
         },
         py::arg("input"), py::arg("out_dir"), py::arg("sample_id") = std::string(),
-        py::arg("rt_floor") = 1e-4, py::arg("linkage_threshold") = 8.68,
-        py::arg("contig") = false, py::arg("min_reads") = 1u, py::arg("gzip_level") = 6,
+        // Defaulted off the header, never retyped: rt_floor is X2's measurement and
+        // linkage_threshold is X3's, and a second copy of a measured constant is a copy that
+        // drifts from the measurement that justifies it.
+        py::arg("rt_floor") = ConsensusParams{}.rt_floor,
+        py::arg("linkage_threshold") = ConsensusParams{}.linkage_threshold,
+        py::arg("contig") = false, py::arg("fast") = false,
+        py::arg("min_reads") = 1u, py::arg("gzip_level") = 6,
         py::arg("bucket_bits") = 0,
         "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "
         "buckets and sorted one bucket at a time, so nothing scales with the library. Emitted "
@@ -698,6 +735,19 @@ PYBIND11_MODULE(_core, m) {
                 cyc.append(e);
             }
             d["cycles"] = cyc;
+            py::list km;
+            for (const KmerHit& h : sg.profile.kmers) {
+                py::dict e;
+                e["kmer"] = h.kmer;
+                e["count"] = h.count;
+                e["expected"] = h.expected;
+                e["ratio"] = h.ratio;
+                e["mean_position"] = h.mean_position;
+                e["read_fraction"] = h.read_fraction;
+                km.append(e);
+            }
+            d["kmers"] = km;
+            d["kmers_scanned"] = sg.profile.kmers_scanned;
             py::list segs;
             for (const Segment& sm : sg.segments) {
                 py::dict e;

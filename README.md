@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://pypi.org/project/migec/"><img alt="PyPI" src="https://img.shields.io/pypi/v/migec"></a>
   <a href="https://github.com/antigenomics/migec/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/antigenomics/migec/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://docs.isalgo.dev/migec/"><img alt="docs" src="https://github.com/antigenomics/migec/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="https://antigenomics.github.io/migec/"><img alt="docs" src="https://github.com/antigenomics/migec/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-blue">
   <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
@@ -16,8 +16,8 @@ Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shuga
 Computational Biology* 2017).
 
 > **Version 2 is under construction.** All three stages work today — `checkout`, `refine` and
-> `assemble` — with cell barcodes, whitelists, dual-end and positional (10x) layouts, cell calling
-> and `suggest`/`subsample`. Index hopping, `.mig` bucket output and the published benchmark
+> `assemble` — with cell barcodes, whitelists, dual-end and positional (10x) layouts, cell calling,
+> QC figures, and `suggest`/`subsample`/`plot`. Index hopping, `.mig` bucket output and the published benchmark
 > comparisons are what remain; see [`ROADMAP.md`](ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on
 > branch [`legacy-v1`](../../tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
 > [1.2.9 release](../../releases/tag/1.2.9).
@@ -42,11 +42,12 @@ possible. The difficulty is entirely in the details:
 
 ## Pipeline
 
-```
-FASTQ ──checkout──▶ tagged FASTQ ──refine──▶ corrected ──assemble──▶ consensus FASTQ
-          │                                 │                              │
-     suggest                       barcode table, QC              per-molecule tables
-```
+<p align="center"><img alt="the migec pipeline" src="assets/pipeline.svg" width="100%"></p>
+
+Three stages, plus three tools that read no reads: `suggest` says where the barcode is,
+`subsample` cuts a fixture that is still a library, and `plot` draws every QC panel with gnuplot
+from the TSVs the stages already wrote. Regenerate the figure with
+`dot -Tsvg assets/pipeline.dot -o assets/pipeline.svg`.
 
 Output is ordinary FASTQ. One record is one molecule, and its identity is carried twice — in the
 read **name** (`<sample>.<cell>.<umi>`, for tools that drop FASTQ comments) and in tab-separated
@@ -225,9 +226,36 @@ matters:
 Q(j) = −10 log10( p_cons(j) + p_floor )
 ```
 
-The floor is **added, not compared**. An RT or first-cycle-PCR error is in every read and no
-consensus removes it, so `assemble` never emits a quality above ~Q38 — the floor measured in
-[docs/quality_floor.rst](docs/quality_floor.rst), not the 1e-6 that gets assumed.
+The floor is **added, not compared**, and it is named rather than guessed — an RT or
+first-cycle-PCR error is in every read of the molecule and no consensus removes it:
+
+```bash
+migec assemble ... --rt-error rt        # 1e-4, caps at Q40. Anything with an RT step (default)
+migec assemble ... --rt-error medium    # 1e-5, caps at Q50. No RT, an ordinary polymerase
+migec assemble ... --rt-error high      # 1e-6, caps at Q60. No RT, a proofreading polymerase
+migec assemble ... --rt-error 7.37e-5   # or the rate itself, e.g. TruSight Oncology 500 v2
+```
+
+This is the **one-molecule** floor and every record here is one molecule. 10x state it exactly:
+*"The estimated error rate for the V(D)J RT reaction is 1e-4 per base. Therefore, assembled bases
+that are covered by a single UMI are assigned Q40, and bases covered by at least two UMIs are
+assigned Q60."* The Q60 branch needs two molecules to agree — an RT error is common-mode within a
+molecule and independent between them — and combining molecules is
+[arda](https://github.com/antigenomics/arda)'s job. `1e-4` is also what X2 measured here
+independently (1.54e-4 on SRR1763769), and the polymerase classes come from
+[McInerney *et al.* 2014](https://doi.org/10.1155/2014/287430) (Taq 4.3e-5, Pfu 2.8e-6, Phusion
+2.6e-6, Pwo 2.4e-6 per bp per duplication) — with the first cycle worth ~5x an ordinary one
+([Shagin *et al.* 2017](https://doi.org/10.1038/s41598-017-02727-8)).
+
+Which is exactly what comes out, on a real HIV-1 Primer ID library: one read gives Q30, and the
+curve flattens at the floor rather than at the instrument.
+
+<p align="center"><img alt="consensus quality against depth" src="assets/consensus_quality.svg" width="80%"></p>
+
+Very deep barcodes are capped at **10,000 reads into the consensus** — past that the column
+posterior has long since saturated while the group still costs time and memory, which is 10x's
+rule and their reasoning. The cap applies to the reads that are *consensed*, never to the reads
+that are *counted*: `cD` stays the true depth of the molecule.
 
 `--contig` is for random-primed libraries, where reads sharing a barcode tile the molecule instead
 of starting at the same base. They are placed against each other by seed matching, cut into overlap
@@ -240,6 +268,61 @@ Note: Contig assembly needs a barcode that is not saturated: two fragments of tw
 sharing a barcode have no sequence in common, which is exactly what two fragments of one look like.
 `assemble` runs the same birthday arithmetic on the barcodes it saw and reports how many molecules
 a group holds on average — above 1, the warning says so. See [docs/assemble.rst](docs/assemble.rst).
+
+### When the deliverable is a count, not a sequence
+
+```bash
+migec assemble ref/S1.fq.gz -o cons/ --fast
+```
+
+Counting mode: the group's most frequent **exact** sequence, with every base carrying the best
+quality any read of *that* sequence reported. No column model, so no per-base error correction and
+no sub-clustering — and the RT floor still caps what it claims. Use it for expression and
+clonotype abundance, where a molecule count is the answer and the sequence only has to be right
+often enough to assign. Measured against the full path on 8-read molecules at 5e-3 per base: the
+column posterior removes essentially every sequencing error, and the majority string keeps
+whatever it carried. `--fast` is refused with `--contig`, whose tiling reads share no exact
+sequence to take a majority over.
+
+### It draws its own QC
+
+```bash
+migec plot out/                       # every panel whose table is in out/
+migec plot cons/ -o figs/ --format pdf
+```
+
+Fifteen panels — UMI PWM and information content, barcode quality and its calibration, MIG size
+coverage, trimming, barcode space, the `suggest` cycle trace, overrepresented k-mers, the cell
+rank curve, consensus quality, error, layout, and thread scaling. Every one is a gnuplot script
+over a TSV a stage already wrote, so a figure can be redrawn from the table next to it long after
+the FASTQ is gone, and a figure can never disagree with the number in the report. gnuplot is not a
+Python dependency: without it the `.gp` scripts are still written. See
+[docs/plots.rst](docs/plots.rst).
+
+### It finds what the trim left behind
+
+`migec suggest` profiles *any* FASTQ, so point it at the output of a stage rather than its input:
+
+```bash
+migec suggest out/S1.fq.gz -o qc/       # did the trim actually remove the primer?
+```
+
+An 8-mer occurs by chance about every 65 kb, so synthetic sequence that survived shows up as a run
+of k-mers each shifted one base from the last, hundreds of times more often than the reads' own
+base composition predicts — and the run is stitched back into the sequence it came from:
+
+```
+kmer           count   obs/exp    reads  mean pos
+GGGCCATC      20,023     701.2  100.0%      22.1
+TGGGCCAT      20,018     656.4  100.0%      21.0
+TTGGGCCA      20,018     656.4  100.0%      20.0
+
+overlapping into: CAGTTTAACTTTTGGGCCATCCA
+```
+
+Overrepresentation is against the reads' **own** base composition, never a flat 1/4: a 70% AT
+library makes every AT-rich k-mer look enriched against uniform, and the table would then be a
+description of the GC content rather than a finding.
 
 ### It tells you where the barcode is
 
@@ -289,7 +372,7 @@ warning: CTRL: the barcode error estimate (2.7e-04) is not reliable here -- 50% 
 `scripts/collision_check.py` checks that prediction against something model-free — two molecules
 sharing a barcode with *different sequences* are visible in the reads — and finds 1.86× more
 collisions than predicted. That is *not* the position-independence assumption in `Π_j m_j`, which a
-permutation puts at 1.04× — it is the read threshold, since a collided barcode carries two
+permutation puts at 1.01× — it is the read threshold, since a collided barcode carries two
 molecules' reads and is over-represented among the MIGs big enough to show a split.
 
 The barcode error rate is estimated from the distance-1 excess and reported next to what the
@@ -356,11 +439,17 @@ nothing else.
 
 | threads | reads/s | matching reads/s | peak RSS |
 |---|---|---|---|
-| 1 | 193,002 | 206,803 | 52 MB |
-| 8 | 903,599 | 1,309,576 | 131 MB |
-| 16 | **1,055,543** | **1,655,889** | 220 MB |
+| 1 | 202,717 | 217,506 | 60 MB |
+| 2 | 362,486 | 412,855 | 78 MB |
+| 4 | 603,773 | 758,801 | 97 MB |
+| 8 | 910,500 | 1,335,791 | 136 MB |
+| 16 | **1,056,472** | **1,684,654** | 217 MB |
 
-2 M single-end 129 nt reads, four barcode patterns, 4 reads per molecule, M-series laptop. Two
+<p align="center"><img alt="checkout thread scaling" src="assets/benchmark_threads.svg" width="80%"></p>
+
+2 M single-end 129 nt reads, four barcode patterns, 4 reads per molecule, M-series laptop.
+`python scripts/benchmark_threads.py --reads 2000000 -o assets/` writes that table, and the figure
+is drawn from it — the two cannot drift apart. Two
 things had to be true for the matching to scale. zlib compresses random DNA at **7 MB/s** at its
 default level 6, so compression runs on the workers (concatenated gzip members are a valid gzip
 stream) at level 1 — 137 MB/s for 13% more bytes. And the log-likelihood score tabulates into

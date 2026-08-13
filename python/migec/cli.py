@@ -171,7 +171,11 @@ def checkout(
         max_offset=max_offset,
     )
     typer.echo(format_report(summary))
-    typer.echo(f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition}}.tsv")
+    typer.echo(
+        f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition,barcode_space,"
+        f"umi_quality,quality_calibration,pattern_positions,trimming}}.tsv"
+        f"\n      draw them with `migec plot {out_dir}`"
+    )
 
 
 @app.command()
@@ -190,6 +194,31 @@ def sheet(
     if barcodes is None:
         raise typer.BadParameter("give a barcode table, or --presets to list the named layouts")
     typer.echo(describe(read_barcodes(barcodes)))
+
+
+@app.command()
+def plot(
+    directory: Path = typer.Argument(
+        ..., help="A stage's output directory. Every table it finds there gets a figure."
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Where to write. Defaults to <directory>/plots."
+    ),
+    fmt: str = typer.Option("svg", "--format", help="svg, png or pdf."),
+) -> None:
+    """Draw the QC figures from the tables a stage already wrote.
+
+    Reads no reads and produces no pipeline output: every panel is a gnuplot script over a
+    committed TSV, so a figure can be redrawn from the table next to it long after the FASTQ is
+    gone. gnuplot itself is not a Python package -- without it the scripts are still written.
+    """
+    from migec.plot import format_report, run
+
+    try:
+        summary = run(directory, out_dir, fmt=fmt)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(format_report(summary))
 
 
 @app.command()
@@ -276,12 +305,15 @@ def assemble(
     reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
     sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
-    rt_error: float = typer.Option(
-        1e-4,
+    rt_error: str = typer.Option(
+        "rt",
         "--rt-error",
-        help="The RT/first-cycle-PCR error floor, which caps every emitted quality at "
-        "-10 log10 of it. Default measured on an HIV-1 Primer ID control (docs/quality_floor.rst); "
-        "the 1e-6 that gets assumed is excluded by two orders of magnitude.",
+        help="The pre-amplification error floor, which caps every emitted quality at -10 log10 of "
+        "it. Name the chemistry: 'rt' (1e-4, Q40) for anything with a reverse transcription step, "
+        "'medium' (1e-5, Q50) for an ordinary polymerase and no RT, 'high' (1e-6, Q60) for a "
+        "proofreading one -- or give the rate itself. It is the ONE-MOLECULE floor and every "
+        "record here is one molecule: 10x's Q60 needs two UMIs to agree, and combining molecules "
+        "is arda's job. See docs/quality_floor.rst for what measured each.",
     ),
     contig: bool = typer.Option(
         False,
@@ -291,6 +323,15 @@ def assemble(
         "X1 measured 27.3% of 10x groups holding more than one component (docs/fragmented.rst); "
         "one consensus over those asserts sequence no read covers.",
     ),
+    fast: bool = typer.Option(
+        False,
+        "--fast",
+        help="Counting mode: emit each group's most frequent EXACT sequence, with every base "
+        "carrying the best quality any read of that sequence reported. No column model, so no "
+        "per-base error correction and no sub-clustering -- use it when the deliverable is "
+        "molecule COUNTS (expression, clonotype abundance) rather than error-free sequence. "
+        "Incompatible with --contig, whose reads tile the molecule and share no exact sequence.",
+    ),
     min_reads: int = typer.Option(
         1,
         "--min-reads",
@@ -299,10 +340,22 @@ def assemble(
     ),
 ) -> None:
     """Collapse the reads of each barcode (sample + cell + UMI) into a consensus."""
-    from migec.assemble import format_report, run
+    from migec.assemble import format_report, parse_rt_error, run
 
+    try:
+        rt_floor = parse_rt_error(rt_error)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    # Refused here, on the caller's thread, rather than producing one consensus per read: two
+    # fragments of one molecule are different strings by construction, so a modal vote over them
+    # returns whichever fragment was seen most and silently drops the rest of the molecule.
+    if fast and contig:
+        raise typer.BadParameter(
+            "--fast and --contig are incompatible. --contig places reads that TILE a molecule, "
+            "and tiling reads share no exact sequence for --fast to take a majority over"
+        )
     summary = run(
-        reads, out_dir, sample_id=sample_id, rt_floor=rt_error, contig=contig,
+        reads, out_dir, sample_id=sample_id, rt_floor=rt_floor, contig=contig, fast=fast,
         min_reads=min_reads,
     )
     typer.echo(format_report(summary))
@@ -358,11 +411,3 @@ def _inline_sheet(
     row = f"{sample_id}\t{pattern}" + (f"\t{slave}" if slave else "")
     path.write_text(row + "\n")
     return path
-
-
-def _not_yet(name: str, milestone: str) -> int:
-    typer.echo(
-        f"`migec {name}` is not implemented yet (planned for {milestone}). See ROADMAP.md.",
-        err=True,
-    )
-    return 2

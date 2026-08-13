@@ -55,16 +55,71 @@ double CycleStats::deviation_from_uniform() const {
     return d;  // 0 when flat, 1.5 when fixed -- reported halved below for a 0..0.75 scale
 }
 
+namespace {
+
+// The k-mer counters: exact counts in a flat array, plus the position sum so a hit can say where
+// in the read it sits. An adapter is at one end; a repeat is everywhere.
+struct KmerCounts {
+    static constexpr size_t kSize = size_t{1} << (2 * kKmerLength);
+    std::vector<uint64_t> count = std::vector<uint64_t>(kSize, 0);
+    std::vector<uint64_t> position_sum = std::vector<uint64_t>(kSize, 0);
+    std::vector<uint32_t> last_read = std::vector<uint32_t>(kSize, 0);  // reads carrying it once+
+    std::vector<uint64_t> reads_with = std::vector<uint64_t>(kSize, 0);
+    uint64_t scanned = 0;
+
+    // One pass, 2 bits per base, restarting the window at anything that is not ACGT -- an N is not
+    // a base and a k-mer spanning one is not evidence of anything.
+    void add(std::string_view seq, uint32_t read_index) {
+        constexpr uint64_t mask = (uint64_t{1} << (2 * kKmerLength)) - 1;
+        uint64_t code = 0;
+        int run = 0;
+        for (size_t i = 0; i < seq.size(); ++i) {
+            const uint8_t b = base_code(seq[i]);
+            if (b == kInvalidBase) { run = 0; code = 0; continue; }
+            code = ((code << 2) | b) & mask;
+            if (++run < kKmerLength) continue;
+            const size_t at = static_cast<size_t>(code);
+            ++count[at];
+            position_sum[at] += i + 1 - kKmerLength;
+            ++scanned;
+            // read_index + 1, so that 0 means "not seen yet" without a second pass to clear.
+            if (last_read[at] != read_index + 1) {
+                last_read[at] = read_index + 1;
+                ++reads_with[at];
+            }
+        }
+    }
+};
+
+std::string kmer_string(uint64_t code) {
+    std::string s(static_cast<size_t>(kKmerLength), 'A');
+    for (int i = kKmerLength - 1; i >= 0; --i) {
+        s[static_cast<size_t>(i)] = base_char(static_cast<uint8_t>(code & 3u));
+        code >>= 2;
+    }
+    return s;
+}
+
+}  // namespace
+
 CycleProfile profile_cycles(const std::string& fastq_path, int n_cycles, uint64_t max_reads) {
     if (n_cycles <= 0) throw MigecError("suggest: n_cycles must be positive");
     CycleProfile p;
     p.cycles.resize(static_cast<size_t>(n_cycles));
     for (int j = 0; j < n_cycles; ++j) p.cycles[static_cast<size_t>(j)].cycle = j;
+    KmerCounts kmers;
 
     FastqReader r(fastq_path);
     FastqRecord rec;
     while ((max_reads == 0 || p.reads < max_reads) && r.next(rec)) {
         p.read_length = std::max(p.read_length, rec.seq.size());
+        // Over the WHOLE read, not the profiled prefix: an adapter that survived trimming is at
+        // the 3' end, which is exactly the part the cycle profile does not reach.
+        kmers.add(rec.seq, static_cast<uint32_t>(p.reads));
+        for (char ch : rec.seq) {
+            const uint8_t b = base_code(ch);
+            if (b != kInvalidBase) ++p.base_counts[b];
+        }
         const size_t lim = std::min(rec.seq.size(), static_cast<size_t>(n_cycles));
         for (size_t j = 0; j < lim; ++j) {
             CycleStats& c = p.cycles[j];
@@ -78,6 +133,45 @@ CycleProfile profile_cycles(const std::string& fastq_path, int n_cycles, uint64_
         ++p.reads;
     }
     if (p.reads == 0) throw MigecError("suggest: no reads in " + fastq_path);
+
+    // Overrepresentation is against the reads' OWN base composition, never against a flat 1/4: a
+    // 70% AT library makes every AT-rich k-mer look enriched fivefold against uniform, and the
+    // report would then be a list of the library's GC content.
+    p.kmers_scanned = kmers.scanned;
+    const double total = static_cast<double>(
+        p.base_counts[0] + p.base_counts[1] + p.base_counts[2] + p.base_counts[3]);
+    std::array<double, 4> freq{0.25, 0.25, 0.25, 0.25};
+    if (total > 0.0) {
+        for (int b = 0; b < 4; ++b) {
+            freq[static_cast<size_t>(b)] = static_cast<double>(p.base_counts[static_cast<size_t>(b)]) / total;
+        }
+    }
+    // Seen fewer times than this and the ratio is a small-count artefact rather than a finding.
+    const uint64_t min_count = std::max<uint64_t>(20, kmers.scanned / 100000);
+    for (size_t code = 0; code < KmerCounts::kSize; ++code) {
+        const uint64_t n = kmers.count[code];
+        if (n < min_count) continue;
+        double q = 1.0;
+        for (int i = 0; i < kKmerLength; ++i) {
+            q *= freq[static_cast<size_t>((code >> (2 * i)) & 3u)];
+        }
+        const double expected = q * static_cast<double>(kmers.scanned);
+        if (expected <= 0.0) continue;
+        KmerHit hit;
+        hit.kmer = kmer_string(code);
+        hit.count = n;
+        hit.expected = expected;
+        hit.ratio = static_cast<double>(n) / expected;
+        hit.mean_position = static_cast<double>(kmers.position_sum[code]) / static_cast<double>(n);
+        hit.read_fraction =
+            static_cast<double>(kmers.reads_with[code]) / static_cast<double>(p.reads);
+        p.kmers.push_back(std::move(hit));
+    }
+    std::sort(p.kmers.begin(), p.kmers.end(), [](const KmerHit& a, const KmerHit& b) {
+        if (a.ratio != b.ratio) return a.ratio > b.ratio;
+        return a.kmer < b.kmer;  // ties by sequence, so the table is reproducible
+    });
+    if (p.kmers.size() > 64) p.kmers.resize(64);
     return p;
 }
 

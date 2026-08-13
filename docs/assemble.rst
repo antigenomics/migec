@@ -78,10 +78,69 @@ The floor is **added, not compared**. An error made during reverse transcription
 cycle is in every read of the molecule and no consensus removes it, so the two failure modes are
 independent and the emitted quality has to carry both. :doc:`X2 measured the floor <quality_floor>`
 at 1.54·10\ :sup:`-4` on an HIV-1 Primer ID control, which caps every emitted quality at about
-**Q38**. The 1e-6 a first-pass design assumed is excluded by two orders of magnitude.
+**Q40**, which is also 10x's stated figure for the V(D)J RT. A blanket 1e-6 is excluded for an
+RT protocol by two orders of magnitude -- but it is the right floor for a DNA workflow with a
+proofreading polymerase, which is why ``--rt-error`` names the chemistry: ``rt`` (1e-4, the
+default), ``medium`` (1e-5), ``high`` (1e-6), or the rate itself.
 
 A tie is resolved by base order rather than by an ``N``: the posterior is then 0.5 and the emitted
 quality says so at about Q3. An ``N`` would discard the information that it is one of two.
+
+.. warning::
+
+   The floor is the **one-molecule** floor, and every record migec emits is one molecule. 10x put
+   it exactly: bases covered by a single UMI are assigned Q40, and only bases covered by at least
+   two UMIs are assigned Q60. The difference is not a better consensus — it is a second molecule.
+   An RT error is common-mode within a molecule and independent between them, so the floor divides
+   out only when independent molecules agree, and combining molecules is
+   `arda <https://github.com/antigenomics/arda>`_'s job. A per-molecule record claiming Q50 would
+   be claiming two-UMI confidence on one-UMI evidence.
+
+Coverage is capped
+------------------
+
+At most **10,000 reads** of a barcode enter the consensus. The 10,001st moves no call and no
+emitted quality — the posterior saturated thousands of reads earlier and the quality is capped by
+the floor regardless — while the group still costs time and resident memory in proportion to its
+size. 10x cap the same way for the same reason: *"Very high coverage (greater than 10,000 reads)
+of transcripts can be problematic because it degrades computational performance and adds little
+information."*
+
+.. warning::
+
+   The cap is on the reads that are **consensed**, never on the reads that are **counted**. The
+   ``cD`` tag and the ``reads`` column stay the molecule's true depth. Capping a count would
+   flatten the abundance of exactly the most-amplified molecules, which is the measurement a UMI
+   pipeline exists to make.
+
+Counting mode: ``--fast``
+-------------------------
+
+.. code-block:: bash
+
+   migec assemble ref/S1.fq.gz -o cons/ --fast
+
+Emit the group's most frequent **exact** sequence, with every base carrying the best quality any
+read *of that sequence* reported for it. There is no column model, so there is no per-base error
+correction and no sub-clustering; the RT floor still caps what is claimed.
+
+Use it when the deliverable is a molecule **count** — expression, clonotype abundance — and the
+sequence only has to be right often enough to assign. Measured against the full path on 8-read
+molecules at 5·10\ :sup:`-3` per base, the column posterior clears essentially every sequencing
+error and the majority string keeps whatever it carried.
+
+.. note::
+
+   The per-base maximum is taken over the reads carrying the **winning** sequence, not over every
+   read in the group. Maximising across variants would take its highest quality from exactly the
+   reads that disagree at that position, asserting most confidence where the evidence conflicts.
+
+   ``--fast`` is refused with ``--contig``: tiling reads share no exact sequence, so a majority
+   vote over whole strings returns one fragment and drops the rest of the molecule.
+
+``support`` in ``<sample>.mig.tsv`` is how many of the group's reads carried what was emitted, and
+the report prints the same thing as a share. Well below 1 means the reads of a molecule disagree —
+which the full path resolves per column and this one resolves by majority vote over whole strings.
 
 Splitting a group into two molecules
 ------------------------------------

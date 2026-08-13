@@ -114,12 +114,18 @@ void CheckoutCounters::merge(const CheckoutCounters& o) {
     for (size_t i = 0; i < o.umi_phred.size(); ++i) {
         for (size_t q = 0; q < 61; ++q) umi_phred[i][q] += o.umi_phred[i][q];
     }
+    if (payload_len.size() < o.payload_len.size()) payload_len.resize(o.payload_len.size());
+    for (size_t i = 0; i < o.payload_len.size(); ++i) {
+        for (size_t L = 0; L < kPayloadHistLen; ++L) payload_len[i][L] += o.payload_len[i][L];
+    }
+    trimmed_bases += o.trimmed_bases;
 }
 
 Checkout::Checkout(const PatternSet& patterns, CheckoutParams params)
     : patterns_(patterns), params_(std::move(params)) {
     counters_.per_sample.assign(patterns.size(), 0);
     counters_.umi_phred.assign(patterns.size(), {});
+    counters_.payload_len.assign(patterns.size(), {});
 }
 
 std::string Checkout::header_tags(const std::string& umi, const std::string& umi_qual,
@@ -287,8 +293,9 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     out.cell_qual = m.cell_qual;
     out.seq1 = seq.substr(begin, end - begin);
     out.qual1 = qual.empty() ? std::string_view() : qual.substr(begin, end - begin);
-    // The mate is passed through whole. Trimming it would need its own tag, and dual-end barcodes
-    // are not implemented yet -- see ROADMAP M2.
+    // The mate is passed through whole, even when a slave pattern matched in it: trimming it would
+    // need its own payload_begin carried alongside, and the mate's barcode bases are already in
+    // the UMI by then. What the reader loses is a few synthetic bases at the mate's 5' end.
     out.seq2 = mate_seq;
     out.qual2 = mate_qual;
     out.normalised = normalised;
@@ -296,6 +303,11 @@ CheckoutPair Checkout::process_pair(std::string_view seq1, std::string_view qual
     ++counters_.assigned;
     if (normalised) ++counters_.normalised;
     ++counters_.per_sample[static_cast<size_t>(a.sample)];
+    // The trim's own QC. A pattern placed one base off still matches and still trims -- it just
+    // leaves every payload one base long or short, which no counter of matched reads can show.
+    counters_.trimmed_bases += begin;
+    ++counters_.payload_len[static_cast<size_t>(a.sample)]
+                           [std::min(end - begin, kPayloadHistLen - 1)];
     for (char ch : m.umi_qual) ++counters_.umi_phred[static_cast<size_t>(a.sample)][phred_from_char(ch)];
     // The pattern's own constant bases are known sequence, so a disagreement there is an
     // instrument error and nothing else -- the only free calibration standard in the read.
@@ -648,9 +660,14 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     stats.sample_reads.assign(n_files, 0);
     stats.sample_phred.assign(n_files, {});
     stats.counters.umi_phred.resize(n_samples);
+    stats.counters.payload_len.resize(n_samples);
+    stats.sample_payload_len.assign(n_files, {});
     for (size_t i = 0; i < n_samples; ++i) {
         stats.sample_reads[file_of[i]] += stats.counters.per_sample[i];
         for (size_t q = 0; q < 61; ++q) stats.sample_phred[file_of[i]][q] += stats.counters.umi_phred[i][q];
+        for (size_t L = 0; L < kPayloadHistLen; ++L) {
+            stats.sample_payload_len[file_of[i]][L] += stats.counters.payload_len[i][L];
+        }
     }
     // Fit once, after every worker's counts are in: the intercept is a property of the run, and
     // fitting per chunk would give as many answers as there were chunks.

@@ -39,6 +39,19 @@ inline constexpr uint64_t kWriterBudgetBytes = 32ull << 20;
 inline constexpr size_t kMinBlockBytes = 256u << 10;
 inline constexpr size_t kMaxBlockBytes = 4u << 20;   // the writer's own default
 
+// Reads of one barcode that enter the consensus. Past this the column posterior has long since
+// saturated -- the 10,001st read moves no call and no emitted quality, because the quality is
+// capped by the RT floor at Q40 and a hundred reads already clear it -- while the group still
+// costs time and resident memory proportional to its size. 10x caps the same way and says why:
+// "Very high coverage (greater than 10,000 reads) of transcripts can be problematic because it
+// degrades computational performance and adds little information."
+//
+// Never: the cap applies to the reads that are CONSENSED, never to the reads that are COUNTED.
+// `reads` in the table and `cD` in the FASTQ stay the true depth of the molecule, because the
+// count is the other half of what this pipeline produces and capping it would silently flatten
+// the abundance of exactly the most-amplified molecules.
+inline constexpr size_t kMaxReadsPerGroup = 10000;
+
 struct AssembleRequest {
     std::string input;       // a per-sample FASTQ written by checkout
     std::string output_dir;
@@ -63,6 +76,10 @@ struct AssembleStats {
     uint64_t groups_fragmented = 0;
     uint64_t contigs = 0;
     uint64_t reads_dropped = 0;  // in groups below min_reads
+    // Groups over kMaxReadsPerGroup, and the reads in them that did not enter the consensus. Both
+    // are still counted as reads of their molecule.
+    uint64_t groups_capped = 0;
+    uint64_t reads_over_cap = 0;
     int umi_length = 0;
     int cell_length = 0;
     int buckets = 0;
@@ -73,6 +90,10 @@ struct AssembleStats {
     // RT floor was added. The gap between them is what the chemistry costs.
     double mean_quality = 0.0;
     double mean_consensus_error = 0.0;
+    // Counting mode only: the share of a group's reads that carried the sequence that was emitted.
+    // Well below 1 means the reads of a molecule disagree, which is what the full path resolves
+    // per column and this one resolves by majority vote over whole strings.
+    double mean_support = 0.0;
     // The birthday arithmetic over the barcodes this run actually saw. A short UMI cannot tag
     // every input molecule distinctly by design, so a group is EXPECTED to hold more than one
     // molecule -- `expected_molecules_per_group` says how many, and `molecules / groups` says how

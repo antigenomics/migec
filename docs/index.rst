@@ -7,10 +7,11 @@ complete C++20 rewrite of `MIGEC <https://doi.org/10.1038/nmeth.2960>`_ and
 
 .. warning::
 
-   **Version 2 is under construction.** ``checkout`` works today — barcode extraction, trimming,
-   header transfer and the UMI statistics. ``refine`` and ``assemble`` land over the following
-   milestones; see :doc:`roadmap`. The Groovy MIGEC 1.2.9 that this replaces is archived on the
-   ``legacy-v1`` branch and at tag ``v1-final``.
+   **Version 2 is under construction.** All three stages work today — ``checkout``, ``refine`` and
+   ``assemble`` — with cell barcodes, whitelists, dual-end and positional layouts, cell calling,
+   and ``suggest``/``subsample``/``plot``. Index hopping, ``.mig`` bucket output from checkout and
+   the published benchmark comparisons are what remain; see :doc:`roadmap`. The Groovy MIGEC 1.2.9
+   that this replaces is archived on the ``legacy-v1`` branch and at tag ``v1-final``.
 
 What it does
 ------------
@@ -34,9 +35,12 @@ Pipeline
 
 .. code-block:: text
 
-    FASTQ ──checkout──▶ .mig ──refine──▶ .mig + .pumi ──assemble──▶ consensus FASTQ
-              │                   │                                      │
-         suggest              QC tables, plots                    per-molecule tables
+    FASTQ ──checkout──▶ tagged FASTQ ──refine──▶ corrected ──assemble──▶ consensus FASTQ
+              │                            │                                  │
+         suggest                  barcode table, QC                   per-molecule tables
+
+Every stage writes plain TSV beside its output, and :doc:`migec plot <plots>` draws those tables
+with gnuplot -- so a figure can always be redrawn from the numbers that produced it.
 
 The output is ordinary FASTQ with the sample, cell barcode and UMI in the read name and in
 SAM-style tags, so ``minimap2``, ``bwa``, ``arda``, ``salmon`` and ``kallisto`` consume it
@@ -65,6 +69,7 @@ See :doc:`layouts` for the presets, the slice grammar, fgbio read structures and
    refine
    assemble
    subsample
+   plots
    umi_statistics
    barcode_space
    performance

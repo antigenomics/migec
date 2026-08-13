@@ -17,8 +17,14 @@ Optional extras
 
 .. code-block:: bash
 
-   pip install "migec[seqtree]"   # whitelist lookup at >=2 substitutions, N-wildcard barcodes
-   pip install "migec[plots]"     # QC plots from the tables migec writes
+   pip install "migec[seqtree]"     # whitelist lookup at >=2 substitutions, N-wildcard barcodes
+   pip install "migec[notebooks]"   # polars + marimo, for notebooks/
+
+The pipeline itself has one runtime dependency, ``typer``. Every stage writes plain TSV with the
+standard library, and :doc:`migec plot <plots>` draws those tables with **gnuplot**, which is not a
+Python package — install it from your package manager (``brew install gnuplot``,
+``apt install gnuplot-nox``). Without it ``migec plot`` still writes the ``.gp`` scripts, so the
+figures can be drawn anywhere.
 
 ``seqtree`` is deliberately *not* a core dependency. Every hot path here searches a fixed-length
 barcode at at most one substitution, and enumerating the ``3L`` neighbours in a hash table beats a

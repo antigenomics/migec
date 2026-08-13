@@ -57,8 +57,11 @@ correction is written up in `project/review-algorithms.md`.
 - **Never: The distance-1 barcode-error estimator fails downward as the space fills** (0.92x of truth
   at 0.3% occupancy, 0.23x at 50%, 0.001x at 93%). `err_unreliable` is set past 5% neighbourhood
   occupancy. Never quote the estimate when it is set.
-- **Never: Five commands: `checkout`, `suggest`, `refine`, `assemble`, plus `sort`/`subsample`.** A
-  sixth command or a new CLI flag requires a *failing benchmark that the default cannot pass*.
+- **Never: Five pipeline commands: `checkout`, `suggest`, `refine`, `assemble`, `subsample`.** A
+  sixth *pipeline* command or a new CLI flag requires a *failing benchmark that the default cannot
+  pass*. `info`, `sheet` and `plot` are outside the count: they read no reads and write no pipeline
+  output. `sort` is not a command and never was -- partitioning lives in `assemble`
+  (`project/design-io-interop.md`).
   Constants live in headers next to the measurement that justifies them, so adding a flag means
   deleting a measurement.
 - **Never: Never subsample reads to make an example.** Sort by UMI and take all reads of N UMIs
@@ -159,8 +162,9 @@ correction is written up in `project/review-algorithms.md`.
 
 - M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
   correction, **paired input with strand normalisation**, and **multi-core with byte-identical
-  output at any `-t`** (1.18 M reads/s at 16 threads). Whitelists, dual-end barcodes and `.mig`
-  bucket output are still open.
+  output at any `-t`** (1.06 M reads/s end to end, 1.68 M matching, at 16 threads;
+  `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists and
+  dual-end barcodes are done; `.mig` bucket output from checkout is still open.
 - **Note: The UMI counters are not partitioned yet.** ~22 B per distinct UMI is 8.8 GB at NovaSeq
   scale, held in one piece. The fix is the range partition (M2, with `.mig` bucket output), not a
   smaller struct. Until then checkout warns past 1 GB.
@@ -175,8 +179,12 @@ correction is written up in `project/review-algorithms.md`.
   `(CB,UMI)` are not co-terminal (7.8% overall, 0.3% at ≥6 reads), but 72.7% still form one
   overlap component, so `assemble` partitions by overlap and then runs the ordinary ungapped
   consensus per component. Never extend a component across a gap. `docs/fragmented.rst`.
-- **X2 is done (2026-08-13): the RT/PCR floor is of order 1e-4, so cap emitted quality at ~Q38.**
-  Measured 1.54e-4 [1.36e-4, 1.74e-4] on `SRR1763769`; the 1e-6 guess is dead. `--rt-error auto`
+- **X2 is done (2026-08-13): the RT/PCR floor is of order 1e-4, so cap emitted quality at Q40.**
+  Measured 1.54e-4 [1.36e-4, 1.74e-4] on `SRR1763769`, which agrees with 10x's stated 1e-4 for the
+  V(D)J RT. Never: it is the ONE-MOLECULE floor and every record we emit is one molecule -- 10x's
+  Q60 is for bases covered by >=2 UMIs, and combining molecules is arda's job. `--rt-error` names
+  the class instead of guessing: `rt` 1e-4 (default, Q40), `medium` 1e-5, `high` 1e-6, or the rate
+  (TSO500 v2 is 7.37e-5). `--rt-error auto`
   still fits per dataset (the floor is a property of the enzyme and cycle count), but the
   **default is 1e-4**. Note: Still an upper bound — that library is 49.6% occupied on a 9 nt barcode
   and `checkout` calls it saturated, so collisions inflate it. `docs/quality_floor.rst`.
@@ -189,7 +197,8 @@ correction is written up in `project/review-algorithms.md`.
   `checkout.barcode_space.tsv` / `checkout.umi_quality.tsv`, warned on, documented in
   `docs/barcode_space.rst`, drawn in `notebooks/barcode_space.py` and tested in
   `tests/synthetic/test_barcode_space.py`.
-- **X3 is done (2026-08-13).** Position independence holds (1.04x over 9 nt), so `Π_j m_j` stays
+- **X3 is done (2026-08-13).** Position independence holds (1.0103x over 9 nt; the first pass said
+  1.04x and all of it was N-as-a-fifth-base artefact), so `Π_j m_j` stays
   and the 1.86x collision excess is the read threshold, not the barcode. 92% of distance-1 pairs
   are chance at 47.8% occupancy; the column-shuffle background puts barcode error at 3.4e-3 —
   within 1.7x of the Phred + polymerase prediction, where the analytic estimate is 2.6x below it,
@@ -197,7 +206,7 @@ correction is written up in `project/review-algorithms.md`.
   `docs/nulls.rst`, `scripts/permutation_nulls.py`, `tests/synthetic/test_nulls.py`.
 - **M1 is done (2026-08-13): `migec assemble` works.** `(cell, umi)` grouping, range partition
   into `.mig` buckets with one bucket resident, the column log-likelihood posterior, the RT floor
-  added (not compared) so nothing above ~Q38 is emitted, linkage sub-clustering at X3's 8.68, and
+  added (not compared) so nothing above the named floor is emitted (Q40 by default), linkage sub-clustering at X3's 8.68, and
   `--contig` for random-primed reads (seed placement, union-find overlap components, never bridged
   across a gap). 531 k reads/s; 121 MB at 16 buckets against 203 MB at one; asserted in
   `tests/benchmark/test_assemble_speed.py` in a fresh process per configuration, because
@@ -291,8 +300,34 @@ correction is written up in `project/review-algorithms.md`.
   moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
   missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
   sourced from the pipeline, not fitted to the data. In `SOURCES.md`.
+- **`migec plot` works (2026-08-13, 2.0.0a3)**: fifteen gnuplot panels over the TSVs the stages
+  already write, ColorBrewer Dark2, A/C/G/T always the same four colours. Never: it computes nothing
+  — a figure that cannot be redrawn from a committed table is a figure that will disagree with the
+  report. gnuplot is **not** a Python dependency; without it the `.gp` scripts are still written,
+  which is also how the tests exercise that path (`run(..., gnuplot="")`). `assets/` holds the
+  graphviz pipeline figure and the example panels the README embeds, each next to the table it was
+  drawn from.
+- **The RT floor is named per protocol, not fitted (2.0.0a3).** `--rt-error rt|medium|high|<rate>`
+  = 1e-4 / 1e-5 / 1e-6. Never: **it is the one-molecule floor.** 10x give Q40 to a base covered by one
+  UMI and Q60 only to a base covered by two or more, because an RT error is common-mode within a
+  molecule and independent between them. Every record we emit is one molecule, so Q40 is the
+  default cap and the Q60 case belongs to arda. Every value is cited in `SOURCES.md` (10x's V(D)J
+  figure, X2's own 1.54e-4, TSO500 v2's 7.37e-5, McInerney 2014 for the polymerases, Shagin 2017
+  for the 5x first-cycle factor).
+- **`--fast` is counting mode (2.0.0a3)**, not a faster consensus: modal exact sequence, per-base
+  max quality over the reads carrying it, floor still applied. Refused with `--contig`. Never: the
+  max is over the reads carrying the WINNING sequence — across variants it would take its highest
+  quality from the reads that disagree.
+- **Coverage into the consensus is capped at 10,000 reads/barcode (2.0.0a3).** Never: the cap is on
+  the reads consensed, never on the reads counted; `cD` stays the true depth or the abundance of
+  the most-amplified molecules is silently flattened.
+- **Note: the benchmark corpus was assigning every read to one sample of four** (`i % 4` with four
+  reads per molecule is always 0). The matcher scored all four patterns, so throughput was sound,
+  but the per-sample counters and the memory figure were one sample's. Fixed; the published table
+  is re-measured and now comes from `scripts/benchmark_threads.py`, which writes the TSV the
+  figure is drawn from.
 - Next: M3's remainder (the template's own error split), then the M2 remainder
-  (dual-end barcodes, `.mig` bucket output from checkout, i7xi5, bit-parallel matcher).
+  (`.mig` bucket output from checkout, i7xi5, bit-parallel matcher), then `--rt-error auto`.
 - **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
   1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
 - The archive is pushed: `legacy-v1` + tag `v1-final`, and master is the rewrite. Recovery point

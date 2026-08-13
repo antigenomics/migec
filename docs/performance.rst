@@ -48,35 +48,42 @@ corpus ``tests/benchmark/`` builds — on an M-series laptop:
      - matching reads/s
      - peak RSS
    * - 1
-     - 10.4 s
-     - 193,002
-     - 9.7 s
-     - 206,803
-     - 52 MB
+     - 9.9 s
+     - 202,717
+     - 9.2 s
+     - 217,506
+     - 60 MB
    * - 2
-     - 5.7 s
-     - 353,012
-     - 5.0 s
-     - 400,886
-     - 70 MB
+     - 5.5 s
+     - 362,486
+     - 4.8 s
+     - 412,855
+     - 78 MB
    * - 4
-     - 3.4 s
-     - 590,076
-     - 2.7 s
-     - 740,494
-     - 89 MB
+     - 3.3 s
+     - 603,773
+     - 2.6 s
+     - 758,801
+     - 98 MB
    * - 8
      - 2.2 s
-     - 903,599
+     - 910,500
      - 1.5 s
-     - 1,309,576
-     - 131 MB
+     - 1,335,791
+     - 136 MB
    * - 16
      - 1.9 s
-     - 1,055,543
+     - 1,056,472
      - 1.2 s
-     - 1,655,889
-     - 220 MB
+     - 1,684,654
+     - 217 MB
+
+Measured 2026-08-13 by ``python scripts/benchmark_threads.py --reads 2000000 -o assets/``, which
+writes ``assets/benchmark_threads.tsv``; ``migec plot assets/`` draws the figure from that table,
+so the two cannot drift apart. Earlier prose quoted 1.18 M reads/s here, from a run whose corpus
+sent every read to one sample of four -- the matcher still scored all four patterns, so the
+matching column was sound, but the per-sample counters were not, and the memory figure was a
+single sample's.
 
 The serial 0.7 s of statistics is why the end-to-end column flattens at 16 threads while the
 matching column is still scaling. Amdahl, and it is the next thing to fix rather than the thread
