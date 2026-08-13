@@ -16,6 +16,7 @@
 #include "migec/pattern.hpp"
 #include "migec/refine.hpp"
 #include "migec/resource.hpp"
+#include "migec/subsample.hpp"
 #include "migec/suggest.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
@@ -434,6 +435,35 @@ PYBIND11_MODULE(_core, m) {
         "Fold error-child barcodes into their parents. `umis` is one entry per read. Returns the "
         "merge map, the corrected per-barcode counts, the error rate used, and the "
         "collision-corrected molecule count. A barcode with no plausible parent is always kept.");
+
+    m.def(
+        "subsample",
+        [](const std::string& input, const std::string& output, uint32_t per_10k, bool by_cell,
+           int gzip_level) {
+            SubsampleRequest req;
+            req.input = input;
+            req.output = output;
+            req.per_10k = per_10k;
+            req.by_cell = by_cell;
+            req.gzip_level = gzip_level;
+            SubsampleStats st;
+            {
+                py::gil_scoped_release release;
+                st = subsample(req);
+            }
+            py::dict d;
+            d["reads"] = st.reads;
+            d["reads_kept"] = st.reads_kept;
+            d["barcodes"] = st.barcodes_seen;
+            d["reads_without_umi"] = st.reads_without_umi;
+            d["wall_seconds"] = st.wall_seconds;
+            return d;
+        },
+        py::arg("input"), py::arg("output"), py::arg("per_10k") = 100u,
+        py::arg("by_cell") = true, py::arg("gzip_level") = 6,
+        "Keep ALL the reads of a hash-selected fraction of the barcodes. Never a fraction of the "
+        "reads, and never the first N barcodes: both destroy the MIG size distribution the "
+        "fixture exists to preserve.");
 
     m.def(
         "refine",

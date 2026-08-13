@@ -33,6 +33,7 @@ add_library(migec_core STATIC
   src/suggest.cpp
   src/consensus.cpp
   src/refine.cpp
+  src/subsample.cpp
   src/assemble.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)

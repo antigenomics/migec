@@ -194,9 +194,28 @@ def assemble(
 
 
 @app.command()
-def subsample() -> None:
-    """Take N whole UMIs with all of their reads. (M4)"""
-    raise typer.Exit(_not_yet("subsample", "M4"))
+def subsample(
+    reads: Path = typer.Argument(..., help="A FASTQ carrying RX (and CB) tags."),
+    output: Path = typer.Option(..., "--out", "-o", help="Output FASTQ; .gz is honoured."),
+    keep: float = typer.Option(
+        1.0,
+        "--keep",
+        help="Percent of BARCODES to keep, with all of their reads. Never a percent of the reads: "
+        "sampling reads gives one read per molecule and destroys the MIG size distribution, which "
+        "is the one thing a UMI fixture exists to preserve.",
+    ),
+    by_umi_only: bool = typer.Option(
+        False,
+        "--by-umi-only",
+        help="Sample molecules rather than whole cells. Off by default, because a fixture of "
+        "thousands of cells holding one molecule each is the same mistake as sampling reads.",
+    ),
+) -> None:
+    """Take all the reads of a fraction of the barcodes."""
+    from migec.subsample import format_report, run
+
+    summary = run(reads, output, keep_percent=keep, by_cell=not by_umi_only)
+    typer.echo(format_report(summary))
 
 
 def _not_yet(name: str, milestone: str) -> int:

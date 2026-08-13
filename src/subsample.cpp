@@ -1,0 +1,73 @@
+#include "migec/subsample.hpp"
+
+#include <algorithm>
+#include <unordered_set>
+
+#include "migec/fastq.hpp"
+#include "migec/resource.hpp"
+#include "migec/types.hpp"
+
+namespace migec {
+
+namespace {
+
+std::string_view tag_value(std::string_view comment, std::string_view key) {
+    size_t pos = 0;
+    while (pos <= comment.size()) {
+        const size_t end = std::min(comment.find('\t', pos), comment.size());
+        const std::string_view field = comment.substr(pos, end - pos);
+        if (field.size() > key.size() && field.compare(0, key.size(), key) == 0) {
+            return field.substr(key.size());
+        }
+        pos = end + 1;
+    }
+    return {};
+}
+
+}  // namespace
+
+SubsampleStats subsample(const SubsampleRequest& request) {
+    Stopwatch clock;
+    SubsampleStats stats;
+    if (request.per_10k == 0 || request.per_10k > 10000) {
+        throw MigecError("subsample: keep must be in 1..10000 ten-thousandths");
+    }
+
+    FastqWriter writer(request.output, request.gzip_level);
+    FastqReader reader(request.input);
+    FastqRecord rec;
+    // Only over the barcodes that were KEPT, so this is bounded by the fixture and not by the
+    // library it came from -- which is the whole point of running this before anything else.
+    std::unordered_set<uint64_t> kept_keys;
+    while (reader.next(rec)) {
+        ++stats.reads;
+        const std::string_view umi = tag_value(rec.comment, "RX:Z:");
+        if (umi.empty()) { ++stats.reads_without_umi; continue; }
+        // Select on the CELL when there is one: a kept cell keeps every molecule in it. Hashing
+        // cell+umi together would sample molecules independently, which is the read-sampling
+        // mistake wearing a different hat.
+        const std::string_view cell = request.by_cell ? tag_value(rec.comment, "CB:Z:")
+                                                      : std::string_view{};
+        const uint64_t selector = cell.empty() ? pack_barcode(umi) : pack_barcode(cell);
+        if (!keeps(selector, request.per_10k)) continue;
+        ++stats.reads_kept;
+        // Counted as MOLECULES, whatever the selection was on, because reads-per-barcode is the
+        // number that says whether the size distribution survived.
+        if (cell.empty()) {
+            kept_keys.insert(selector);
+        } else {
+            std::string joined;
+            joined.reserve(cell.size() + umi.size());
+            joined.append(cell);
+            joined.append(umi);
+            kept_keys.insert(pack_barcode(joined));
+        }
+        writer.write(rec.name, rec.comment, rec.seq, rec.qual);
+    }
+    writer.close();
+    stats.barcodes_seen = kept_keys.size();
+    stats.wall_seconds = clock.seconds();
+    return stats;
+}
+
+}  // namespace migec
