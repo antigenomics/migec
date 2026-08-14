@@ -162,6 +162,19 @@ correction is written up in `project/review-algorithms.md`.
 4. `publish.yml` builds wheels and publishes via OIDC to the `pypi` environment. Never: Do not rename
    that workflow file or the environment: the PyPI trusted publisher is bound to both.
 
+Never: **`scripts/wheel_smoke.sh` runs in the publish job and NOWHERE else** -- not in CI. It runs
+inside cibuildwheel on Linux as well as macOS, so a bug only a case-sensitive filesystem exposes
+reaches you after the release is already tagged. That is exactly what 2.4.0 did: `tr 'A-Z' 'a-z'`
+over the whole barcode-sheet line lowercased the sample id, `checkout` wrote `co/s1.fq.gz`, the
+next command asked for `co/S1.fq.gz`, and macOS did not care. Run
+`PATH="$PWD/.venv/bin:$PATH" bash scripts/wheel_smoke.sh` before tagging whenever that script or a
+stage's output naming has changed.
+
+Note: **a failed publish costs nothing.** Nothing is uploaded unless every wheel job passes, so the
+version is still free on PyPI. Fix on a branch, merge, then `gh release delete v<version>
+--cleanup-tag` and `gh release create` again on the fixed master -- re-running the workflow would
+rebuild the old tag.
+
 ## Open loops
 
 - M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
