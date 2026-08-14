@@ -52,10 +52,13 @@ echo "host=$(hostname) job=${SLURM_JOB_ID:-local} threads=$THREADS"
 
 export MAMBA_ROOT_PREFIX=$ROOT/mamba
 MICROMAMBA=$HOME/bin/micromamba
-if [ ! -x "$UECDIR/bin/bwa" ]; then
+# Never: `umierrorcorrect` is on PyPI, NOT on bioconda -- micromamba answers "does not exist
+# (perhaps a typo or a missing channel)" and the job dies at the solve. The aligner and samtools
+# come from conda, the tool from pip, into the same prefix.
+if [ ! -x "$UECDIR/bin/run_umierrorcorrect.py" ]; then
     echo "=== creating the UMIErrorCorrect environment ==="
-    "$MICROMAMBA" create -y -p "$UECDIR" -c conda-forge -c bioconda \
-        python=3.10 umierrorcorrect bwa samtools
+    "$MICROMAMBA" create -y -p "$UECDIR" -c conda-forge -c bioconda python=3.10 pip bwa samtools
+    "$UECDIR/bin/pip" install --quiet umierrorcorrect
 fi
 export PATH="$UECDIR/bin:$PATH"
 # Logged before anything is run: if a flag has moved between versions, this is the line that says
