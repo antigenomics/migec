@@ -52,9 +52,14 @@ MICROMAMBA=$HOME/bin/micromamba
 # Never: test for `conda-meta/history`, not for `bin/python`. A half-deleted prefix still has a
 # python and micromamba no longer calls it an environment, so a `bin/python` guard skips the
 # rebuild and every later `install -p` fails with "Expected environment not found at prefix".
+# Never: the check has to require msgpack >= 1.0, not merely that it imports. The patch below
+# DELETES `encoding="utf-8"`, and that is only equivalent on 1.x, where `raw=False` is the default;
+# on 0.6.2 `raw` still defaults to True and the tool would silently get BYTES keys where it expects
+# strings. An env left over from an earlier attempt satisfies a bare `import msgpack` and turns the
+# patch from a no-op into a behaviour change.
 usable_env() {
     [ -s "$UVDIR/conda-meta/history" ] || return 1
-    "$UVDIR/bin/python" -c "import msgpack, psutil, tqdm" 2>/dev/null
+    "$UVDIR/bin/python" -c "import psutil, tqdm, msgpack, sys; sys.exit(0 if msgpack.version >= (1, 0) else 1)" 2>/dev/null
 }
 
 if ! usable_env; then
@@ -121,6 +126,11 @@ process() {
         samtools index "$out/$acc.bam"
     fi
     if [ ! -s "$out/$acc.vcf" ]; then
+        # Never: a failed `call` leaves a truncated `.msgpack` pileup behind, and the next attempt
+        # reads it and dies with "Unpack failed: incomplete input" -- which reads as a new bug and
+        # is the previous one's litter. Keep the expensive artefacts, drop everything else.
+        find "$out" -maxdepth 1 -type f ! -name 'extracted.fastq' ! -name "$acc.bam" \
+            ! -name "$acc.bam.bai" ! -name '*.log' -delete
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \
             "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$out/$acc.bam" -b "$PANEL" \
             -f "$REF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
