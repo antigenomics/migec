@@ -558,12 +558,17 @@ correction is written up in `project/review-algorithms.md`.
   and 6x fewer molecules destroyed, and destroying one is the error nothing downstream can detect.
   Never: **nothing rescues the one-reference case** -- two molecules colliding there hold the SAME
   sequence, so neither the mapping position nor `assemble`'s payload sub-clustering can separate
-  them, and the barcode is the only evidence there is. Note: on 200 or 20,000 distinct references
-  they win by 0.001 ARI, and that is where this comparison STOPS rather than a limit of the method
-  -- collided molecules there carry DIFFERENT sequences, which is what makes them separable at all,
-  and sub-clustering separates them from the payload with no aligner one stage after the column is
-  scored. Measuring that needs `assemble` to emit a read->molecule map, which it does not.
-  8-48x faster throughout, including the alignment they cannot skip; depth
+  them at any depth, and the barcode is the only evidence there is. Never: on 200 or 20,000
+  distinct references they win by 0.001 ARI and that gap is a **DEPTH THRESHOLD**, not a limit --
+  collided molecules there carry DIFFERENT sequences and `assemble` separates them from the payload
+  with no aligner, but only past the depth 8.68 fixes for itself: the strongest evidence a 50/50
+  split can carry is `log10 C(n, n/2)`, which is 2.4 at n=10, 8.2 at n=30, 9.4 at n=34, so under
+  ~32 reads on the barcode NOTHING clears it. Measured (`scripts/collision_split.py`,
+  `assets/collision_split.tsv`): **0/12 separated at 9.1 reads on the barcode, 7/14 at 40.9, then
+  10/10, 13/13, 10/10 at 82, 161, 283.** The ARI column was scored at 5 reads/molecule, a third of
+  what the test needs. Never: a collision is defined on the TRUE barcode -- on the observed one it
+  counts error coincidences and "grows" 16 -> 169 with the read count on a library whose molecule
+  count never moved. 8-48x faster throughout, including the alignment they cannot skip; depth
   (1.2/2.5/5/10 reads per molecule) changes neither ranking. `docs/grouping.rst`,
   `assets/grouping_tools.tsv`. Note: the simulator now writes `clones.fa` because a map-first tool
   cannot run at all without a reference. Note: fgbio needs a **JDK 17+** (JDK 11 gives

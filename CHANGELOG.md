@@ -34,11 +34,19 @@ rescues that case: two molecules that collide on one reference hold the same seq
 the mapping position nor payload sub-clustering can tell them apart, and the barcode is the only
 evidence there is.
 
-On 200 or 20,000 distinct references they win by 0.001 ARI. That is where the comparison stops
-rather than a limit of the method: collided molecules there carry *different* sequences, which is
+On 200 or 20,000 distinct references they win by 0.001 ARI, and that gap is a **depth threshold**
+rather than a limit of the method. Collided molecules there carry *different* sequences, which is
 what makes them separable, and `assemble`'s linkage sub-clustering separates them from the payload
-with no aligner. The column is scored at `refine`, one stage earlier. migec is 8-48x faster
+with no aligner -- but only above the depth the 8.68 threshold fixes for itself, since the strongest
+evidence a 50/50 split can carry is `log10 C(n, n/2)` and that reaches 8.68 at n ~ 32.
+`scripts/collision_split.py` measures it: **0 of 12 collisions separated at 9.1 reads on the
+barcode, 7 of 14 at 40.9, and 10 of 10, 13 of 13, 10 of 10 at 82, 161 and 283.** The comparison
+above was scored at 5 reads per molecule, a third of what the test needs. migec is 8-48x faster
 throughout, including the alignment they cannot skip.
+
+A collision is defined on the **true** barcode, never the observed one -- two molecules whose
+observed barcodes coincide because one picked up a sequencing error are what `refine` corrects, and
+counting them makes the collision rate grow with the read count, which it cannot do.
 
 `docs/grouping.rst` has the table, `assets/grouping_tools.tsv` the numbers, `SOURCES.md` how to
 install both (fgbio needs a JDK 17+; UMI-tools needs `--no-build-isolation` on Python 3.12+). The

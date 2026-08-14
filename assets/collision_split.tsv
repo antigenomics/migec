@@ -1,0 +1,6 @@
+reads_per_molecule	clones	true_collisions	split_by_assemble	fraction	groups_split	mean_reads_on_collided_barcode
+5.0	200	12	0	0.000	0	9.1
+20.0	200	14	7	0.500	10	40.9
+40.0	200	10	10	1.000	18	82.4
+80.0	200	13	13	1.000	17	161.0
+160.0	200	10	10	1.000	19	283.4

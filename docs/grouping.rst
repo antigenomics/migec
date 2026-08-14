@@ -194,19 +194,17 @@ Three statements, in the order they matter:
   tell them apart. They put **3.0%** (UMI-tools) and **3.9%** (fgbio) of reads into clusters that
   mix molecules, against migec's **0.65%** — 4.6× and 6× fewer molecules destroyed. migec pays for
   it in splitting (1.1% against 0.56%), which inflates a count and is recoverable.
-* **On a diverse reference the map-first tools win by 0.001 ARI, and that gap is where this
-  comparison stops, not a limit of the method.** With 200 or 20,000 distinct sequences, two
-  molecules that collided on a barcode carry *different sequences* — that is what makes them
-  separable, and the aligner separates them by sending them to different references. So does
-  ``assemble``, by linkage sub-clustering on the payload, with no aligner at all: the discriminating
-  power is in the reads either way. The column is scored at ``refine``, one stage earlier, so it
-  does not include it. Measuring it needs ``assemble`` to emit a read→molecule map, which it does
-  not.
+* **On a diverse reference the map-first tools win by 0.001 ARI, and that gap is a depth
+  threshold.** With 200 or 20,000 distinct sequences, two molecules that collided on a barcode
+  carry *different sequences* — that is what makes them separable at all — and the aligner
+  separates them by sending them to different references, at any depth. ``assemble`` separates them
+  too, by linkage sub-clustering on the payload with no aligner, but only above a depth the
+  threshold itself fixes. Measured below.
 
   The direction that matters is the other one, and it is not symmetric. On **one** reference the
-  collided molecules are the *same* sequence up to a few mismatches, so nothing separates them —
-  not the mapping position, not the payload, not sub-clustering. There the barcode is the only
-  evidence there is, and having an error model for it is the whole difference.
+  collided molecules are the *same* sequence, so nothing separates them — not the mapping position,
+  not the payload, not sub-clustering, at any depth. There the barcode is the only evidence there
+  is, and having an error model for it is the whole difference.
 * **migec is 8–48× faster and does not need the alignment at all.** 0.17–0.26 s against 0.98–4.61 s
   (UMI-tools) and 3.90–7.98 s (fgbio), *including* the aligner run the other two cannot skip.
   fgbio's memory is a JVM heap; UMI-tools streams a BAM and stays flat, while migec's grows with
@@ -223,3 +221,77 @@ Three statements, in the order they matter:
    ``RX`` composes with migec, a tool that dedups on it replaces a stage of it. UMI-tools and fgbio
    are the second kind, which is why they are compared here rather than in
    :doc:`downstream`.
+
+When sub-clustering separates a collision, and when it cannot
+-------------------------------------------------------------
+
+The comparison above is scored at ``refine``, which groups on the barcode. ``assemble`` then
+sub-clusters each group by *linkage* — co-segregating minor alleles at X3's threshold of 8.68 — and
+that is what is supposed to separate two molecules sharing a barcode without an aligner. The
+threshold fixes its own floor: the strongest evidence a pair of columns can carry for a 50/50 split
+is ``log10 C(n, n/2)``, which is 2.4 at n=10, 8.2 at n=30 and 9.4 at n=34. **Below about 32 reads
+on the barcode nothing can clear 8.68**, whatever the two molecules look like.
+
+.. code-block:: bash
+
+   python scripts/collision_split.py --out /tmp/split --coverage 5 20 40 80 160
+
+20,000 molecules over 200 clones, 12 nt barcode. ``assets/collision_split.tsv``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 20 20 18 24
+
+   * - reads / molecule
+     - reads on a collided barcode
+     - true collisions
+     - separated
+     - fraction
+   * - 5
+     - 9.1
+     - 12
+     - 0
+     - 0.000
+   * - 20
+     - 40.9
+     - 14
+     - 7
+     - 0.500
+   * - 40
+     - 82.4
+     - 10
+     - **10**
+     - **1.000**
+   * - 80
+     - 161.0
+     - 13
+     - **13**
+     - **1.000**
+   * - 160
+     - 283.4
+     - 10
+     - **10**
+     - **1.000**
+
+So the map-first advantage on a diverse reference is real at shallow depth and gone by ~40 reads
+per molecule: **every** collision is separated from the payload alone, with no aligner, once the
+barcode carries enough reads to clear the threshold. The 0.001 ARI gap in the table above was
+measured at 5 reads per molecule, i.e. 9.1 reads on a collided barcode — a third of what the test
+needs.
+
+.. note::
+
+   A collision is defined on the **true** barcode, never the observed one. Two molecules whose
+   observed barcodes coincide because one picked up a sequencing error are not a collision, they
+   are what ``refine`` corrects — and counting them makes the collision rate grow with the read
+   count, which it cannot do. Measured before the definition was fixed: 16 "collisions" at 5 reads
+   per molecule rising to 169 at 80, on a library whose molecule count never moved.
+
+.. note::
+
+   Lowering the threshold for this case is not obviously right and is not done. 8.68 was calibrated
+   in :doc:`nulls` against a curveball randomisation of *one molecule's* reads, where the question
+   is whether a subclone is real. Two molecules of different clones are not a subclone — they
+   differ at most positions rather than a few — so a cheaper test would separate them at lower
+   depth without touching the subclone threshold. That needs its own false-positive curve before it
+   is worth a line of code.

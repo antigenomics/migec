@@ -296,6 +296,15 @@ McInerney 2014's published fidelities can be checked against.
 | Regenerate | `python scripts/compare_migec_v1.py --out DIR --jar migec-1.2.9.jar --molecules 20000 --clones 200 --coverage 8 --min-count {1,5} --tsv out.tsv` |
 | Provenance | derived (computed) |
 
+### `assets/collision_split.tsv`
+
+| Item | Value |
+|---|---|
+| What | how often `assemble`'s linkage sub-clustering separates two molecules that truly collided on a barcode, against depth |
+| Regenerate | `python scripts/collision_split.py --out DIR --coverage 5 20 40 80 160 --tsv out.tsv` |
+| Never | "collided" is the TRUE barcode, never the observed one -- an observed coincidence caused by a barcode error is what `refine` corrects, and counting it makes the collision rate grow with the read count |
+| Provenance | derived (computed from simulated reads); drawn in `docs/grouping.rst` |
+
 ### Example QC figures in `assets/`
 
 | Item | Value |

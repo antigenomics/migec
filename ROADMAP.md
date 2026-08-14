@@ -361,11 +361,13 @@ model has to use the evidence that survives at one read:
       undone, putting 0.65% of reads into mixed clusters against 3.0% and 3.9% -- 4.6x and 6x fewer
       molecules destroyed. Nothing rescues that case: molecules colliding on one reference hold the
       SAME sequence, so neither the position nor payload sub-clustering separates them. On 200 or
-      20,000 distinct references they win by 0.001 ARI, and that is where this comparison stops
-      rather than a limit -- collided molecules there carry different sequences, which is exactly
-      what `assemble`'s linkage sub-clustering separates from the payload with no aligner, one
-      stage after the column is scored. migec is 8-48x faster including the alignment they cannot
-      skip. `docs/grouping.rst`, `assets/grouping_tools.tsv`
+      20,000 distinct references they win by 0.001 ARI, and that gap is a DEPTH THRESHOLD rather
+      than a limit: collided molecules there carry different sequences and `assemble` separates
+      them from the payload with no aligner, but only past the depth 8.68 fixes for itself
+      (`log10 C(n, n/2)` clears it at n ~ 32). Measured -- 0/12 separated at 9.1 reads on the
+      barcode, 7/14 at 40.9, then 10/10, 13/13, 10/10 at 82, 161 and 283. migec is 8-48x faster
+      including the alignment they cannot skip. `docs/grouping.rst`,
+      `assets/grouping_tools.tsv`, `assets/collision_split.tsv`
 - [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
       Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware callers benchmarked by
       Maruzani et al. 2024 for low-frequency ctDNA)
