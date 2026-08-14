@@ -51,6 +51,22 @@ bucket as it finishes with it, which is right for its own temporaries and catast
 checkout's output -- the first run through `--mig` ate three of the four samples' partitions, and
 a second `assemble` over an eaten one would report a smaller library with nothing to say why.
 
+### The i7 x i5 contingency table
+
+`checkout` reads the index pair out of the instrument's own read header -- the last field of
+`1:N:0:ATCACG+CGTGAT` -- for every read, matched or not, and writes
+`checkout.index_pairs.tsv`: reads per observed combination, each one's share of its own i7 and i5,
+and whether it looks ordered. Index hopping is the one contamination a per-sample yield cannot see,
+because a hopped read lands in another real sample and looks like one of its reads; the header is
+the only evidence, and it was already in the file.
+
+Never: **a single-indexed run is not estimable, and that is not zero.** With one index there are no
+combinations, so nothing can be off-diagonal.
+
+Note: it matters most where it is smallest. At 0.1% hopping a 1% variant in a deeply sequenced
+sample contaminates its neighbour at 1e-5, which is the level a rare-variant caller is asked to
+believe.
+
 ### refine reads and writes buckets, and the format carries the barcode's own quality
 
 `checkout --mig` -> `refine` -> `assemble` runs on buckets end to end. refine's output is

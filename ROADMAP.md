@@ -42,11 +42,10 @@ Everything below is either open or half-open. Nothing else on this page is.
 |---|---|---|---|
 | 1 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
 | 2 | `--rt-error auto` | M1 | falls straight out of (1). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
-| 3 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
-| 4 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
-| 5 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
-| 6 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
-| 7 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
+| 3 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 4 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
+| 5 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
+| 6 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
 One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
 shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
@@ -203,7 +202,7 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       Opt-in, and FASTQ stays the default: a `.mig` file is an intermediate nothing else reads.
       500 k reads over four samples at `-t 4`: **1.16 s -> 0.98 s** end to end for the identical
       124,878 molecules, and the consensus FASTQ is byte-identical after decompression
-- [ ] i7×i5 contingency table — the only way index hopping is actually estimable
+- [x] **i7xi5 contingency table** (2026-08-14) — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
   threads ; >1 M reads/s at 16 threads
 
