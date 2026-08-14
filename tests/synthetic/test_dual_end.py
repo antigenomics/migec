@@ -128,6 +128,37 @@ def test_a_positional_barcode_read_with_no_payload_is_not_dropped(tmp_path):
     assert len(tags["RX"]) == 10
 
 
+def test_the_skew_warning_is_weighed_against_the_barcode_not_the_umi(tmp_path):
+    """The counter is keyed on cell + UMI, so `effective_length` spans 26 nt, not 10.
+
+    Weighed against `umi_length` the test reads "25.4 nt of a 10 nt UMI is usable" and can never
+    be true, so the warning is dead on every single-cell run -- which is exactly where a skewed
+    cell barcode is worth hearing about. Here the first eight positions of the cell barcode are
+    constant, so about 18 of 26 barcode bases carry information: below 0.8 x 26, above 0.8 x 10.
+    """
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        rng = random.Random(3)
+        for i in range(500):
+            cb = "A" * 8 + "".join(rng.choice("ACGT") for _ in range(8))
+            umi = "".join(rng.choice("ACGT") for _ in range(10))
+            cdna = "".join(rng.choice("ACGT") for _ in range(90))
+            f1.write(f"@r{i}\n{cb}{umi}\n+\n{'I' * 26}\n")
+            f2.write(f"@r{i}\n{cdna}\n+\n{'I' * 90}\n")
+    (tmp_path / "bc.txt").write_text(f"P\t{TENX}\n")
+
+    s = run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz", max_offset=0)["samples"][0]
+    # The three lengths are reported apart, so nothing has to guess which one a column means.
+    assert (s["umi_length"], s["cell_length"], s["barcode_length"]) == (10, 16, 26)
+    assert s["umi_length"] < s["effective_length"] < s["barcode_length"]
+
+    from migec.checkout import format_report
+
+    report = format_report(run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out2",
+                               reads2=tmp_path / "r2.fq.gz", max_offset=0))
+    assert "barcode is 26 nt but only" in report
+
+
 def test_a_positional_pattern_is_refused_by_a_free_scan(tmp_path):
     """No anchor means nothing to search for. Saying so beats matching everywhere.
 

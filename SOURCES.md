@@ -135,7 +135,9 @@ rates fitted as Beta, counts as Beta-Binomial, `Q = −10 log10 P`, capped at 10
 | Why this one | the **VDJ-T** library, not GEX: 569 MB against tens of GB, and it is the part that matters here. The 3' GEX libraries carry the same barcode structure at 100x the size |
 | Layout | 5' v2: **R1 = 16 nt cell barcode + 10 nt UMI, exactly 26 nt and nothing else**; R2 = 90 nt cDNA; I1/I2 index reads present |
 | Pattern | `^XXXXXXXXXXXXXXXXNNNNNNNNNN`, or `--preset 10x-v2`, or the slice `cell:0:16,16:26`. Purely positional — there is no constant sequence to anchor on, which is why the pattern grammar had to allow a scored-nothing pattern at a fixed offset |
-| Measured | 3,155,166 reads, **100% assigned**, 221,024 barcodes at 14.28 reads each, effective UMI length 9.97/10. refine on **R2** (the mate carrying the cDNA): 305,702 molecules, **813 cells** called by OrdMag, clonality 0.0014 |
+| Lanes | **Two**, `L001` 3,155,166 read pairs and `L002` 3,146,407, summing to **6,301,573** — exactly what Cell Ranger reports for this library. `checkout` takes one R1 and one R2, so both lanes are concatenated first (a concatenated gzip stream is valid), **in the same order for both mates**: `assemble` matches mates by position and refuses only on a length mismatch, so a swapped lane order mis-mates every pair silently |
+| Measured, one lane (`L001`, 2026-08-13) | 3,155,166 reads, **100% assigned**, effective UMI length 9.97/10. refine on **R2**: 305,702 molecules, 813 cells by OrdMag, clonality 0.0014. Never: the "221,024 barcodes at 14.28 reads each" published here previously was **distinct UMIs pooled over all cells**, not molecules — `checkout` keyed its counters on the UMI alone until 2026-08-14. The true L001 figures are **311,962 molecules `(cell, UMI)` over 101,634 cell barcodes, 10.11 reads each** |
+| Measured, both lanes (2026-08-14) | 6,301,573 reads. refine on **R2** with `--cell-whitelist`: 467,810 molecules, **888 cells** by OrdMag, 84.88% of reads in called cells, 88.90% of reads on the whitelist. Cell Ranger 5.0.0 on the identical input: 479 cells, 86.80%, 90.60%. `assets/cellranger.tsv` |
 | Note: | refine and assemble take **R2**, not R1: trimming the pattern leaves R1 empty, so the payload evidence is vacuous there and the reported clonality comes out 1.0 saying so |
 | Provenance | experimental (10x public) |
 | Regenerate the fixture | `migec checkout R1 R2 --preset 10x-v2 --sample PBMC -o co/` then `migec subsample co/PBMC_R2.fq.gz -o sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz --keep 1` |
@@ -395,6 +397,60 @@ and `fastq-dump` exits 3.
 | What | consensuses, exactness, wall clock and peak RSS for MIGEC 1.2.9 and migec 2 at matched MIG-size thresholds |
 | Regenerate | `python scripts/compare_migec_v1.py --out DIR --jar migec-1.2.9.jar --molecules 20000 --clones 200 --coverage 8 --min-count {1,5} --tsv out.tsv` |
 | Provenance | derived (computed) |
+
+### `assets/cellranger.tsv`
+
+| Item | Value |
+|---|---|
+| What | barcode validity, cell set and reads-in-cells for Cell Ranger 5.0.0 and migec on `sc5p_v2_hs_PBMC_1k` VDJ-T, one row per (tool, whitelist) |
+| Regenerate | `python scripts/compare_cellranger.py --r1 R1.fq.gz --r2 R2.fq.gz --cellranger-dir DIR --whitelist 737K-august-2016.txt --out DIR --threads 8 --tsv assets/cellranger.tsv` (both lanes concatenated first; ~48 s at 8 threads) |
+| Never | **two Cell Ranger versions, and the version is a COLUMN.** 10x's published calls are 5.0.0; `cellranger vdj` 10.1.0 was run here (`scripts/cellranger_vdj.sbatch`, 16 cores, under `/projects/immunestatus` on aldan3 — never `/projects/cdr3*`). They agree at **Jaccard 0.9938** (477 cells shared of 479 / 478), which is the control saying the migec gap is not version drift |
+| Never | **the cost row is not like for like unless you read the third stage.** Cell Ranger's 524.5 s / 936 MB also assembles and annotates a contig per cell; migec's 35.0 s / 679 MB is `checkout` + `refine`, which is what answers these three axes. End to end with `assemble --contig` + arda it is ~90 s, still 5.8x. Different hardware (16-core node against 8 laptop threads), so the ratio is the number and not the seconds |
+| Never | **5.0.0's published `Median TRB UMIs per Cell` of 12.0 matches neither denominator in its own tables** (both give 11.0). 10.1.0 reports TRA 4.0 / TRB 11.0, exactly the medians over ALL cells in its own tables; 5.0.0's TRA 5.0 is the median over cells that HAVE that chain. Derive these from the contig tables and name the denominator |
+| Fetch | `cellranger-10.1.0.tar.gz` from a 10x signed URL (expires; re-request from the download page) and `refdata-cellranger-vdj-GRCh38-alts-ensembl-7.1.0.tar.gz` (3,370,702 bytes, unsigned). Note: the V(D)J reference is germline only, ~3 MB, not a genome |
+| Never | **the cell sets are not the same population**, so the table carries five counts (`cells_called`, `cells_shared`, `cells_tool_only`, `cells_other_only` per side) and never a ratio. migec's gate is molecules of any sequence; Cell Ranger's is "assembled a productive V(D)J contig", so a B cell is correctly in one set and not the other |
+| Never | **no molecule-count column for Cell Ranger.** Its `umis` counts UMIs incorporated into a filtered contig (7,623 over 479 cells); migec counts every molecule of any sequence. Different populations, not an over-count |
+| Never | **`frac_reads_in_cells` is READS.** Every column of `<sample>.cells.tsv` and `<sample>.cell_rank.tsv` is molecules, and the molecule fraction reads 57% where the read fraction reads 85% — ambient barcodes are molecule-rich and read-poor. It is summed from `<sample>.barcodes.tsv` |
+| Never | **Cell Ranger's AIRR count columns are the inverse of arda's.** In `_airr_rearrangement.tsv`, `consensus_count` is reads and `duplicate_count` is UMIs — verified on all 943 rows. The script asserts the identity against the contig CSV and refuses if it moves |
+| Provenance | experimental (10x's published Cell Ranger 5.0.0 calls); the migec columns and every comparison derived |
+
+### `assets/cellranger_chains.tsv`
+
+| Item | Value |
+|---|---|
+| What | per-(cell, locus) chain recall and junction agreement for migec plus arda against Cell Ranger's assembled contigs, one row per locus |
+| Regenerate | `migec assemble ref/PBMC.fq.gz -o asm/ --contig --min-reads 30`, then `python scripts/compare_cellranger_chains.py --consensus asm/PBMC.consensus.fq.gz --cellranger-dir DIR --min-reads 30 --out DIR --arda $(which arda) --tsv assets/cellranger_chains.tsv` |
+| Never | **recall is primary, concordance is secondary.** Concordance is scored over the chains BOTH tools called, a self-selecting denominator that reads high whatever happens. A missed chain is the unrecoverable error |
+| Never | **arda runs `rnaseq --exact`, not the amplicon preset.** `amplicon` turns on `two_pass`, `fast_segments` and `segment_only_v`, which assume a primer-anchored read spanning V into J; these are 90 nt tiles of a fragmented amplicon, the documented loss case, and the preset would confound the comparison with a preset choice |
+| Never | **the migec-only chains are not scored.** Cell Ranger's set is the reference, not the truth, and a second productive TRA is allelic inclusion rather than an error |
+| Note | measured 2026-08-14 against **both** Cell Ranger versions, which is why `cellranger_version` is a column: against 5.0.0, TRA 426/426 at 0.9507 and TRB 468/469 at 0.9915; against 10.1.0, TRA 424/424 at 0.9505 and TRB 468/469 at 0.9915. 7,855 of 47,584 molecules carried a cell, a locus and a junction |
+| Never | **depth does not buy junction coverage here.** Reads of one (cell, UMI) are co-terminal in 92% of 10x groups, so a molecule is a pile at one position and not a tiling: at `--min-reads 30` the mean consensus is 204 nt against the ~508 nt amplicon, and only 16.5% of molecules carry a junction. A per-read-uniform model predicts 0.975 and is wrong |
+| Provenance | experimental (10x's published Cell Ranger 5.0.0 calls); the migec and arda columns derived |
+
+### `assets/cellranger_contigs.tsv`
+
+| Item | Value |
+|---|---|
+| What | reference-free per-cell contig assembly scored against Cell Ranger's own assembled contigs: k-mer coverage, exact CDR3 containment, contig N50, chain recall and doublet candidates, one row per ablation |
+| Regenerate | `migec assemble ref/PBMC.fq.gz -o asm_all/ --contig --min-reads 1`, then `python scripts/compare_cellranger_contigs.py --consensus asm_all/PBMC.consensus.fq.gz --cellranger-dir DIR --out DIR --arda ~/vcs/code/arda/.venv/bin/arda --tsv assets/cellranger_contigs.tsv` (~110 s: three arda runs plus the scoring) |
+| Never | **`--min-reads 1`, and that is not sloppiness.** A one-read molecule is a poor consensus and one more WINDOW of the transcript, and the assembly needs the second thing. A depth cut throws the tiling away; it belongs to the per-molecule route (`assets/cellranger_chains.tsv`), not to this one |
+| Never | **the first row is a ceiling, not a method.** It is the share of each Cell Ranger contig's 25-mers present in its own cell's raw molecules before any assembly runs — 0.9990, with 942 of 943 CDR3 nucleotide sequences appearing verbatim. It is the premise being measured, and every other row is scored against it |
+| Never | **contig N50 is a description, never a score.** The no-adapter-trim row has the HIGHEST N50 in the table (580 against 536) and the lowest value in every other column: a contig built across an adapter is a longer contig and a wronger one |
+| Never | **the ablation rows are the evidence for the defaults**, not decoration. CDR3 exact: 0.9894 with everything on, 0.9820 without the haplotype phasing, 0.9618 without the adapter trim. Depth weighting is the third ingredient, has no flag, and is measured in `arda.singlecell`'s module table at 0.967 against 0.988 |
+| Note | measured 2026-08-15 on `sc5p_v2_hs_PBMC_1k` VDJ-T, both lanes, 479 Cell Ranger cells and 249,635 migec molecules: 933/943 CDR3s recovered verbatim (TRA 454/464, **TRB 479/479**), chain recall 0.9777, N50 536 nt, 17 doublet candidates, 23 s |
+| Note | the assembly reads **no germline reference**; arda annotates the finished contigs. Cell Ranger is not re-run — the comparator is its published 5.0.0 output |
+| Provenance | experimental (10x's published Cell Ranger 5.0.0 contigs and annotations); the migec and arda columns derived |
+
+### 10x barcode whitelist — `737K-august-2016.txt`
+
+| Item | Value |
+|---|---|
+| What | the 737,280-entry cell-barcode whitelist for 3' v2 and 5' v1/v2 chemistries; `refine --cell-whitelist` takes it |
+| Fetch | `curl -L -o 737K-august-2016.txt https://github.com/10XGenomics/supernova/raw/master/tenkit/lib/python/tenkit/barcodes/737K-august-2016.txt` |
+| Verify | 12,533,760 bytes, 737,280 lines. All 479 `sc5p_v2_hs_PBMC_1k` Cell Ranger cell barcodes are on it |
+| Note | 10x ship it inside the Cell Ranger tarball and it is **not** in `10XGenomics/cellranger` on GitHub; `10XGenomics/supernova` is 10x's own mirror of the same file. Licensed under 10x's terms, so it is fetched rather than vendored |
+| Note | barcodes are **forward** — no reverse complement. Measured: all 479 appear verbatim as 16 nt R1 prefixes and 0 of their reverse complements do |
+| Provenance | vendor (10x) |
 
 ### `assets/mageri.tsv`
 

@@ -1,0 +1,4 @@
+tool	whitelist	expect_cells	reads_total	frac_valid_barcode	cells_called	cells_shared	cells_tool_only	cells_other_only	molecules	frac_reads_in_cells	wall_seconds	peak_rss_bytes
+cellranger-10.1.0	737K-august-2016		6301573	0.9060	478					0.8640	524.5	958263296
+migec	none	3000	6301573	0.8827	890	469	421	9	496373	0.8426	14.1	675741696
+migec	737K-august-2016	3000	6301573	0.8890	888	469	419	9	467810	0.8488	35.0	679149568

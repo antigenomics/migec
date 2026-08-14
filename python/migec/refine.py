@@ -119,8 +119,13 @@ def format_report(summary: dict) -> str:
             f"at >= {s['cell_threshold']:,} molecules (OrdMag)",
             f"            {s['molecules_in_called']:,} molecules in called cells "
             f"({_pct(s['molecules_in_called'], max(s['molecules'], 1))} of all)",
-            f"            the curve breaks at rank {s['knee_rank']:,} "
-            f"({s['knee_molecules']:,} molecules) -- the knee, for comparison",
+            (
+                f"            the curve breaks at rank {s['knee_rank']:,} "
+                f"({s['knee_molecules']:,} molecules) -- the knee, for comparison"
+                if s["knee_rank"]
+                else "            the curve has no knee above the mean molecules per barcode -- "
+                     "nothing to compare the threshold against"
+            ),
             "",
         ]
     lines += [

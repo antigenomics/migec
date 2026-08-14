@@ -85,9 +85,16 @@ Two numbers follow, and both are reported per sample:
    \qquad
    E[\text{collisions}] \approx \frac{M^2}{2}\prod_j m_j
 
-``effective_length`` is what your UMI is *worth* in bases. A 12 nt UMI whose first eight positions
-are fixed has an effective length of 4 and a usable space of 256 — and will collide constantly. The
-nominal length tells you nothing on its own.
+``effective_length`` is what your barcode is *worth* in bases. A 12 nt UMI whose first eight
+positions are fixed has an effective length of 4 and a usable space of 256 — and will collide
+constantly. The nominal length tells you nothing on its own.
+
+.. note::
+
+   It is measured over the **whole barcode**, cell then UMI, because that is what the counters are
+   keyed on: a molecule is sample + cell + UMI. So on a single-cell run compare it against
+   ``barcode_length`` (26 nt for 10x), never against ``umi_length`` (10 nt) — all three lengths are
+   columns of ``checkout.summary.tsv`` for exactly that reason. On a bulk library they coincide.
 
 .. note::
 

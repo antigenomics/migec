@@ -121,7 +121,11 @@ def _write_tables(out: Path, summary: dict) -> None:
     with open(out / "checkout.summary.tsv", "w") as fh:
         fh.write(
             "sample_id\treads\tumis\tmean_reads_per_umi\treads_in_migs_ge5\tover_sequenced\t"
-            "umi_length\teffective_length\teffective_space\ttotal_entropy\ttotal_information\t"
+            # `cell_length` and `barcode_length` sit beside `umi_length` because every column
+            # after them -- effective length, space, entropy -- is measured over the whole
+            # barcode, and on a single-cell run that is not the UMI.
+            "umi_length\tcell_length\tbarcode_length\t"
+            "effective_length\teffective_space\ttotal_entropy\ttotal_information\t"
             "umi_error_rate\tumis_merged\treads_merged\tmolecules_observed\tmolecules_corrected\t"
             "saturated\n"
         )
@@ -129,6 +133,7 @@ def _write_tables(out: Path, summary: dict) -> None:
             fh.write(
                 f"{s['sample_id']}\t{s['reads']}\t{s['umis']}\t{s['mean_reads_per_umi']:.4f}\t"
                 f"{s['reads_in_migs_ge5']:.6f}\t{int(s['over_sequenced'])}\t{s['umi_length']}\t"
+                f"{s['cell_length']}\t{s['barcode_length']}\t"
                 f"{s['effective_length']:.4f}\t{s['effective_space']:.1f}\t"
                 f"{s['total_entropy']:.4f}\t{s['total_information']:.4f}\t"
                 f"{s['umi_error_rate']:.3e}\t{s['umis_merged']}\t{s['reads_merged']}\t"
@@ -148,7 +153,10 @@ def _write_tables(out: Path, summary: dict) -> None:
     # above, but they are the numbers that say whether a molecule count means anything.
     with open(out / "checkout.barcode_space.tsv", "w") as fh:
         fh.write(
-            "sample_id\tumi_length\tnominal_space\teffective_space\teffective_length\tbias_loss\t"
+            # `barcode_length`, not `umi_length`: the value is the counter's own length, which is
+            # cell + UMI, and the whole birthday arithmetic below is over that space.
+            "sample_id\tbarcode_length\tnominal_space\teffective_space\teffective_length\t"
+            "bias_loss\t"
             "observed_barcodes\toccupancy\tlambda\tmolecules\thidden\tp_multi\tsaturated\t"
             "err_from_phred\tmean_phred\terr_from_polymerase\terr_predicted\terr_estimated\t"
             "err_ratio\tbarcodes_with_error\tneighbour_occupancy\terr_unreliable\n"
@@ -281,14 +289,17 @@ def format_report(summary: dict) -> str:
     )
     lines.append("")
     lines.append(
-        f"{'sample':<12}{'reads':>12}{'UMIs':>12}{'reads/UMI':>11}{'UMI len':>9}{'eff len':>9}"
-        f"{'payload':>9}"
+        f"{'sample':<12}{'reads':>12}{'UMIs':>12}{'reads/UMI':>11}{'UMI len':>9}{'bc len':>8}"
+        f"{'eff len':>9}{'payload':>9}"
     )
     for s in summary["samples"]:
+        # `eff len` is measured over the barcode, so the barcode's length is printed beside it.
+        # On a bulk library the two length columns are equal; on a single-cell one they are 10
+        # and 26, and reading the effective 25.4 against the 10 says the UMI is impossibly good.
         lines.append(
             f"{s['sample_id']:<12}{s['reads']:>12,}{s['umis']:>12,}"
-            f"{s['mean_reads_per_umi']:>11.2f}{s['umi_length']:>9}{s['effective_length']:>9.2f}"
-            f"{s['mean_payload_length']:>9.1f}"
+            f"{s['mean_reads_per_umi']:>11.2f}{s['umi_length']:>9}{s['barcode_length']:>8}"
+            f"{s['effective_length']:>9.2f}{s['mean_payload_length']:>9.1f}"
         )
 
     # The birthday arithmetic, per sample. Occupancy is the number that decides whether the
@@ -411,9 +422,13 @@ def format_report(summary: dict) -> str:
             f"molecules are seen once"
         )
     for s in summary["samples"]:
-        if s["umi_length"] and s["effective_length"] < 0.8 * s["umi_length"]:
+        # Never: compare a rate to a rate, and a length to the length it was measured over.
+        # `effective_length` is a property of the COUNTER, which is keyed on cell + UMI, so it
+        # must be weighed against the barcode. Against the UMI alone a 10x library reads 25.4 nt
+        # usable of a 10 nt UMI and the warning is silently dead on every single-cell run.
+        if s["barcode_length"] and s["effective_length"] < 0.8 * s["barcode_length"]:
             warnings.append(
-                f"{s['sample_id']}: UMI is {s['umi_length']} nt but only "
+                f"{s['sample_id']}: barcode is {s['barcode_length']} nt but only "
                 f"{s['effective_length']:.1f} nt of it is usable -- the base composition is skewed, "
                 f"so collisions are more frequent than the length suggests"
             )

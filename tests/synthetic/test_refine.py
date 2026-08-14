@@ -331,6 +331,33 @@ def test_the_knee_is_reported_next_to_the_call_not_instead_of_it(tmp_path):
     assert max(s["knee_rank"], s["cells_called"]) < 3 * min(s["knee_rank"], s["cells_called"])
 
 
+def test_a_curve_with_no_cells_in_it_reports_no_knee(tmp_path):
+    """The guard the knee needs, and the reason it is not decoration.
+
+    A library that is ambient and nothing else has no knee. Taking the global maximum of the
+    difference curve anyway always returns SOME rank, and reporting it beside OrdMag reads as two
+    methods disagreeing about where the cells are rather than as a curve with no cells in it. The
+    knee is refused when it sits at or below the mean molecules per observed barcode, which is
+    exactly the regime where its threshold would call every barcode a cell.
+    """
+    reads = tmp_path / "flat.fq.gz"
+    _droplets(reads, 0, (1, 1), 4_000, (1, 3), seed=7)
+    s = run(reads, tmp_path / "ref", expect_cells=400)
+    assert s["cells_observed"] > 1_000
+    assert s["knee_rank"] == 0
+    assert s["knee_molecules"] == 0
+
+
+def test_a_clean_library_still_reports_its_knee(tmp_path):
+    """The other half of the guard: it must not eat a real knee. Same fixture as the calling test,
+    where the separation is wide and the knee sits two orders above the ambient mean."""
+    reads = tmp_path / "d.fq.gz"
+    _droplets(reads, 400, (300, 900), 10_000, (1, 2), seed=1)
+    s = run(reads, tmp_path / "ref", expect_cells=400)
+    assert s["knee_rank"] > 0
+    assert s["knee_molecules"] > s["molecules"] / max(s["cells_observed"], 1)
+
+
 def test_expect_cells_being_wrong_does_not_move_the_call_much(tmp_path):
     """OrdMag takes the 99th percentile of the top N, so over-stating N by 400x still lands the
     index inside the real cells. That robustness is the reason the rule is worth having, and it

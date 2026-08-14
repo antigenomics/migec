@@ -6,6 +6,178 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+## 2.5.0 — 2026-08-15
+
+### The knee is Kneedle, and it now refuses to answer when there is no knee
+
+`refine`'s cell-calling knee was already the right rule and is now documented as such: distance to
+the endpoint chord of the log-log curve **is** Kneedle's (Satopaa 2011) normalised
+`|y_n - (1 - x_n)|` up to a constant, taken at its **global maximum**.
+
+Never: **Kneedle's published selection rule is degenerate without the smoothing spline the paper
+specifies.** It walks the LOCAL maxima and stops at the first that then falls by a sensitivity
+step. Measured on `sc5p_v2_hs_PBMC_1k`'s 136,032 barcodes: unsmoothed, the difference curve has
+**287 local maxima and the walk stops at rank 15 (1,057 molecules)** — fifteen cells. Smoothed
+over a 0.01 window in normalised log-rank it gives rank 358 (314 molecules), which is the global
+maximum's rank 376 (308 molecules) to within 5%; over-smoothing drifts it back off (rank 180 at a
+0.1 window). The global maximum lands in the same place with no parameter to tune.
+
+Never: **a global maximum always exists, so the knee needs a floor.** An ambient-only library
+returns a rank too, and reporting it beside OrdMag reads as two methods disagreeing about where
+the cells are rather than as a curve with no cells in it. The knee is refused below **ten times
+the mean molecules per observed barcode** — one order of magnitude, the unit a log-log curve is
+read in — and `knee_rank` is then 0, which the report prints as "no knee" and the
+OrdMag-vs-knee warning already skips.
+
+Never: **the mean alone is too weak and was tried.** An ambient-only library of 1-3 molecules per
+barcode is a step curve whose corner sits at 3 against a mean of 2.0 and clears a mean-only test
+at 1.5x. On the real library the knee is 308 against a mean of 3.38, a factor of 91 — two orders
+apart, so the boundary is not a tuned one. Both cases are in
+`tests/synthetic/test_refine.py`.
+
+arda implements the same rule in `arda.singlecell.find_knee` for its own rank curve, and the two
+agree exactly on the same 136,032-barcode curve: rank 376, 308 molecules.
+
+### Reference-free per-cell contigs, and doublets
+
+`scripts/compare_cellranger_contigs.py`, `assets/cellranger_contigs.tsv`, `docs/single_cell.rst`.
+The assembler itself is **arda's** — `arda cells` — because a cell's full-length receptor,
+doublets and contaminating chains are arda's job and always were; migec's `--contig` stays one
+molecule's fragments and nothing more.
+
+**The premise was measured before the method was written.** Reads of one `(cell, UMI)` are
+co-terminal, so a molecule's consensus covers one window of the transcript however deep it is —
+at `--min-reads 30` the mean is 204 nt against a ~508 nt amplicon. But *different molecules start
+at different positions*, so a cell's molecules tile it: **99.90% of the 25-mers of Cell Ranger's
+943 filtered contigs are already in their own cell's raw migec molecules**, with 942 of 943 CDR3
+nucleotide sequences appearing verbatim. The contig was in the data; assembling it was an
+engineering problem, not an information one.
+
+| variant | k-mer coverage | CDR3 exact | N50 | chain recall | doublets |
+|---|---|---|---|---|---|
+| molecules, no assembly (ceiling) | 0.9990 | 942/943 | — | — | — |
+| `arda cells`, default | **0.9759** | **933/943 (0.9894)** | 536 | **0.9777** | 17 |
+| no phasing | 0.9663 | 926/943 (0.9820) | 460 | 0.9714 | 12 |
+| no adapter trim | 0.9525 | 907/943 (0.9618) | 580 | 0.9491 | 16 |
+
+Per chain: **TRA 454/464, TRB 479/479**. 479 cells, 249,635 molecules, 23 s.
+
+Never: **`--min-reads 1` on this axis.** A one-read molecule is a poor consensus and one more
+window of the transcript, and the assembly needs the second thing. A depth cut throws the tiling
+away.
+
+Never: **contig N50 is a description, never a score.** The no-adapter-trim row has the highest
+N50 in the table and the lowest value in every other column.
+
+Never: **a doublet is two chains of the same LOCUS, and it was invisible by construction until
+the phasing landed.** One TRA and one TRB is a paired T cell. Two TRB share their constant
+region, so the overlap layout puts them in one component and the column consensus averages their
+junctions into a third sequence — on a synthetic cell built from two TRB receptors, one 918 nt
+contig with no callable junction. Phasing the component on co-segregating minor bases recovers
+both.
+
+Never: **the extra-chain gate is PRODUCTIVITY first, count second.** Of the extra chains Cell
+Ranger agrees with, 60/60 are productive; of those it does not, 20/128 are. An extra chain on
+exactly one molecule is contamination 96-97% of the time — the distribution is bimodal, not a
+tail.
+
+### Cell Ranger, and the counter bug it found
+
+The last unrun comparator. `scripts/compare_cellranger.py` scores migec against **Cell Ranger
+5.0.0** on `sc5p_v2_hs_PBMC_1k` VDJ-T, both lanes, 6,301,573 read pairs. `assets/cellranger.tsv`,
+`docs/single_cell.rst`.
+
+| tool | valid barcode | cells | shared | reads in cells | wall | peak RSS |
+|---|---|---|---|---|---|---|
+| Cell Ranger 10.1.0 | **90.60%** | 478 | 469 | **86.40%** | 524.5 s | 936 MB |
+| migec, 737K whitelist | 88.90% | 888 | 469 | 84.88% | **35.0 s** | **679 MB** |
+
+**migec calls 1.86x the cells and loses 1.5 points of reads-in-cells.** The 419 barcodes beyond
+Cell Ranger's set hold about one and a half percent of the library between them, so a cell count on
+its own is not an accuracy figure — which is the point of reporting the two together.
+
+**Cell Ranger is run twice: 10x's published 5.0.0 calls, and `cellranger vdj` 10.1.0 run here**
+(`scripts/cellranger_vdj.sbatch`, 16 cores on aldan3). They agree at **Jaccard 0.9938** — 477 cells
+shared of 479 and 478 — which is the control that says the migec gap is not version drift.
+
+Never: **35 s against 524 s is not like for like.** Cell Ranger's single invocation also assembles
+and annotates a contig per cell; migec's 35 s is `checkout` + `refine`, which is what answers these
+three axes. End to end with `assemble --contig` and arda it is ~90 s, still 5.8x, and it produces
+per-*molecule* resolution Cell Ranger's output does not have. Different hardware, so read the ratio.
+
+Never: **5.0.0's published `Median TRB UMIs per Cell` of 12.0 matches neither denominator in its own
+tables** — both give 11.0. 10.1.0 reports TRA 4.0 / TRB 11.0, which are exactly the medians over
+*all* cells in its tables, while 5.0.0's TRA 5.0 is the median over cells that *have* that chain.
+Running the second version is what turned "not recoverable" into "wrong, and here is why".
+
+Never: **the two cell sets are not the same population.** migec's gate is molecules of any
+sequence; Cell Ranger's is "assembled a productive V(D)J contig", so a B cell with plenty of
+molecules is correctly a migec cell and correctly not a Cell Ranger VDJ cell. The table carries
+five counts and never a ratio.
+
+Never: **`checkout` keyed its UMI counters on the UMI alone**, which merged every cell's copy of
+one UMI into a single entry — against this repo's own rule that a molecule is sample + cell + UMI.
+On this library it read 221,026 pooled UMIs where there are 311,962 molecules, put the depth 1.41x
+high, and fired the saturation warning at an apparent 21% occupancy against a true 3e-6. The key is
+now cell then UMI. `CheckoutStats::sample_cell_length` splits the composition back apart, so the
+summary reports `cell_length`, `umi_length` and `barcode_length` separately rather than letting
+`umi_length` quietly become 26 for a 10 nt UMI.
+
+Never: **splitting the length apart leaves every consumer that paired it with a barcode-wide
+statistic comparing two different units.** `effective_length` is a property of the counter, so it
+spans 26 nt on a 10x run; weighed against the 10 nt UMI the composition-skew warning reads "25.4
+of 10 nt usable", which cannot be true, and it was therefore dead on every single-cell library --
+exactly where a skewed cell barcode is worth hearing about. It is weighed against
+`barcode_length` now. `checkout.summary.tsv` carries all three lengths as columns (inserted after
+`umi_length`, so the sample/reads/UMIs columns the plots read do not move), and
+`checkout.barcode_space.tsv`'s second column is renamed `umi_length` -> `barcode_length`, which
+is what its value always was. Regression test in `tests/synthetic/test_dual_end.py`: a cell
+barcode with eight constant positions gives 17.93 usable bases of 26, which fires the warning and
+would not have fired the old one.
+
+Never: **`docs/formats.rst` documented a consensus read name the code does not write.** It gave a
+colon-delimited `@<sample>.<mig>[.<g>]:<CB>:<UMI>`; `assemble` writes
+`<sample>[.<cell>].<umi>[.c<k>][.<m>]`, dot-delimited, with both suffixes emitted conditionally.
+Anything parsing that name must read it from the **right**, since a sample id may contain a dot.
+
+### The per-cell chain axis, and a 19.7x speedup in `--contig`
+
+`scripts/compare_cellranger_chains.py`, `assets/cellranger_chains.tsv`. Cell Ranger assembles a
+contig per **cell**; migec assembles a consensus per **molecule**, annotates each with arda
+(`--cell-from migec`), and votes per cell. Same question, no per-cell assembler.
+
+| locus | Cell Ranger chains | migec chains | shared | chain recall | junction agreement |
+|---|---|---|---|---|---|
+| TRA | 426 | 451 | 426 | **1.0000** | 0.9507 |
+| TRB | 469 | 474 | 468 | **0.9979** | **0.9915** |
+
+**Every TRA chain and all but one TRB chain Cell Ranger found is recovered**, in 22 s over 47,584
+consensuses. Recall leads because a missed chain is the unrecoverable error; junction agreement is
+scored only over chains both tools called, which is a self-selecting denominator.
+
+**`place_reads` asks union-find before it scans: 640.9 s -> 32.6 s on that run, byte-identical
+output** (consensus FASTQ and `mig.tsv` both MD5-identical, 47,584 molecules unchanged). The O(n²)
+pair loop was calling `seed_offset` on every pair, and `join` already returns immediately when the
+two roots match -- so on a deep group most of those scans computed something union-find knew.
+Never: this is not a heuristic and not a cap on reads; it is the same partition reached without the
+redundant comparisons, which is why the output does not move.
+
+Note: **the stale `ponytail:` comment beside it was the tell, and it was wrong in a specific way.**
+It said the quadratic ran "over single digits" because X1 measured only 1.5% of 10x groups holding
+more than one read -- true of *all* groups, false of the ones contig mode is run on. At
+`--min-reads 30` the molecules average 110 reads and the deepest holds 802.
+
+Note: **breaking out of the loop once one component holds every read was also tried and is not
+kept.** It is exact, and it measured 33.4 s against 32.6 -- nothing, because what remains after the
+short-circuit is path-compressed `find` calls at a few nanoseconds. Three lines that bound a
+worst case no benchmark asks for.
+
+Note: **depth does not buy junction coverage on this chemistry, and the obvious arithmetic says it
+does.** Reads of one `(CB, UMI)` are co-terminal in 92% of 10x groups, so a molecule is a pile at
+one position, not a tiling: at `--min-reads 30` the mean consensus is **204 nt, not 508**, and
+7,855 of 47,584 molecules (16.5%) carry a cell, a locus and a junction — near the single-window
+0.32 the geometry predicts, and nowhere near the 0.975 a per-read-uniform model gives.
+
 ### What migec is worth downstream, measured against certified material
 
 The comparisons the version number was waiting on. All of them run on commercial cfDNA reference
