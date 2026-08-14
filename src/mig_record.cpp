@@ -59,6 +59,7 @@ std::string serialize_header(const MigHeader& h) {
     s.push_back(static_cast<char>(h.bucket_index));
     s.push_back(static_cast<char>(h.bucket_bits));
     s.push_back(static_cast<char>(h.paired ? 1 : 0));
+    s.push_back(static_cast<char>(h.barcode_quality ? 1 : 0));  // v2
     put_str(s, h.sample_id);
     put_str(s, h.provenance);
     put_u32(s, static_cast<uint32_t>(h.quality_calibration.size()));
@@ -100,6 +101,9 @@ struct MigWriter::Impl {
 
     std::vector<StoredRecord> pending;
     std::string seq1, seq2, qual1, qual2;
+    // The barcode quality columns, fixed width per record. Empty unless the header says the file
+    // carries them.
+    std::string qumi, qcell;
     std::string zbuf;
 
     void flush() {
@@ -107,13 +111,15 @@ struct MigWriter::Impl {
         // Column-major: the fixed records, then all seq1, all seq2, all qual1, all qual2.
         std::string raw;
         raw.reserve(pending.size() * sizeof(StoredRecord) + seq1.size() + seq2.size() +
-                    qual1.size() + qual2.size());
+                    qual1.size() + qual2.size() + qumi.size() + qcell.size());
         raw.append(reinterpret_cast<const char*>(pending.data()),
                    pending.size() * sizeof(StoredRecord));
         raw += seq1;
         raw += seq2;
         raw += qual1;
         raw += qual2;
+        raw += qumi;   // empty unless header.barcode_quality
+        raw += qcell;
 
         uLongf bound = compressBound(static_cast<uLong>(raw.size()));
         zbuf.resize(bound);
@@ -137,6 +143,7 @@ struct MigWriter::Impl {
 
         pending.clear();
         seq1.clear(); seq2.clear(); qual1.clear(); qual2.clear();
+        qumi.clear(); qcell.clear();
     }
 };
 
@@ -180,10 +187,25 @@ void MigWriter::write(const MigRecord& rec) {
     im.seq2.append(rec.seq2);
     im.qual1.append(rec.qual1);
     im.qual2.append(rec.qual2);
+    if (im.header.barcode_quality) {
+        // Fixed width, so a record that disagrees would shift every column after it and be read
+        // back as another record's quality. Refused here, where the record is attributable.
+        if (rec.qual_umi.size() != im.header.umi_len ||
+            rec.qual_cell.size() != im.header.cell_len) {
+            throw MigecError("mig_writer: this file carries barcode quality, so every record needs "
+                             "a " + std::to_string(im.header.umi_len) + " nt UMI quality and a " +
+                             std::to_string(im.header.cell_len) + " nt cell quality (got " +
+                             std::to_string(rec.qual_umi.size()) + " and " +
+                             std::to_string(rec.qual_cell.size()) + ")");
+        }
+        im.qumi.append(rec.qual_umi);
+        im.qcell.append(rec.qual_cell);
+    }
     ++im.n_written;
 
     if (im.pending.size() * sizeof(StoredRecord) + im.seq1.size() + im.seq2.size() +
-            im.qual1.size() + im.qual2.size() >= im.block_bytes) {
+            im.qual1.size() + im.qual2.size() + im.qumi.size() + im.qcell.size() >=
+        im.block_bytes) {
         im.flush();
     }
 }
@@ -216,6 +238,7 @@ struct MigReader::Impl {
     std::vector<StoredRecord> recs;
     size_t pos = 0;                  // index into recs
     size_t off_seq1 = 0, off_seq2 = 0, off_qual1 = 0, off_qual2 = 0;
+    size_t off_qumi = 0, off_qcell = 0;
     bool eof = false;
 
     bool load_block() {
@@ -271,7 +294,12 @@ struct MigReader::Impl {
         off_seq2 = off_seq1 + l1;
         off_qual1 = off_seq2 + l2;
         off_qual2 = off_qual1 + l1;
-        if (off_qual2 + l2 != raw.size()) throw MigecError("mig_reader: block size inconsistent");
+        off_qumi = off_qual2 + l2;
+        const size_t bq = header.barcode_quality ? bh.n_records : 0;
+        off_qcell = off_qumi + bq * header.umi_len;
+        if (off_qcell + bq * header.cell_len != raw.size()) {
+            throw MigecError("mig_reader: block size inconsistent");
+        }
         pos = 0;
         return true;
     }
@@ -284,15 +312,24 @@ MigReader::MigReader(const std::string& path) : impl_(new Impl) {
     if (std::memcmp(magic, kMigMagic, 4) != 0) throw MigecError("mig_reader: not a .mig file: " + path);
     auto& h = impl_->header;
     impl_->r->must_read(&h.format_version, 2, "format version");
-    if (h.format_version != kMigFormatVersion) {
+    if (h.format_version < kMigMinReadableVersion || h.format_version > kMigFormatVersion) {
         throw MigecError("mig_reader: unsupported format version " +
                          std::to_string(h.format_version) + " (this build reads " +
+                         std::to_string(kMigMinReadableVersion) + ".." +
                          std::to_string(kMigFormatVersion) + ")");
     }
     uint8_t b[5];
     impl_->r->must_read(b, 5, "header fields");
     h.umi_len = b[0]; h.cell_len = b[1]; h.bucket_index = b[2]; h.bucket_bits = b[3];
     h.paired = b[4] != 0;
+    // v2 added one byte here. An older file simply does not carry the barcode quality columns,
+    // and every reader of them checks the flag rather than the version.
+    h.barcode_quality = false;
+    if (h.format_version >= 2) {
+        uint8_t bq = 0;
+        impl_->r->must_read(&bq, 1, "barcode quality flag");
+        h.barcode_quality = bq != 0;
+    }
     auto read_str = [&](std::string& out) {
         uint32_t n = 0;
         impl_->r->must_read(&n, 4, "string length");
@@ -331,6 +368,15 @@ bool MigReader::next(MigRecord& out) {
     out.seq2 = std::string_view(im.raw.data() + im.off_seq2, sr.len2);
     out.qual1 = std::string_view(im.raw.data() + im.off_qual1, sr.len1);
     out.qual2 = std::string_view(im.raw.data() + im.off_qual2, sr.len2);
+    if (im.header.barcode_quality) {
+        out.qual_umi = std::string_view(im.raw.data() + im.off_qumi, im.header.umi_len);
+        out.qual_cell = std::string_view(im.raw.data() + im.off_qcell, im.header.cell_len);
+        im.off_qumi += im.header.umi_len;
+        im.off_qcell += im.header.cell_len;
+    } else {
+        out.qual_umi = {};
+        out.qual_cell = {};
+    }
     im.off_seq1 += sr.len1;
     im.off_seq2 += sr.len2;
     im.off_qual1 += sr.len1;

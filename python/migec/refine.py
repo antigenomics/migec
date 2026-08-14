@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from migec import _core
+from migec.buckets import mig_buckets
 from migec.checkout import _bytes, _dur, _pct
 
 
@@ -30,15 +31,25 @@ def run(
     limit_reads: int = 0,
     limit_umis: int = 0,
 ) -> dict:
-    """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`."""
+    """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`.
+
+    `reads` may also be the `.mig` buckets `checkout --mig` wrote -- one bucket file, or a
+    directory holding one sample's. refine then reads those and writes `.mig` buckets back,
+    re-partitioned on the CORRECTED barcode, which `assemble` takes directly. The audit trail is
+    `<sample>.barcodes.tsv`: a `.mig` record has no room for the pre-correction barcode the way a
+    FASTQ comment has `OX:Z:`, and the table carries it one row per barcode instead of once per
+    read.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    mig_inputs = mig_buckets(reads)
     summary = _core.refine(
-        str(reads), str(out), sample_id, use_quality, use_payload, payload_width,
-        min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior, target_fdr,
-        gzip_level, threads, limit_reads, limit_umis,
+        "" if mig_inputs else str(reads), str(out), sample_id, use_quality, use_payload,
+        payload_width, min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior,
+        target_fdr, gzip_level, threads, limit_reads, limit_umis, mig_inputs,
     )
     summary["input"] = str(reads)
+    summary["mig_input"] = mig_inputs
     summary["min_posterior"] = min_posterior
     summary["target_fdr"] = target_fdr
 

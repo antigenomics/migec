@@ -151,6 +151,13 @@ inline uint64_t rotate_barcode(uint64_t key, int len, int r) {
     return (((field << (2 * r)) | (field >> (w - 2 * r))) & mask) << s;
 }
 
+// `007` for bucket 7: the file-name suffix of a range-partition bucket, zero-padded so that a
+// directory listing is in key order, which is the order every stage reads them in.
+inline std::string bucket_suffix(size_t bucket) {
+    const std::string s = std::to_string(bucket);
+    return std::string(s.size() < 3 ? 3 - s.size() : 0, '0') + s;
+}
+
 // Bucket index for the range partition: the top `bits` bits of the key. Barcodes are close to
 // uniform over their alphabet, so this balances as well as a hash while preserving order.
 inline uint32_t bucket_of(uint64_t key, int bits) {

@@ -36,8 +36,19 @@
 
 namespace migec {
 
-// Bumped whenever the on-disk layout changes. A reader refuses a file it does not know.
-inline constexpr uint16_t kMigFormatVersion = 1;
+// Bumped whenever the on-disk layout changes. A reader refuses a file it does not know -- but it
+// still reads every older version it can, because the alternative is that an intermediate written
+// by yesterday's build becomes unreadable rather than merely older.
+//
+// v2 added the BARCODE's own quality string, per record. v1 stored only `umi_minq`/`cell_minq`,
+// the minimum over the barcode, which is not what a correction posterior needs: it weighs the
+// reported quality AT THE POSITION THAT DIFFERS, and a minimum over the whole barcode says every
+// position is as bad as the worst one. That overstates the error everywhere, which makes merges
+// easier -- the wrong direction, because a wrong merge destroys a molecule and a missed one only
+// inflates a count. So `refine` reading a v1 file falls back to the global rate, exactly as it
+// does for a FASTQ with no QX tag, and says so rather than using a worse number silently.
+inline constexpr uint16_t kMigFormatVersion = 2;
+inline constexpr uint16_t kMigMinReadableVersion = 1;
 inline constexpr char kMigMagic[4] = {'M', 'I', 'G', 'B'};
 
 // Flags describe what has ALREADY been applied to the stored sequence, never what remains to be
@@ -66,6 +77,11 @@ struct MigRecord {
     uint8_t umi_minq = 0;   // min Phred over the umi bases, capped at 60
     uint8_t cell_minq = 0;
     std::string_view seq1, qual1, seq2, qual2;  // views into the reader's block arena
+    // The barcode's own quality, one Phred+33 character per base, `umi_len`/`cell_len` long. Empty
+    // on a v1 file and whenever the header says the file does not carry it. Fixed width per
+    // record, because both lengths are file constants -- so it costs no length field and stays a
+    // column like the others.
+    std::string_view qual_umi, qual_cell;
 };
 
 // The sort key. Cell first so that a per-cell scope is contiguous, then umi, then src_index to
@@ -94,6 +110,10 @@ struct MigHeader {
     uint8_t bucket_index = 0;
     uint8_t bucket_bits = 0;  // 0 == a single bucket, i.e. the whole sample in key order
     bool paired = true;
+    // Whether every record carries `qual_umi`/`qual_cell` (v2 and later). A per-FILE decision
+    // rather than a per-record one: the columns are fixed width, so a file either has them for
+    // every record or for none, and the writer refuses a record that disagrees with the header.
+    bool barcode_quality = false;
     std::string sample_id;
     std::string provenance;
     // Measured error rate per reported Phred value: quality_calibration[q] is the observed error

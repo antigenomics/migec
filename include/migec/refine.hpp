@@ -37,6 +37,20 @@ namespace migec {
 
 struct RefineRequest {
     std::string input;       // a per-sample FASTQ written by checkout
+    // ...or the `.mig` buckets `checkout --mig` wrote for one sample, in which case `input` is
+    // ignored. The reads are then already partitioned on the barcode and already carry it packed,
+    // so nothing here has to parse a tag -- and with a v2 file the barcode's own quality comes
+    // with them, which is the evidence the posterior weighs at the position that differs.
+    //
+    // Note: the correction still holds the whole table. The partition a bucket gives is on the
+    // TOP bits of the key, and a barcode's 1-substitution neighbours are only all in one bucket
+    // for the positions the prefix does not touch -- so correcting bucket by bucket needs the
+    // rotated second pass `correct_umis` already does for a spilled counter, and until refine
+    // spills its table there is nothing to gain by doing it here.
+    std::vector<std::string> mig_inputs;
+    // Write `.mig` buckets instead of a FASTQ. Requires `.mig` input: the buckets carry no read
+    // name, and inventing one would put a name into the pipeline that no instrument produced.
+    bool mig_output = false;
     std::string output_dir;
     std::string sample_id;   // taken from the BC tag when empty
     CorrectionParams correction;
@@ -73,6 +87,9 @@ struct RefineRequest {
 };
 
 struct RefineStats {
+    // `.mig` output only: the buckets that were written, in bucket order. Hand these to
+    // `assemble` and it skips its partition pass, exactly as it does with checkout's.
+    std::vector<std::string> mig_paths;
     uint64_t reads = 0;
     uint64_t reads_without_umi = 0;
     // True when --limit-read or --limit-umi stopped the intake: every number below then describes
