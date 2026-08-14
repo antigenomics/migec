@@ -359,8 +359,12 @@ model has to use the evidence that survives at one read:
       index Calib is scored with. The result is what the position is worth: **on ONE reference
       migec wins** (ARI 0.9967 against 0.9864 and 0.9817) and wins on the direction that cannot be
       undone, putting 0.65% of reads into mixed clusters against 3.0% and 3.9% -- 4.6x and 6x fewer
-      molecules destroyed. On 200 or 20,000 distinct references they win by 0.001 ARI, which is the
-      collision rate and nothing else. migec is 8-48x faster including the alignment they cannot
+      molecules destroyed. Nothing rescues that case: molecules colliding on one reference hold the
+      SAME sequence, so neither the position nor payload sub-clustering separates them. On 200 or
+      20,000 distinct references they win by 0.001 ARI, and that is where this comparison stops
+      rather than a limit -- collided molecules there carry different sequences, which is exactly
+      what `assemble`'s linkage sub-clustering separates from the payload with no aligner, one
+      stage after the column is scored. migec is 8-48x faster including the alignment they cannot
       skip. `docs/grouping.rst`, `assets/grouping_tools.tsv`
 - [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
       Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware callers benchmarked by

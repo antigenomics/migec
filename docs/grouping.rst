@@ -189,15 +189,24 @@ Three statements, in the order they matter:
 * **On one reference, migec wins, and it wins on the direction that cannot be undone.** A single
   amplicon, a clonal control, a targeted ctDNA panel: every read maps to the same place, the
   position carries nothing, and the map-first tools are left grouping on the barcode alone with no
-  error model for it. They put **3.0%** (UMI-tools) and **3.9%** (fgbio) of reads into clusters that
+  error model for it. Note that this is the case no aligner and no sub-clustering can rescue —
+  two molecules that collided here hold the same sequence, so there is nothing but the barcode to
+  tell them apart. They put **3.0%** (UMI-tools) and **3.9%** (fgbio) of reads into clusters that
   mix molecules, against migec's **0.65%** — 4.6× and 6× fewer molecules destroyed. migec pays for
   it in splitting (1.1% against 0.56%), which inflates a count and is recoverable.
-* **On a diverse reference, the map-first tools win, by 0.001 ARI.** With 200 or 20,000 distinct
-  sequences the aligner separates molecules that collided on a barcode, which barcode-only grouping
-  cannot do by construction. The gap is the collision rate and nothing else, and it is small
-  because a 12 nt barcode is large. ``assemble``'s linkage sub-clustering recovers that
-  discriminating power from the payload with no aligner, but it does it after grouping, so it is
-  not in this column.
+* **On a diverse reference the map-first tools win by 0.001 ARI, and that gap is where this
+  comparison stops, not a limit of the method.** With 200 or 20,000 distinct sequences, two
+  molecules that collided on a barcode carry *different sequences* — that is what makes them
+  separable, and the aligner separates them by sending them to different references. So does
+  ``assemble``, by linkage sub-clustering on the payload, with no aligner at all: the discriminating
+  power is in the reads either way. The column is scored at ``refine``, one stage earlier, so it
+  does not include it. Measuring it needs ``assemble`` to emit a read→molecule map, which it does
+  not.
+
+  The direction that matters is the other one, and it is not symmetric. On **one** reference the
+  collided molecules are the *same* sequence up to a few mismatches, so nothing separates them —
+  not the mapping position, not the payload, not sub-clustering. There the barcode is the only
+  evidence there is, and having an error model for it is the whole difference.
 * **migec is 8–48× faster and does not need the alignment at all.** 0.17–0.26 s against 0.98–4.61 s
   (UMI-tools) and 3.90–7.98 s (fgbio), *including* the aligner run the other two cannot skip.
   fgbio's memory is a JVM heap; UMI-tools streams a BAM and stays flat, while migec's grows with

@@ -29,9 +29,16 @@ on *(position, UMI)*, we group on *(sample, cell, UMI)* and align once, afterwar
 On **one reference** — a single amplicon, a clonal control, a targeted ctDNA panel — the position
 carries nothing, and migec wins: ARI 0.9967 against 0.9864 (UMI-tools) and 0.9817 (fgbio), with
 0.65% of reads in clusters that mix molecules against 3.0% and 3.9%. That is 4.6x and 6x fewer
-molecules destroyed, and destroying one is the error nothing downstream can detect. On 200 or
-20,000 distinct references they win by 0.001 ARI, which is the barcode collision rate and nothing
-else. migec is 8-48x faster throughout, including the alignment they cannot skip.
+molecules destroyed, and destroying one is the error nothing downstream can detect. Nothing
+rescues that case: two molecules that collide on one reference hold the same sequence, so neither
+the mapping position nor payload sub-clustering can tell them apart, and the barcode is the only
+evidence there is.
+
+On 200 or 20,000 distinct references they win by 0.001 ARI. That is where the comparison stops
+rather than a limit of the method: collided molecules there carry *different* sequences, which is
+what makes them separable, and `assemble`'s linkage sub-clustering separates them from the payload
+with no aligner. The column is scored at `refine`, one stage earlier. migec is 8-48x faster
+throughout, including the alignment they cannot skip.
 
 `docs/grouping.rst` has the table, `assets/grouping_tools.tsv` the numbers, `SOURCES.md` how to
 install both (fgbio needs a JDK 17+; UMI-tools needs `--no-build-isolation` on Python 3.12+). The
