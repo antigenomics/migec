@@ -1,0 +1,9 @@
+tool	caller	variant_af	coverage	molecules	min_count	truth_variants	called	tp	fp	fn	sensitivity	precision	median_af_error	seconds
+mageri-1.1.1	mageri	0.01	8	20000	1	5	5	5	0	0	1.0000	1.0000	0.0003	3.4874
+migec-2	lofreq	0.01	8	20000	1	5	5	5	0	0	1.0000	1.0000	0.0004	4.4812
+mageri-1.1.1	mageri	0.001	8	20000	1	5	5	5	0	0	1.0000	1.0000	0.0001	3.4662
+migec-2	lofreq	0.001	8	20000	1	5	5	5	0	0	1.0000	1.0000	0.0002	4.0884
+mageri-1.1.1	mageri	0.01	1.5	20000	1	5	142	5	137	0	1.0000	0.0352	0.0006	2.6027
+migec-2	lofreq	0.01	1.5	20000	1	5	5	5	0	0	1.0000	1.0000	0.0006	3.9717
+mageri-1.1.1	mageri	0.001	1.5	20000	1	5	142	5	137	0	1.0000	0.0352	0.0002	2.5839
+migec-2	lofreq	0.001	1.5	20000	1	5	1	1	0	4	0.2000	1.0000	0.0007	3.6365

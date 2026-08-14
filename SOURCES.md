@@ -103,7 +103,9 @@ Never: `scratch/spikein/S1_R2_2M.fq` on aldan3 is **corrupt past record 1,742,61
 | Duplex sequencing | SRA `SRR1799908`; primer patterns `NNNNNNNNNNNNtgact` / `agtcaNNNNNNNNNNNN` |
 | HIV protease amplicons | SRA `SRP052322`; patterns `NNNNNNNNNcagtttaacttttgggccatccattcc` / `ctatcggctcctgnnnn` |
 | Companion repo | https://github.com/mikessh/mageri-paper (error model PDFs, analysis scripts) |
-| Provenance | experimental |
+| Jar | `gh release download 1.1.1 --repo mikessh/mageri -p mageri.zip` (v1.1.1, 2016-12-20); runs on JDK 11 |
+| Head to head | `python scripts/compare_mageri.py --out out/ --jar mageri.jar --molecules 20000 --clones 200 --min-count 1` -> `assets/mageri.tsv` |
+| Provenance | experimental; `assets/mageri.tsv` is derived (both pipelines over one simulated library with known truth) |
 
 The patterns above are quoted verbatim from the paper's Methods and are directly reusable as
 `checkout` test cases.
@@ -390,6 +392,16 @@ and `fastq-dump` exits 3.
 |---|---|
 | What | consensuses, exactness, wall clock and peak RSS for MIGEC 1.2.9 and migec 2 at matched MIG-size thresholds |
 | Regenerate | `python scripts/compare_migec_v1.py --out DIR --jar migec-1.2.9.jar --molecules 20000 --clones 200 --coverage 8 --min-count {1,5} --tsv out.tsv` |
+| Provenance | derived (computed) |
+
+### `assets/mageri.tsv`
+
+| Item | Value |
+|---|---|
+| What | consensuses, exactness, wall clock and peak RSS for MAGERI 1.1.1 and migec 2 at matched MIG-size thresholds, one row per (tool, min_count) |
+| Regenerate | `for mc in 1 2 5; do python scripts/compare_mageri.py --out DIR$mc --jar mageri.jar --molecules 20000 --clones 200 --min-count $mc --tsv out_$mc.tsv; done`, then concatenate |
+| Never | MAGERI's threshold is `forceOverseq`/`defaultOverseq` in its preset XML, not a flag. The script rewrites the exported preset and then reads back the threshold MAGERI REPORTS it used, refusing to score if they differ |
+| Note | the `migec-2+minimap2` row folds `minimap2 -ax sr -y` onto the same reference into migec's clock, because MAGERI aligns as part of its run. It costs 0.05 s of 0.35 |
 | Provenance | derived (computed) |
 
 ### `assets/collision_split.tsv`

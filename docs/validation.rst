@@ -246,3 +246,222 @@ v1 is ``Checkout`` → ``Assemble --filter-collisions``; migec 2 is ``checkout``
    ``.t5.`` for exactly this reason — so leaving each at its own default compares defaults rather
    than implementations, and would have credited us with recovering molecules v1 was told to throw
    away.
+
+MAGERI 1.1.1, the other descendant
+----------------------------------
+
+MAGERI is the closer comparator of the two: same author, same UMI model, and the assembler this
+repo's consensus is a rewrite of. It is also a superset — it assembles, maps and calls variants in
+one run — so what is compared is the part they share, and the extra work is named rather than
+divided out.
+
+.. code-block:: bash
+
+   gh release download 1.1.1 --repo mikessh/mageri -p mageri.zip
+   python scripts/compare_mageri.py --out /tmp/mageri --jar mageri.jar \
+       --molecules 20000 --clones 200 --min-count 1
+
+The same library as above: 20,000 molecules over 200 clones, 149,103 reads, a 12 nt barcode at a
+2·10⁻³ per-base error rate. ``assets/mageri.tsv``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 24 15 16 12 11 12
+
+   * - min reads
+     - tool
+     - consensuses
+     - exactly a template
+     - precision
+     - seconds
+     - peak RSS
+   * - 1
+     - MAGERI 1.1.1
+     - 22,707
+     - 22,377
+     - 0.9855
+     - 2.02
+     - 2,246 MB
+   * - 1
+     - **migec 2 + minimap2**
+     - **20,017**
+     - **19,977**
+     - **0.9980**
+     - **0.41**
+     - **280 MB**
+   * - 2
+     - MAGERI 1.1.1
+     - 19,966
+     - 19,930
+     - 0.9982
+     - 1.98
+     - 1,171 MB
+   * - 2
+     - **migec 2 + minimap2**
+     - **19,974**
+     - **19,940**
+     - **0.9983**
+     - **0.39**
+     - **279 MB**
+   * - 5
+     - MAGERI 1.1.1
+     - 16,282
+     - 16,282
+     - **1.0000**
+     - 1.98
+     - 1,146 MB
+   * - 5
+     - **migec 2 + minimap2**
+     - **16,636**
+     - **16,635**
+     - 0.9999
+     - **0.39**
+     - **281 MB**
+
+* **4.9–5.1× the wall clock**, with the alignment MAGERI does folded into migec's row:
+  ``minimap2 -ax sr -y`` onto the same reference plus a ``samtools sort`` costs 0.08 s of the 0.39.
+  MAGERI's clock still also covers variant calling, which migec does not do at all.
+* **4.1–8.0× less memory.** The range is the JVM's, not ours: MAGERI's peak RSS moves between
+  1,146 and 2,246 MB on the same input across runs, where migec 2 sits at 279–281 MB across all
+  six.
+* **At one read per MIG the molecule count separates them.** MAGERI emits 22,707 consensuses for
+  20,000 molecules — **13.5% over**, within a tenth of a point of MIGEC 1.2.9's 13.6%, which is
+  what a shared count-ratio correction lineage looks like. migec 2 is 0.09% over. At ``--min-count
+  2`` the two agree to 0.04%, because a threshold of 2 discards most of what a count ratio cannot
+  correct.
+* **At five reads per MIG migec keeps 2.2% more molecules at identical recall** (16,636 against
+  16,282, both at 0.9873 of the recoverable templates), and one of its 16,636 is not exactly a
+  template against none of MAGERI's 16,282. That is the trade the whole of :doc:`refine` is about:
+  err on precision when *merging*, and do not throw a molecule away to buy a fourth decimal place.
+
+.. warning::
+
+   The MIG size threshold is applied to **both**, and it is checked afterwards rather than assumed.
+   MAGERI's preset carries ``forceOverseq=true`` with ``defaultOverseq=5``, so out of the box it
+   assembles only MIGs of five reads or more; ``compare_mageri.py`` rewrites that value from the
+   exported preset and then reads back the threshold MAGERI *reports* it used, refusing to score
+   the run if the two differ.
+
+.. note::
+
+   MAGERI's sub-clustering test runs at ``pcrMinorTestPValue = 0.01`` — the nominal threshold
+   :doc:`nulls` measured as over-calling by 19× once both margins of the reads × positions matrix
+   are preserved. It is left at its default here on purpose: a head to head measures what the other
+   tool does, not what it would do if it were this one.
+
+The same comparison at the variant level
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MAGERI calls variants; migec stops at the consensus and hands it to a caller. Stopping the
+comparison at the consensus therefore stops it one step short of what either tool is *for*. The
+simulator's ``variant_af`` turns the clone set into one reference plus five point variants of it at
+a known allele fraction — the ctDNA shape, and the only shape in which a call set has an answer —
+and the two pipelines are then scored on the calls.
+
+.. code-block:: bash
+
+   python scripts/compare_mageri.py --out /tmp/mageri --jar mageri.jar \
+       --molecules 20000 --clones 6 --coverage 1.5 --min-count 1 \
+       --variant-af 0.01 --caller lofreq
+
+``assets/mageri_variants.tsv``, 20,000 molecules, 5 variants, one replicate per cell:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 20 12 10 10 10 13 13
+
+   * - reads/UMI
+     - pipeline
+     - variant AF
+     - called
+     - true
+     - false
+     - sensitivity
+     - precision
+   * - 8
+     - MAGERI
+     - 1%
+     - 5
+     - 5
+     - 0
+     - 1.000
+     - 1.000
+   * - 8
+     - migec 2 + LoFreq
+     - 1%
+     - 5
+     - 5
+     - 0
+     - 1.000
+     - 1.000
+   * - 8
+     - MAGERI
+     - 0.1%
+     - 5
+     - 5
+     - 0
+     - 1.000
+     - 1.000
+   * - 8
+     - migec 2 + LoFreq
+     - 0.1%
+     - 5
+     - 5
+     - 0
+     - 1.000
+     - 1.000
+   * - 1.5
+     - MAGERI
+     - 1%
+     - 142
+     - 5
+     - **137**
+     - 1.000
+     - 0.035
+   * - 1.5
+     - **migec 2 + LoFreq**
+     - 1%
+     - **5**
+     - **5**
+     - **0**
+     - **1.000**
+     - **1.000**
+   * - 1.5
+     - MAGERI
+     - 0.1%
+     - 142
+     - 5
+     - **137**
+     - 1.000
+     - 0.035
+   * - 1.5
+     - **migec 2 + LoFreq**
+     - 0.1%
+     - 1
+     - 1
+     - **0**
+     - 0.200
+     - **1.000**
+
+* **At 8 reads per UMI the two are indistinguishable**: 5 of 5 with no false positive, at 1% and at
+  0.1%, and the called allele fraction is within 1–4·10⁻⁴ of the injected one for both. A consensus
+  over 8 reads removes essentially all sequencing error, and what is left is set by the molecule
+  count, which is the same number for both tools.
+* **At 1.5 reads per UMI they separate by 28×, and it is the calling that separates them, not the
+  collapsing.** Both tools emit the *same* 20,170 consensuses at the same accuracy — 0.8990 of
+  MAGERI's are exactly a template against 0.8985 of migec's — so the input to the two callers is
+  matched to within 5·10⁻⁴. On that input MAGERI reports 142 variants of which 137 are at positions
+  nothing was injected at; LoFreq on migec's consensus reports 5 and is right about all of them.
+* **At 0.1% and 1.5 reads per UMI the trade is explicit**: MAGERI buys 4 extra true positives with
+  137 false ones, a positive predictive value of 3.5%. migec 2 finds 1 of 5 and is right about it.
+  Which of those a study wants is the study's choice, and :doc:`detection` is where the arithmetic
+  for making it lives — but a caller that returns 137 false positives per sample cannot be run
+  without a per-position background model, which is exactly what that page concludes.
+
+.. note::
+
+   The variant arm ran on the cluster rather than on this laptop, because LoFreq is what migec
+   would hand its consensus to and that is where it is installed (``scripts/compare_mageri.sbatch``,
+   SLURM, 8 cores). Its wall clocks are therefore not comparable with the consensus table above,
+   which was measured on one machine end to end; on the cluster the ratio is 2.3–3.7× including
+   LoFreq, which migec's row pays and MAGERI's does not.
