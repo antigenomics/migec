@@ -459,18 +459,26 @@ built each molecule.
 * A **context artifact** is carried disproportionately by molecules made from few reads, because a
   singleton consensus is one raw read carrying the raw per-base error rate.
 
-So call the same sample at several thresholds and keep what holds still:
+So call the same sample at several thresholds and keep what holds still. Note: **assemble does
+not need rerunning** -- every consensus record already carries ``cD:i:N``, its true molecule depth,
+and ``minimap2 -y`` carries it into the BAM. One assemble, one alignment, then filter on the tag:
 
 .. code-block:: bash
 
+   migec assemble rf/S1.fq.gz -o as/
+   minimap2 -ax sr -y ref.fa as/S1.consensus.fq.gz | samtools sort -o S1.bam
+   samtools index S1.bam
+
    for mr in 1 3 5; do
-       migec assemble rf/S1.fq.gz -o as$mr/ --min-reads $mr
-       minimap2 -ax sr -y ref.fa as$mr/S1.consensus.fq.gz | samtools sort -o S1.mr$mr.bam
-       samtools index S1.mr$mr.bam
+       samtools view -e "[cD]>=$mr" -b S1.bam > S1.mr$mr.bam && samtools index S1.mr$mr.bam
        lofreq call -f ref.fa -l panel.bed -o S1.mr$mr.vcf S1.mr$mr.bam
    done
    python scripts/blind_artifact_filter.py \
        --vcf 1=S1.mr1.vcf 3=S1.mr3.vcf 5=S1.mr5.vcf
+
+That is a third of the work, and the subsets are guaranteed nested because they are the same
+records. ``--min-reads`` on ``assemble`` is still right once you have *chosen* a threshold; this is
+for when you want the **trend**, which is the thing that discriminates.
 
 On the sample above it returns 4 real and 5 artifact, and **all five artifacts are** ``-> G`` --
 which the script says out loud, because a spectrum that lopsided is a platform signature rather

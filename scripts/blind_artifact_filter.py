@@ -26,12 +26,21 @@
 # Measured on certified material at 20 ng / 10x: every `-> G` artifact disappeared at
 # `--min-reads 3`, and every certified variant survived with VAF stable to the third decimal.
 #
-# Usage:
-#   migec assemble rf/S1.fq.gz -o as1/ --min-reads 1
-#   migec assemble rf/S1.fq.gz -o as3/ --min-reads 3
-#   migec assemble rf/S1.fq.gz -o as5/ --min-reads 5
-#   ... align and call each, then:
-#   python scripts/blind_artifact_filter.py --vcf 1=s1.mr1.vcf 3=s1.mr3.vcf 5=s1.mr5.vcf
+# Note: DO NOT RERUN assemble PER THRESHOLD. Every consensus record already carries `cD:i:N`, its
+# true molecule depth, and `minimap2 -y` / `bwa mem -C` carry it into the BAM. So one assemble and
+# one alignment produce every threshold by filtering on the tag -- three times less work, and the
+# subsets are guaranteed nested because they come from identical records.
+#
+#   migec assemble rf/S1.fq.gz -o as/
+#   minimap2 -ax sr -y ref.fa as/S1.consensus.fq.gz | samtools sort -o S1.bam && samtools index S1.bam
+#   for mr in 1 3 5; do
+#       samtools view -e "[cD]>=$mr" -b S1.bam > S1.mr$mr.bam && samtools index S1.mr$mr.bam
+#       lofreq call -f ref.fa -l panel.bed -o S1.mr$mr.vcf S1.mr$mr.bam
+#   done
+#   python scripts/blind_artifact_filter.py --vcf 1=S1.mr1.vcf 3=S1.mr3.vcf 5=S1.mr5.vcf
+#
+# `--min-reads` on assemble is still the right flag when you have already decided the threshold;
+# this is for when you want the TREND, which is the thing that discriminates.
 
 from __future__ import annotations
 
