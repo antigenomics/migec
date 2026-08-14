@@ -69,7 +69,7 @@ def test_throughput(deep):
     d, path = deep
     s = run(path, d / "out", gzip_level=1)
     rate = s["reads"] / s["wall_seconds"]
-    print(f"\n  {rate:,.0f} reads/s over three passes, {s['barcodes']:,} barcodes, "
+    print(f"\n  {rate:,.0f} reads/s over two passes, {s['barcodes']:,} barcodes, "
           f"{s['merged']:,} merged")
     # Three streaming passes plus a 3L neighbourhood walk per barcode. A tenth of the measured
     # rate means the walk stopped being a binary search or a pass was added.

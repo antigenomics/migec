@@ -34,7 +34,7 @@ TABLES = ["barcodes.tsv", "rank.tsv", "sizes.tsv", "umi_errors.tsv", "bins.tsv"]
 
 # Numbers that describe the clock or the machine rather than the answer.
 TIMING = {"wall_seconds", "table_seconds", "correct_seconds", "rewrite_seconds",
-          "peak_rss_bytes", "table_bytes", "table_spilled", "threads"}
+          "peak_rss_bytes", "table_resident_bytes", "table_spilled", "threads"}
 
 
 @pytest.fixture(scope="module")
@@ -59,8 +59,10 @@ def test_the_partition_actually_happened(library):
     _, resident, spilled = library
     assert not resident["table_spilled"]
     assert spilled["table_spilled"]
-    # The point of the exercise: what the table holds is the budget, not the library.
-    assert spilled["table_bytes"] < resident["table_bytes"]
+    # The point of the exercise: what the table HOLDS is the budget, not the library. What it
+    # would cost is the same number either way, which is why both are reported.
+    assert spilled["table_resident_bytes"] < resident["table_resident_bytes"]
+    assert spilled["table_bytes"] == resident["table_bytes"]
     # ...and there was something to correct, or the comparison below is vacuous.
     assert resident["merged"] > 100
 

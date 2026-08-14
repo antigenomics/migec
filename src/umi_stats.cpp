@@ -166,71 +166,145 @@ void UmiCounts::push_evidence(const float* pos_err, std::string_view payload) {
 //   * the buffer is sorted through a PERMUTATION and stably, because the evidence lives in
 //     parallel arrays and because the payload draft is the first read's -- an unstable sort would
 //     make the draft depend on where the buffer boundaries happened to fall;
-//   * the merge goes forwards into fresh arrays rather than backwards into the grown one. The
-//     count-only path merges backwards because at 8.8 GB the transient copy is the peak memory of
-//     the process; a table that carries evidence is one that is being range-partitioned, so its
-//     resident set is the spill budget rather than the library and 2x of that is affordable.
+//   * the buffer is gathered into key order first, because the merge below reads it sequentially
+//     and a permutation cannot be followed backwards through three arrays at once. The gather is
+//     over the BUFFER, which is half the entry array at most.
+//
+// Never: it still merges BACKWARDS into the grown arrays. Merging forwards into fresh ones is
+// three lines shorter and doubles the peak memory of exactly the table this machinery exists to
+// bound -- measured at 1,788 MB against 441 MB on 1.5 M barcodes at a 256-base draft.
 void UmiCounts::flush_evidence() const {
+    const size_t w0 = buf_.size();
+    const size_t E = static_cast<size_t>(ev_err_);
+    const size_t P = static_cast<size_t>(ev_pw_);
+
+    // Sort the buffer through a permutation and STABLY: the evidence lives in parallel arrays, and
+    // the payload draft is the first read's, so an unstable sort would make the draft depend on
+    // where the buffer boundaries happened to fall.
+    {
+        std::vector<uint32_t> ord(w0);
+        for (size_t i = 0; i < w0; ++i) ord[i] = static_cast<uint32_t>(i);
+        std::stable_sort(ord.begin(), ord.end(),
+                         [this](uint32_t a, uint32_t b) { return buf_[a].key < buf_[b].key; });
+        std::vector<Entry> sorted;
+        std::vector<float> sorted_err;
+        std::vector<char> sorted_pay;
+        sorted.reserve(w0);
+        sorted_err.reserve(buf_err_.size());
+        sorted_pay.reserve(buf_pay_.size());
+        for (uint32_t k : ord) {
+            // Run-length reduce while gathering: the same barcode read twice in one buffer.
+            if (!sorted.empty() && sorted.back().key == buf_[k].key) {
+                sorted.back().count += buf_[k].count;
+                for (size_t j = 0; j < E; ++j) {
+                    sorted_err[(sorted.size() - 1) * E + j] += buf_err_[k * E + j];
+                }
+                if (P && sorted_pay[(sorted.size() - 1) * P] == 0) {
+                    std::copy_n(buf_pay_.begin() + static_cast<long>(k * P), P,
+                                sorted_pay.begin() + static_cast<long>((sorted.size() - 1) * P));
+                }
+                continue;
+            }
+            sorted.push_back(buf_[k]);
+            if (E) sorted_err.insert(sorted_err.end(),
+                                     buf_err_.begin() + static_cast<long>(k * E),
+                                     buf_err_.begin() + static_cast<long>((k + 1) * E));
+            if (P) sorted_pay.insert(sorted_pay.end(),
+                                     buf_pay_.begin() + static_cast<long>(k * P),
+                                     buf_pay_.begin() + static_cast<long>((k + 1) * P));
+        }
+        buf_.swap(sorted);
+        buf_err_.swap(sorted_err);
+        buf_pay_.swap(sorted_pay);
+    }
     const size_t w = buf_.size();
-    std::vector<uint32_t> ord(w);
-    for (size_t i = 0; i < w; ++i) ord[i] = static_cast<uint32_t>(i);
-    std::stable_sort(ord.begin(), ord.end(),
-                     [this](uint32_t a, uint32_t b) { return buf_[a].key < buf_[b].key; });
 
-    std::vector<Entry> out;
-    std::vector<float> out_err;
-    std::vector<char> out_pay;
-    out.reserve(entries_.size() + w);
-    out_err.reserve(err_.size() + buf_err_.size());
-    out_pay.reserve(pay_.size() + buf_pay_.size());
-
-    auto append = [&](const Entry& e, const float* err, const char* pay) {
-        if (!out.empty() && out.back().key == e.key) {
-            out.back().count += e.count;
-            if (ev_err_ > 0) {
-                float* dst = out_err.data() + (out.size() - 1) * static_cast<size_t>(ev_err_);
-                for (int j = 0; j < ev_err_; ++j) dst[j] += err[j];
-            }
-            // The draft payload is the FIRST read's, so a later one is dropped rather than
-            // averaged: it is telling two molecules apart, not calling variants, and a draft that
-            // depends on the arrival order would not survive a partition.
-            if (ev_pw_ > 0) {
-                char* dst = out_pay.data() + (out.size() - 1) * static_cast<size_t>(ev_pw_);
-                if (dst[0] == 0) std::copy_n(pay, ev_pw_, dst);
-            }
-            return;
+    if (entries_.empty()) {
+        entries_.swap(buf_);
+        err_.swap(buf_err_);
+        pay_.swap(buf_pay_);
+        buf_.clear();
+        buf_err_.clear();
+        buf_pay_.clear();
+        flush_at_ = std::min(buffer_cap(), std::max(kMinBuffer, entries_.size() / 2));
+        if (spill_budget_ && entries_.size() * (sizeof(Entry) + ev_bytes()) > spill_budget_) {
+            spill();
         }
-        out.push_back(e);
-        if (ev_err_ > 0) out_err.insert(out_err.end(), err, err + ev_err_);
-        if (ev_pw_ > 0) out_pay.insert(out_pay.end(), pay, pay + ev_pw_);
-    };
-
-    size_t i = 0, j = 0;
-    while (i < entries_.size() || j < w) {
-        // Ties take the resident entry first: it is the older run, and "older wins" is what makes
-        // the payload draft the first read's however many times the buffer was flushed.
-        const bool left = j >= w || (i < entries_.size() && entries_[i].key <= buf_[ord[j]].key);
-        if (left) {
-            append(entries_[i],
-                   ev_err_ > 0 ? err_.data() + i * static_cast<size_t>(ev_err_) : nullptr,
-                   ev_pw_ > 0 ? pay_.data() + i * static_cast<size_t>(ev_pw_) : nullptr);
-            ++i;
-        } else {
-            const size_t k = ord[j];
-            append(buf_[k],
-                   ev_err_ > 0 ? buf_err_.data() + k * static_cast<size_t>(ev_err_) : nullptr,
-                   ev_pw_ > 0 ? buf_pay_.data() + k * static_cast<size_t>(ev_pw_) : nullptr);
-            ++j;
-        }
+        return;
     }
 
-    entries_.swap(out);
-    err_.swap(out_err);
-    pay_.swap(out_pay);
+    const size_t n = entries_.size();
+    // Note: geometric, unlike the count-only path's exact `reserve(n + w)`. The buffer is capped in
+    // BYTES here, so on a wide draft it is small against the table and an exact reserve reallocates
+    // (and copies) all three arrays on every flush. Measured at a 256-base draft over 1.5 M
+    // barcodes: 5,857 MB peak against 1,812 MB. The slack is bounded by the spill budget, which is
+    // what this path has and the other does not.
+    auto grow = [](auto& v, size_t want) {
+        if (v.capacity() < want) v.reserve(std::max(want, v.capacity() + v.capacity() / 2));
+        v.resize(want);
+    };
+    grow(entries_, n + w);
+    if (E) grow(err_, (n + w) * E);
+    if (P) grow(pay_, (n + w) * P);
+
+    // `out` only ever runs ahead of both read cursors, so a block written at `out` never clobbers
+    // a source block still to be read.
+    auto put = [&](size_t dst, bool from_entries, size_t src) {
+        if (from_entries && dst == src) return;  // a run that did not move
+        entries_[dst] = from_entries ? entries_[src] : buf_[src];
+        if (E) {
+            const std::vector<float>& s = from_entries ? err_ : buf_err_;
+            std::copy_n(s.begin() + static_cast<long>(src * E), E,
+                        err_.begin() + static_cast<long>(dst * E));
+        }
+        if (P) {
+            const std::vector<char>& s = from_entries ? pay_ : buf_pay_;
+            std::copy_n(s.begin() + static_cast<long>(src * P), P,
+                        pay_.begin() + static_cast<long>(dst * P));
+        }
+    };
+
+    size_t i = n, j = w, out = n + w;
+    while (i > 0 && j > 0) {
+        const Entry& a = entries_[i - 1];
+        const Entry& b = buf_[j - 1];
+        if (a.key == b.key) {
+            --out;
+            --i;
+            --j;
+            // The older run wins the payload draft, and that is what makes it the FIRST read's
+            // however many times the buffer was flushed. Fold the newer one's quality in first,
+            // then write the older one over the slot.
+            const uint32_t total = a.count + b.count;
+            if (E) {
+                for (size_t q = 0; q < E; ++q) err_[i * E + q] += buf_err_[j * E + q];
+            }
+            if (P && pay_[i * P] == 0) {
+                std::copy_n(buf_pay_.begin() + static_cast<long>(j * P), P,
+                            pay_.begin() + static_cast<long>(i * P));
+            }
+            put(out, true, i);
+            entries_[out].count = total;
+        } else if (a.key > b.key) {
+            put(--out, true, --i);
+        } else {
+            put(--out, false, --j);
+        }
+    }
+    while (j > 0) put(--out, false, --j);
+    // Equal keys collapsed, so the merged run can be shorter than the space reserved for it; the
+    // survivors sit at the top and are shifted down.
+    if (out > 0) {
+        const size_t kept = n + w - out;
+        for (size_t k = 0; k < kept; ++k) put(i + k, true, out + k);
+        entries_.resize(i + kept);
+        if (E) err_.resize((i + kept) * E);
+        if (P) pay_.resize((i + kept) * P);
+    }
     buf_.clear();
     buf_err_.clear();
     buf_pay_.clear();
-    flush_at_ = std::min(buffer_limit_, std::max(kMinBuffer, entries_.size() / 2));
+    flush_at_ = std::min(buffer_cap(), std::max(kMinBuffer, entries_.size() / 2));
     if (spill_budget_ && entries_.size() * (sizeof(Entry) + ev_bytes()) > spill_budget_) spill();
 }
 
@@ -254,7 +328,7 @@ void UmiCounts::flush() const {
     buf_.resize(w);
 
     auto set_next_flush = [this] {
-        flush_at_ = std::min(buffer_limit_, std::max(kMinBuffer, entries_.size() / 2));
+        flush_at_ = std::min(buffer_cap(), std::max(kMinBuffer, entries_.size() / 2));
     };
 
     // Never: the FIRST flush is the one that swaps the buffer in wholesale, and it has to check the

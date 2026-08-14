@@ -145,6 +145,10 @@ struct RefineStats {
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.
     uint64_t table_bytes = 0;
+    // ...and what it actually held while it ran, which is the budget rather than the library once
+    // the partition fires. Reporting only the first would say a bounded run needed 40 GB;
+    // reporting only the second would hide that the library is that big.
+    uint64_t table_resident_bytes = 0;
     // True when the table went past `table_budget_bytes` and partitioned itself to disk. The
     // answers are the same either way; the wall clock is not, so the flag travels with them.
     bool table_spilled = false;
