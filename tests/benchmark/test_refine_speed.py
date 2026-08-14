@@ -130,12 +130,15 @@ def test_peak_memory_tracks_barcodes_not_reads(tmp_path):
 def test_the_payload_draft_is_a_real_allocation(tmp_path):
     """`table_bytes` has to describe the allocation it claims to, not an arithmetic guess.
 
-    Never: the lever has to clear the PROCESS FLOOR. At a 64-base draft over 300,000 barcodes the
-    difference is 18 MB against a ~246 MB floor of readers and chunks, and on a CI runner both runs
-    reported the same peak to the byte -- the assertion was then measuring the allocator's rounding,
-    not the table. A 256-base draft is 73 MB, which no rounding hides.
+    Never: the lever has to clear the PROCESS FLOOR, and the floor is a platform property. At a
+    64-base draft over 300,000 barcodes the difference is 18 MB against a ~246 MB floor of readers
+    and chunks, and on a CI runner both runs reported the same peak TO THE BYTE -- the assertion was
+    measuring the allocator's rounding. Widening the draft to 256 bases (73 MB) still showed 0 on
+    Linux: peak RSS is a high-water mark, the mark was set by an earlier phase, and glibc handed the
+    table the pages that phase had freed. The table has to be bigger than everything that ran before
+    it, which is what 1.5 M barcodes at a 256-base draft is -- ~480 MB against a ~250 MB floor.
     """
-    path = _corpus(tmp_path / "s.fq.gz", 1, 4, n_barcodes=300_000)
+    path = _corpus(tmp_path / "s.fq.gz", 1, 4, n_barcodes=1_500_000)
     wide = _peak_in_a_fresh_process(path, tmp_path / "w", 256)
     narrow = _peak_in_a_fresh_process(path, tmp_path / "n", 0)
     claimed = wide["table"] - narrow["table"]
