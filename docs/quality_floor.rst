@@ -155,6 +155,20 @@ thresholds, and 9% lower at 2%.
    this chemistry is therefore somewhere at or below 1.5·10⁻⁴, and a library with a longer barcode
    would measure it more sharply.
 
+Where the other two classes come from
+-------------------------------------
+
+``--rt-error`` names a chemistry rather than asking for a number, and only the ``rt`` bracket is
+measured above. The other two are published polymerase fidelities: Taq 4.3·10⁻⁵, Pfu 2.8·10⁻⁶,
+Phusion 2.6·10⁻⁶ and Pwo 2.4·10⁻⁶ per base pair per template duplication (`McInerney, Adams & Hadi
+2014 <https://doi.org/10.1155/2014/287430>`_), which is the decade between ``medium`` and ``high``.
+The **first** cycle is the one that sets the floor, because only an error made there is copied into
+every read of the molecule, and a linear-amplification error runs about 5 ± 1 times the per-cycle
+PCR rate (`Shagin *et al.* 2017 <https://doi.org/10.1038/s41598-017-02727-8>`_) — which is why a
+class is a bracket and not the enzyme's datasheet figure. A protocol that publishes its own rate is
+passed as a rate: TSO500 v2 is 7.37·10⁻⁵. Every one of these is in ``SOURCES.md`` with its
+provenance.
+
 Consequences for M1
 -------------------
 

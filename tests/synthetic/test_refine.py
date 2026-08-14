@@ -16,6 +16,10 @@ from migec.refine import format_report, run
 
 from ._sim import SimConfig, simulate
 
+from tests.conftest import requires_core
+
+pytestmark = requires_core
+
 ADAPTER = "CAGTGGTATCAACGCAGAGT"
 
 

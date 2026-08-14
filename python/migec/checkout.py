@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from migec import _core
-from migec.sheet import SampleRow, is_positional, read_barcodes
+from migec.sheet import SampleRow, is_positional, parse_layout, read_barcodes
 
 
 def run(
@@ -51,9 +51,23 @@ def run(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    # Never: a sheet row is a LAYOUT too. `^NNNNNNNN` and `0:8` work through --bc-pattern because
+    # the CLI runs them through `parse_layout`, and a sheet row skipped it -- so the identical
+    # string failed with "'^' is not a IUPAC symbol", which reads as a bug in the pattern rather
+    # than in where it was written. Every row is translated here, once, before anything is
+    # compiled.
+    anchored = False
+    translated: list[SampleRow] = []
+    for r in rows:
+        pattern, pattern_anchored = parse_layout(r.pattern)
+        slave, slave_anchored = (parse_layout(r.slave) if r.slave else ("", False))
+        anchored = anchored or pattern_anchored or slave_anchored
+        translated.append(SampleRow(r.sample_id, pattern, slave or None, r.r1, r.r2))
+    rows = translated
+
     if max_offset is None:
         specs = [r.pattern for r in rows] + [r.slave for r in rows if r.slave]
-        max_offset = 0 if all(is_positional(s) for s in specs) else -1
+        max_offset = 0 if anchored or all(is_positional(s) for s in specs) else -1
 
     summary = _core.run_checkout(
         str(reads),
@@ -281,7 +295,17 @@ def format_report(summary: dict) -> str:
         )
     # Zero is not "a low rate", it is a configuration error, and it is the one outcome a summary
     # table renders indistinguishably from a successful run of an empty file. Say what it means.
-    if c["total"] and c["assigned"] == 0:
+    if not c["total"]:
+        # Never: an EMPTY input is not a successful run. Every warning below divides by the reads
+        # that matched, so a zero-read file printed "base composition costs 100% of the barcode
+        # space" and exited 0 -- findings computed from nothing, in the shape of findings computed
+        # from something.
+        warnings.append(
+            "the input held NO READS. Nothing below was measured; every statistic a run reports "
+            "is computed from the reads that matched, and there were none. Check the path and "
+            "that the file is not an empty gzip member"
+        )
+    elif c["total"] and c["assigned"] == 0:
         warnings.append(
             "NOTHING matched. The pattern was never placed in any read, which is a declaration "
             "error rather than a data one. Check with `migec suggest`, and note that an anchor "
@@ -297,7 +321,7 @@ def format_report(summary: dict) -> str:
     # Every warning below is computed from the reads that matched. With none, they are all
     # divisions by zero dressed as findings -- "base composition costs 100% of the barcode space"
     # is not a fact about the library, and printing it buries the one line that matters.
-    if c["total"] and c["assigned"] == 0:
+    if not c["total"] or c["assigned"] == 0:
         lines.append("")
         lines.append(f"warning: {warnings[-1]}")
         return "\n".join(lines)

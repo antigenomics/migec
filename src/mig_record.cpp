@@ -95,6 +95,7 @@ private:
 
 struct MigWriter::Impl {
     std::FILE* f = nullptr;
+    std::string path;   // for the error message; a path in a message is what makes it actionable
     MigHeader header;
     size_t block_bytes;
     uint64_t n_written = 0;
@@ -151,6 +152,7 @@ MigWriter::MigWriter(const std::string& path, const MigHeader& header, size_t bl
     : impl_(new Impl) {
     impl_->f = std::fopen(path.c_str(), "wb");
     if (!impl_->f) throw MigecError("mig_writer: cannot open " + path + " for writing");
+    impl_->path = path;
     impl_->header = header;
     impl_->header.format_version = kMigFormatVersion;
     impl_->block_bytes = block_bytes;
@@ -218,11 +220,17 @@ void MigWriter::close() {
     // magic again, so a reader can validate the file was closed cleanly.
     BlockHeader term{};
     term.codec = kCodecNone;
-    std::fwrite(&term, sizeof(term), 1, im.f);
-    std::fwrite(&im.n_written, sizeof(im.n_written), 1, im.f);
-    std::fwrite(kMigMagic, 1, 4, im.f);
-    std::fclose(im.f);
+    // Never: the footer is what the reader checks to know the file was closed cleanly, and fclose
+    // is where a full disk shows up -- the block writes above went into the C library's buffer.
+    // Ignoring either reports a successful run over a file the reader will refuse.
+    const bool wrote_footer = std::fwrite(&term, sizeof(term), 1, im.f) == 1 &&
+                              std::fwrite(&im.n_written, sizeof(im.n_written), 1, im.f) == 1 &&
+                              std::fwrite(kMigMagic, 1, 4, im.f) == 4;
+    const bool closed = std::fclose(im.f) == 0;
     im.f = nullptr;
+    if (!wrote_footer || !closed) {
+        throw MigecError("mig_writer: could not finish " + im.path + " -- is the disk full?");
+    }
 }
 
 uint64_t MigWriter::records_written() const { return impl_->n_written; }
@@ -285,6 +293,14 @@ struct MigReader::Impl {
             crc32(0L, reinterpret_cast<const Bytef*>(raw.data()), static_cast<uInt>(raw.size())));
         if (crc != bh.crc32) throw MigecError("mig_reader: block CRC mismatch (corrupt file)");
 
+        // Never: BEFORE the memcpy. `n_records` is a u32 out of the file and the CRC above only
+        // proves the payload is what the writer wrote -- a crafted header declaring more records
+        // than the payload holds would read past the decompressed buffer.
+        if (static_cast<size_t>(bh.n_records) * sizeof(StoredRecord) > raw.size()) {
+            throw MigecError("mig_reader: block declares " + std::to_string(bh.n_records) +
+                             " records, which do not fit its " + std::to_string(raw.size()) +
+                             " byte payload");
+        }
         recs.resize(bh.n_records);
         std::memcpy(recs.data(), raw.data(), bh.n_records * sizeof(StoredRecord));
         size_t o = bh.n_records * sizeof(StoredRecord);
@@ -338,6 +354,20 @@ MigReader::MigReader(const std::string& path) : impl_(new Impl) {
     };
     read_str(h.sample_id);
     read_str(h.provenance);
+    // Never: `bucket_bits` and `bucket_index` are one byte each and go straight into a shift and a
+    // vector index in every stage that reads a partition. `1 << 200` is undefined behaviour and
+    // `bucket_paths[200]` on a two-bucket vector is an out-of-bounds write, both reachable from a
+    // file that merely got corrupted in the right byte. The format's own limit is 8 bits (256
+    // buckets); anything past it is not a migec partition.
+    if (h.bucket_bits > 8) {
+        throw MigecError("mig_reader: " + path + " declares 2^" + std::to_string(h.bucket_bits) +
+                         " buckets, past the format's limit of 2^8");
+    }
+    if (h.bucket_index >= (1u << h.bucket_bits) && !(h.bucket_bits == 0 && h.bucket_index == 0)) {
+        throw MigecError("mig_reader: " + path + " calls itself bucket " +
+                         std::to_string(h.bucket_index) + " of 2^" +
+                         std::to_string(h.bucket_bits) + ", which does not exist");
+    }
     uint32_t nq = 0;
     impl_->r->must_read(&nq, 4, "calibration length");
     h.quality_calibration.resize(nq);

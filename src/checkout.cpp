@@ -336,11 +336,17 @@ namespace {
 struct BlockFile {
     std::FILE* f = nullptr;
     bool wrote = false;
+    std::string path;   // for the error message: a path is what makes it actionable
 
-    explicit BlockFile(const std::string& path) : f(std::fopen(path.c_str(), "wb")) {
-        if (!f) throw MigecError("checkout: cannot open " + path);
+    explicit BlockFile(const std::string& p) : f(std::fopen(p.c_str(), "wb")), path(p) {
+        if (!f) throw MigecError("checkout: cannot open " + p);
     }
-    ~BlockFile() { close(); }
+    // The destructor cannot throw -- it runs during unwinding -- so it drops the handle silently
+    // and leaves the error to the explicit close() every success path makes.
+    ~BlockFile() {
+        if (f) std::fclose(f);
+        f = nullptr;
+    }
     BlockFile(const BlockFile&) = delete;
     BlockFile& operator=(const BlockFile&) = delete;
 
@@ -352,10 +358,13 @@ struct BlockFile {
         wrote = true;
     }
     void close() {
-        if (f) {
-            std::fclose(f);
-            f = nullptr;
-        }
+        if (!f) return;
+        // Never: fclose is where a full disk shows up. Every append above went into the C
+        // library's buffer, so ignoring the flush reports a successful run over a truncated
+        // FASTQ -- and a truncated gzip member is a file the next stage refuses to read.
+        const bool ok = std::fclose(f) == 0;
+        f = nullptr;
+        if (!ok) throw MigecError("checkout: could not flush " + path + " -- is the disk full?");
     }
 };
 
@@ -589,6 +598,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     for (size_t i = 0; i < n_samples; ++i) {
         auto it = std::find(stats.sample_ids.begin(), stats.sample_ids.end(), ids[i]);
         if (it == stats.sample_ids.end()) {
+            validate_sample_id(ids[i], "checkout");
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
             row_of_file.push_back(i);
@@ -729,8 +739,22 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         // Chunk 0 stays on this thread; spawning a thread for it would only add a context switch.
         std::vector<std::thread> pool;
         pool.reserve(filled - 1);
-        for (size_t t = 1; t < filled; ++t) pool.emplace_back([&, t] { guarded(t); });
+        // Never: a failed spawn must not abort. std::system_error out of emplace_back would unwind
+        // over threads that are still joinable, and ~thread() on a joinable thread is
+        // std::terminate. Whatever could not be spawned is run on this thread instead: the chunks
+        // are independent and the output order is fixed by the append loop below, so the bytes do
+        // not move -- only the wall clock does.
+        size_t spawned = 1;  // chunk 0 always runs here
+        for (size_t t = 1; t < filled; ++t) {
+            try {
+                pool.emplace_back([&, t] { guarded(t); });
+                ++spawned;
+            } catch (...) {
+                break;
+            }
+        }
         guarded(0);
+        for (size_t t = spawned; t < filled; ++t) guarded(t);
         for (std::thread& th : pool) th.join();
         if (err) std::rethrow_exception(err);
 

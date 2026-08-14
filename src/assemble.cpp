@@ -100,6 +100,16 @@ AssembleStats assemble(const AssembleRequest& request) {
     std::filesystem::create_directories(out_dir);
     const std::filesystem::path temp_dir = out_dir / ".assemble_buckets";
     std::filesystem::create_directories(temp_dir);
+    // Never: removed on the ERROR path too, and with remove_all. `remove` deletes only an empty
+    // directory, and it only ran on success -- so a run that died on a corrupt bucket left the
+    // whole partition behind (508 files, measured), and the next run's `.mig` glob found them.
+    struct TempDirGuard {
+        std::filesystem::path path;
+        ~TempDirGuard() {
+            std::error_code ec;
+            std::filesystem::remove_all(path, ec);
+        }
+    } temp_guard{temp_dir};
 
     const int threads = worker_count(request.threads, 64);
     stats.threads = threads;
@@ -272,6 +282,10 @@ AssembleStats assemble(const AssembleRequest& request) {
                 if (stats.sample_id.empty()) {
                     const std::string_view bc = tag_value(chunk[emit].comment, "BC:Z:");
                     stats.sample_id = bc.empty() ? std::string("sample") : std::string(bc);
+                    // Never: this id came out of the READ, and it becomes the name of every file
+                    // this stage writes. A crafted `BC:Z:../..` would write outside the output
+                    // directory.
+                    validate_sample_id(stats.sample_id, "assemble");
                 }
                 if (stats.cell_length == 0 && p.cell_len) {
                     stats.cell_length = static_cast<int>(p.cell_len);
@@ -366,6 +380,13 @@ AssembleStats assemble(const AssembleRequest& request) {
 
     auto consense_bucket = [&](size_t bucket, BucketOut& out) {
         std::unique_ptr<FastqWriter> writer;
+        // Owned, because `emit` below can throw -- a full disk in `writer->write`, a bad length in
+        // `unpack_barcode` -- and this runs one per bucket inside parallel_for, so a raw FILE*
+        // leaks one descriptor per bucket and leaves a partial TSV behind.
+        struct FileCloser {
+            void operator()(std::FILE* f) const { if (f) std::fclose(f); }
+        };
+        std::unique_ptr<std::FILE, FileCloser> table_handle;
         std::FILE* table = nullptr;
         auto emit = [&](uint64_t cell_key, uint64_t key, const std::vector<Resident>& group) {
         ++out.groups;
@@ -464,7 +485,8 @@ AssembleStats assemble(const AssembleRequest& request) {
         out.fastq_path = (temp_dir / ("out." + std::to_string(bucket) + ".fq.gz")).string();
         out.table_path = (temp_dir / ("out." + std::to_string(bucket) + ".tsv")).string();
         writer = std::make_unique<FastqWriter>(out.fastq_path, request.gzip_level);
-        table = std::fopen(out.table_path.c_str(), "w");
+        table_handle.reset(std::fopen(out.table_path.c_str(), "w"));
+        table = table_handle.get();
         if (!table) throw MigecError("assemble: cannot write the per-molecule table");
 
         std::vector<Resident> group;
@@ -477,7 +499,11 @@ AssembleStats assemble(const AssembleRequest& request) {
             group.push_back(std::move(records[j]));
         }
         if (!group.empty()) emit(group.front().cell, group.front().umi, group);
-        std::fclose(table);
+        // Never: a table is not written until fclose says so. A full disk shows up here, in the
+        // flush, and ignoring it reports a successful run over a truncated table.
+        if (std::fclose(table_handle.release()) != 0) {
+            throw MigecError("assemble: cannot flush " + out.table_path + " -- is the disk full?");
+        }
         table = nullptr;
         writer->close();
         writer.reset();
@@ -562,8 +588,6 @@ AssembleStats assemble(const AssembleRequest& request) {
         std::fclose(fq);
         std::fclose(tsv);
     }
-    std::error_code ec;
-    std::filesystem::remove(temp_dir, ec);
 
     // The same barcode_space() checkout reports, on the same barcodes, so the two runs cannot
     // disagree about what the library was.

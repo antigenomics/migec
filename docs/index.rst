@@ -9,8 +9,8 @@ complete C++20 rewrite of `MIGEC <https://doi.org/10.1038/nmeth.2960>`_ and
 
    **Version 2 is under construction.** All three stages work today — ``checkout``, ``refine`` and
    ``assemble`` — with cell barcodes, whitelists, dual-end and positional layouts, cell calling,
-   and ``suggest``/``subsample``/``plot``. Index hopping, ``.mig`` bucket output from checkout and
-   the published benchmark comparisons are what remain; see :doc:`roadmap`. The Groovy MIGEC 1.2.9
+   and ``suggest``/``subsample``/``plot``. Index hopping and the published benchmark comparisons
+   are what remain; see :doc:`roadmap`. The Groovy MIGEC 1.2.9
    that this replaces is archived on the ``legacy-v1`` branch and at tag ``v1-final``.
 
 What it does
@@ -72,8 +72,16 @@ Where to go
    * - say where your barcode is
      - :doc:`Layouts <layouts>` for the grammar and the presets; :doc:`suggest <suggest>` if you do
        not know
+   * - know what to set for **your** experiment
+     - :doc:`Assays <assays>` -- eight profiles, the ``--min-reads`` each one wants, and which
+       pre-amplification floor your chemistry has
    * - understand one stage
      - :doc:`Commands <commands>` -- all eight, with the number each one decides
+   * - look at the QC figures
+     - :doc:`plot <plots>` -- twenty panels over the TSVs the stages wrote, including Cell Ranger's
+       barcode rank plot and the MIG size spectrum
+   * - run a cohort
+     - :doc:`Pipelines <nextflow>` -- the Nextflow modules and the SLURM array templates
    * - align or quantify the consensus
      - :doc:`Downstream <downstream>`, where every tool in the table was actually run
    * - call rare variants (ctDNA, tumour)
@@ -94,6 +102,7 @@ Where to go
    installation
    examples
    Layouts <layouts>
+   Assays <assays>
    commands
    Downstream <downstream>
    Variant calling <variants>

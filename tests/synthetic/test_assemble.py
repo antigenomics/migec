@@ -17,6 +17,10 @@ from migec.checkout import run as checkout_run
 
 from ._sim import SimConfig, simulate
 
+from tests.conftest import requires_core
+
+pytestmark = requires_core
+
 ADAPTER = "CAGTGGTATCAACGCAGAGT"
 
 

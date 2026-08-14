@@ -707,3 +707,43 @@ TEST_CASE("bucketed correction refuses evidence it cannot index") {
     CHECK_THROWS_AS(correct_umis(c, CorrectionParams{}, ev), MigecError);
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("a truncated spill file is refused, not read past") {
+    // Never: a spill file is a whole number of entries. A run killed mid-write leaves a partial
+    // one, and sizing the buffer at `bytes / 16` while reading `bytes` overruns the heap by up to
+    // 15 bytes -- silently, because the read itself succeeds.
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_truncated").string();
+    std::filesystem::remove_all(dir);
+    UmiCounts c(8);
+    c.enable_spill(dir, 4096, 4);
+    std::mt19937_64 rng(3);
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s += "ACGT"[rng() % 4];
+        c.add(umi(s), 1);
+    }
+    REQUIRE(c.spilled());
+    // Chop three bytes off the first non-empty bucket, as a killed process would.
+    for (const auto& e : std::filesystem::directory_iterator(dir)) {
+        if (std::filesystem::file_size(e.path()) >= 16) {
+            std::filesystem::resize_file(e.path(), std::filesystem::file_size(e.path()) - 3);
+            break;
+        }
+    }
+    CHECK_THROWS_AS(c.distinct(), MigecError);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a sample id that would escape the output directory is refused") {
+    // Never: an id becomes a FILE NAME in every stage, and in assemble and refine it comes from the
+    // DATA -- the BC:Z: tag of the first read. `../escape` walks out of the output directory.
+    CHECK_THROWS_AS(validate_sample_id("../escape", "test"), MigecError);
+    CHECK_THROWS_AS(validate_sample_id("a/b", "test"), MigecError);
+    CHECK_THROWS_AS(validate_sample_id("-rf", "test"), MigecError);
+    CHECK_THROWS_AS(validate_sample_id("", "test"), MigecError);
+    CHECK_THROWS_AS(validate_sample_id(std::string("bad\x01name"), "test"), MigecError);
+    validate_sample_id("S1", "test");          // ordinary
+    validate_sample_id("A2-i129", "test");     // a donor id with a dash inside
+    validate_sample_id("S1.rep2", "test");     // a period is fine; the bucket suffix is 3 digits
+}

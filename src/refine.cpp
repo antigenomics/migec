@@ -155,6 +155,23 @@ RefineStats refine(const RefineRequest& request) {
     int mig_bits = 0;
     uint64_t written_reads = 0;
     if (!request.mig_inputs.empty()) {
+        // Never: refine writes `<sample>.<bbb>.mig` and MigWriter opens with "wb", which
+        // TRUNCATES. Pointed at its own input directory it would destroy the reads it is halfway
+        // through reading -- 600,000 records in, then `file ends without a footer`, and the input
+        // gone. Refused before a single writer is opened; the check is on the resolved path, so a
+        // relative `-o .` and an absolute input are still caught.
+        std::error_code ec;
+        const std::filesystem::path out_real = std::filesystem::weakly_canonical(out_dir, ec);
+        for (const std::string& path : request.mig_inputs) {
+            const std::filesystem::path in_real =
+                std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
+            if (!ec && in_real.parent_path() == out_real) {
+                throw MigecError(
+                    "refine: --out is the directory the input buckets are in ('" +
+                    out_real.string() + "'), and refine writes buckets under the same names -- "
+                    "that would truncate its own input. Give a different output directory");
+            }
+        }
         bool first = true;
         for (const std::string& path : request.mig_inputs) {
             MigReader probe(path);
@@ -162,6 +179,7 @@ RefineStats refine(const RefineRequest& request) {
             if (first) {
                 mig_bits = h.bucket_bits;
                 if (stats.sample_id.empty()) stats.sample_id = h.sample_id;
+                validate_sample_id(stats.sample_id, "refine");
                 first = false;
             } else if (h.bucket_bits != mig_bits) {
                 throw MigecError("refine: '" + path + "' is cut into 2^" +
@@ -449,6 +467,12 @@ RefineStats refine(const RefineRequest& request) {
             const MigHeader& h = reader.header();
             MigRecord rec;
             while (reader.next(rec)) {
+                // Never: the limit stops the REWRITE too, exactly as it stops the FASTQ one. The
+                // table was built from the first N reads, so a rewrite that ran past them would
+                // emit reads whose barcode was never in the table -- uncorrected, through the
+                // pass-through branch below, beside corrected ones with nothing saying which was
+                // which. Measured before the check existed: 1,000 reads counted, 12,000 written.
+                if (stats.limited && written_reads >= stats.reads) break;
                 std::string umi = unpack_barcode(rec.umi, h.umi_len);
                 std::string cell = h.cell_len ? unpack_barcode(rec.cell, h.cell_len) : std::string();
                 const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));

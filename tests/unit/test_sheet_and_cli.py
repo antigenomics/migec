@@ -143,6 +143,68 @@ def test_the_pipeline_runs_end_to_end_through_the_cli(tmp_path):
     assert (tmp_path / "sub.fq.gz").exists()
 
 
+def test_refine_applies_a_cell_whitelist_given_on_the_command_line(tmp_path):
+    """`--cell-whitelist` is plumbed through typer, `refine.run` and eleven positional arguments
+    of `_core.refine`; only the last two were exercised. An argument that stops arriving -- a
+    reordered signature, an option renamed, `cell_whitelist=cell_whitelist or ""` dropping a
+    Path -- produces a run that succeeds with the whitelist silently unread, which is exactly the
+    run whose barcodes were never snapped. Both directions are asserted: the listed barcode is
+    recovered WITH the option, and is not without it.
+    """
+    import gzip
+    import random
+
+    rng = random.Random(4)
+    listed = ["".join(rng.choice("ACGT") for _ in range(16)) for _ in range(200)]
+    (tmp_path / "wl.txt").write_text("\n".join(listed) + "\n")
+
+    reads, i = [], 0
+
+    def emit(cb, n, cell_qual=40):
+        nonlocal i
+        for _ in range(n):
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            pay = "".join(rng.choice("ACGT") for _ in range(60))
+            reads.append(
+                f"@r{i} RX:Z:{umi}\tQX:Z:{'I' * 12}\tCB:Z:{cb}\t"
+                f"CY:Z:{'I' * 15}{chr(33 + cell_qual)}\tBC:Z:S1\n{pay}\n+\n{'I' * 60}\n"
+            )
+            i += 1
+
+    for cb in listed[:5]:
+        emit(cb, 200)
+    # One read of a deeply-used cell miscalled at its last base, and the instrument says so (Q3).
+    off_by_one = listed[0][:15] + ("A" if listed[0][15] != "A" else "C")
+    emit(off_by_one, 10, cell_qual=3)
+    with gzip.open(tmp_path / "r.fq.gz", "wt") as fh:
+        fh.write("".join(reads))
+
+    def cell_barcodes(out_dir):
+        seen = []
+        with gzip.open(out_dir / "S1.fq.gz", "rt") as fh:
+            for j, line in enumerate(fh):
+                if j % 4 == 0:
+                    seen.append(next(f[5:] for f in line.split() if f.startswith("CB:Z:")))
+        return seen
+
+    r = runner.invoke(app, ["refine", str(tmp_path / "r.fq.gz"), "-o", str(tmp_path / "on"),
+                            "--cell-whitelist", str(tmp_path / "wl.txt")])
+    assert r.exit_code == 0, r.output
+    assert "snapped to it" in clean(r.output)
+    assert cell_barcodes(tmp_path / "on").count(off_by_one) == 0
+    assert cell_barcodes(tmp_path / "on").count(listed[0]) == 210
+
+    r = runner.invoke(app, ["refine", str(tmp_path / "r.fq.gz"), "-o", str(tmp_path / "off")])
+    assert r.exit_code == 0, r.output
+    assert cell_barcodes(tmp_path / "off").count(off_by_one) == 10
+
+    # A whitelist that is not there is a typo, not an empty list: correcting nothing looks like a
+    # clean library and is the one outcome that must never be reported as success.
+    r = runner.invoke(app, ["refine", str(tmp_path / "r.fq.gz"), "-o", str(tmp_path / "missing"),
+                            "--cell-whitelist", str(tmp_path / "nope.txt")])
+    assert r.exit_code != 0
+
+
 def test_describe_rejects_a_pattern_the_grammar_does_not_accept(tmp_path):
     """`migec sheet` exists to catch a bad row before a run, not after one."""
     rows = read_barcodes(sheet(tmp_path, "S1\tACGT?NNN\n"))

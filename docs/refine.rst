@@ -76,6 +76,17 @@ the count ratio would have made.
 How well it works, and where it cannot
 --------------------------------------
 
+What one run prints, on a simulated library of 20,000 molecules carrying an injected barcode error
+rate of 3.0e-03:
+
+.. code-block:: text
+
+   barcodes    23,910 distinct
+     merged    3,855 (16.1%) into a parent, 3,889 reads moved
+   molecules   20,055 after correction          <- 20,000 were simulated
+
+   barcode error   2.87e-03 per base            <- 3.0e-03 injected
+
 ``scripts/correction_accuracy.py`` scores it against the simulator's truth. Recall is reported
 against the **reachable** set, because a child whose parent barcode was never sequenced has nothing
 to merge into and correctly stays put:
