@@ -192,3 +192,20 @@ def test_the_verdict_never_claims_more_than_metadata_can_show(row, expect):
     v = sf.verdict(row)
     assert expect in v
     assert v.endswith("peek to confirm")
+
+
+# --- assay recommendations ------------------------------------------------------------------------
+
+
+def test_every_layout_preset_carries_a_variant_calling_recommendation():
+    """A preset says where the barcode is; an assay also needs to say what a consensus is worth.
+    Never: leaving one out means `migec sheet --presets` silently recommends nothing for it."""
+    from migec.sheet import ASSAYS, PRESETS
+
+    assert set(PRESETS) <= set(ASSAYS), f"no recommendation for {set(PRESETS) - set(ASSAYS)}"
+    for name, a in ASSAYS.items():
+        assert a["min_reads_variant"] >= 3, (
+            f"{name}: --min-reads 1 means a singleton consensus IS one raw read, with no error "
+            f"correction -- measured to carry every 2-colour dark-G false positive")
+        assert a["rt_error"], f"{name}: needs a pre-amplification floor"
+        assert a["note"], f"{name}: a recommendation without a reason is folklore"

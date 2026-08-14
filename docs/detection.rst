@@ -57,31 +57,47 @@ Never: **an assay designed past its floor spends money on sequencing that cannot
 30-site MRD panel has enough molecules for 6.9e-6 -- but on a single-strand protocol the floor sits
 at 3.3e-5, five times higher. The molecules promise something the chemistry cannot deliver.
 
-Never: **more molecules makes an artifact easier to call, not harder.** Measured on the
-0%-certified arm at fixed 20 ng input, varying only sequencing depth:
+Never: **more molecules makes an existing artifact easier to call, not harder** -- but only where
+the artifact is there to begin with. Two factors decide it, and they are separable. Splitting 72
+runs by preparation and by molecule count:
 
 .. list-table::
    :header-rows: 1
-   :widths: 18 26 28 28
+   :widths: 26 24 24 26
 
-   * - depth
+   * - preparation
      - molecules per site
-     - artifact called in
-     - VAF reported
-   * - 3.3x
-     - ~8,000
-     - 0 of 3 replicates
-     - --
-   * - 10x
-     - ~12,000
-     - **3 of 3 replicates**
-     - **0.66%**
+     - calls per sample
+     - n
+   * - diluted, fewer molecules
+     - 2,579
+     - 1.0
+     - 24
+   * - **diluted, more molecules**
+     - 7,354
+     - **7.1**
+     - 24
+   * - undiluted, fewer molecules
+     - 3,686
+     - 1.1
+     - 12
+   * - undiluted, more molecules
+     - 13,611
+     - 1.4
+     - 12
 
-The bias is present at both depths. What changes is the statistical power to call it: a systematic
-error does not average out with more molecules, so the extra evidence that makes a real variant
-significant makes the artifact significant too. At 20 ng and 10x the 0.125% arm read 0.17%
-(detected in 1 of 3) while the **true negative read 0.66% in 3 of 3** -- the negative outscoring
-the positive. Below the artifact level, the ranking is meaningless without a background model.
+Within the **diluted** material, 2.9x the molecules gives **7.1x** the calls. Within **undiluted**
+material at *more* molecules than that, 3.7x the molecules gives 1.3x. So the two factors do
+different jobs:
+
+* **Preparation decides whether the artifact exists.** The dilution series was made by mixing, and
+  the extra handling is what the artifact tracks; the raw material barely shows it.
+* **Molecule count decides whether you can see it.** A systematic error does not average out, so
+  the evidence that makes a real variant significant makes a *present* artifact significant too.
+
+That is why the usual lever backfires here. At 20 ng and 10x the 0.125% arm read 0.17% while the
+**true negative read 0.66%** -- the negative outscoring the positive. Below the artifact level the
+ranking carries no information without a background model.
 
 ctDNA
 -----
@@ -89,14 +105,16 @@ ctDNA
 Molecule-limited almost always, because the input is a blood draw and cell-free DNA is scarce:
 5-30 ng from 10 mL of plasma is typical, and 20 ng is only ~6,000 haploid genomes.
 
-:doc:`variants` has the measurement: over 100 runs of cfDNA reference material at certified
-frequencies, **the input mass decided the outcome and the caller did not**. At 0.125% VAF, 5 ng
-gave a coin flip and 20 ng gave a certainty.
+:doc:`variants` has the measurement over 100 runs of cfDNA reference material at certified
+frequencies, and it is a two-part answer. **Above ~1% VAF the input mass decides the outcome and
+the caller does not** -- 1% was called in 11 of 12 runs at an accurate 0.93%. **Below 1% neither
+does**, because the assay becomes artifact-limited: 0.125% was called in 1 of 12 runs while the
+0%-certified arm was called in 3 of 12.
 
 Two things a total molecule count hides, both measured on that panel by aligning to GRCh38:
 
-* **Coverage is not uniform.** The weakest target held **0.31-0.61x** of the on-target mean, so a
-  variant sitting on it has up to 3x fewer molecules than the average implies.
+* **Coverage is not uniform.** Across 72 runs the weakest target held **0.09-0.64x** of the panel
+  mean (median 0.36), so an average overstates the thinnest target by up to elevenfold.
 * **Off-target product is invisible without a reference, and it grows as input falls.** One locus
   outside any coding sequence took a share that tracked the DNA input almost perfectly:
 
@@ -152,13 +170,17 @@ people actually ask, for this panel, at 95% detection and three supporting molec
      - **0.026%**
      - yes, with room to spare
 
-The reference material is certified at 0.125%, 0.25% and 1%, so **only the 80 ng arm can call the
-lowest of those at every target in the panel**. Solving for the threshold: ~5,000 molecules at the
-weakest target are needed for 0.125%, which on this panel means roughly **30 ng of input**.
-
 Never: quoting the panel *average* would have said 20 ng was sufficient. It is not, for a variant
 that happens to sit on the weakest amplicon -- and which amplicon a patient's variant sits on is
-not something you get to choose.
+not something you get to choose. The weakest target holds as little as **0.09x** the panel mean, so
+an average can overstate it elevenfold.
+
+Never: **that table is the molecule-limited answer only, and it is optimistic.** It says 80 ng
+reaches 0.026% and therefore calls 0.125% comfortably. Scoring actual calls against the certified
+frequencies says otherwise -- 0.125% was detected in **1 of 12** runs, and the 0%-certified arm was
+called in 3 of 12. The molecules are there; what is missing is a background model, because below
+1% this panel is artifact-limited rather than molecule-limited. Use the table to rule inputs
+*out*, never to rule one *in*.
 
 What input actually buys: precision, not accuracy
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -367,6 +389,97 @@ duplex consensus (``ROADMAP.md``), so no error-suppression claim here rests on d
 MRD the clonotype half of the problem is `arda <https://github.com/antigenomics/arda>`_'s: migec
 gives it one record per molecule, and its AIRR ``duplicate_count`` is then a molecule count, which
 is the number a residual-disease burden should be computed from.
+
+Settings per assay
+------------------
+
+A preset says *where the barcode is*. It does not say what a consensus is worth, and for
+rare-variant work that matters more. ``migec sheet --presets`` now prints both:
+
+.. code-block:: text
+
+   tso500
+       pattern  ^NNNNN.....
+       for variant calling: --min-reads 3 --rt-error 7.37e-05
+
+Never: **``--min-reads`` defaults to 1, which is right for counting molecules and wrong for
+calling variants.** A consensus over one read *is* that read -- no error correction at all, just
+counting. Measured on certified cfDNA reference material at 20 ng and 10x:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 22 22
+
+   * - variant
+     - ``--min-reads 1``
+     - ``--min-reads 3``
+     - ``--min-reads 5``
+   * - ``3:179234297 A>G`` PIK3CA H1047R
+     - 0.0118
+     - 0.0118
+     - 0.0125
+   * - ``17:7674220 C>T``
+     - 0.0139
+     - 0.0137
+     - 0.0138
+   * - ``17:7673768 T>G``
+     - 0.0041
+     - **gone**
+     - gone
+   * - ``17:7674219 C>G``
+     - 0.0072
+     - **gone**
+     - gone
+   * - ``3:179199161 C>G``
+     - 0.0067
+     - **gone**
+     - gone
+   * - ``3:179234288 A>G``
+     - 0.0077
+     - **gone**
+     - gone
+   * - ``4:54733163 A>G``
+     - 0.0068
+     - **gone**
+     - gone
+
+**Every** ``-> G`` **artifact disappeared at ``--min-reads 3``; every certified variant survived
+with its frequency stable to the third decimal.** Requiring three reads discards the molecules that
+were never error-corrected, which is exactly the population the dark-G bias rides on.
+
+What you can do blind
+---------------------
+
+That table is also a **test you can run without a panel of normals**, and it is the answer to
+"what if I have no matched controls". migec knows something a caller does not: how many reads
+built each molecule.
+
+* A **real** variant at VAF ``f`` sits in ~``f`` of molecules regardless of how many reads built
+  them, so its frequency does not move as the threshold rises.
+* A **context artifact** is carried disproportionately by molecules made from few reads, because a
+  singleton consensus is one raw read carrying the raw per-base error rate.
+
+So call the same sample at several thresholds and keep what holds still:
+
+.. code-block:: bash
+
+   for mr in 1 3 5; do
+       migec assemble rf/S1.fq.gz -o as$mr/ --min-reads $mr
+       minimap2 -ax sr -y ref.fa as$mr/S1.consensus.fq.gz | samtools sort -o S1.mr$mr.bam
+       samtools index S1.mr$mr.bam
+       lofreq call -f ref.fa -l panel.bed -o S1.mr$mr.vcf S1.mr$mr.bam
+   done
+   python scripts/blind_artifact_filter.py \
+       --vcf 1=S1.mr1.vcf 3=S1.mr3.vcf 5=S1.mr5.vcf
+
+On the sample above it returns 4 real and 5 artifact, and **all five artifacts are** ``-> G`` --
+which the script says out loud, because a spectrum that lopsided is a platform signature rather
+than biology.
+
+Note: this is weaker than a real per-position background model, and it is not a substitute for one
+where normals exist. What it does is convert "I have no controls" from *nothing* into *one
+orthogonal axis of evidence* -- and it costs two extra ``assemble`` runs, which are the cheapest
+stage in the pipeline.
 
 What to report
 --------------

@@ -260,6 +260,39 @@ def preset(name: str) -> tuple[str, str | None]:
     return master, slave
 
 
+# Settings a preset implies BEYOND where the barcode is. A layout tells you how to read the
+# molecule; it does not tell you how many reads a consensus needs before it is worth calling a
+# variant from, and that turns out to matter more.
+#
+# Never: `--min-reads` defaults to 1, which is right for COUNTING molecules and wrong for CALLING
+# VARIANTS. A consensus over one read IS that read -- no error correction at all. Measured on
+# certified cfDNA reference material at 20 ng/10x, every systematic `-> G` false positive (the
+# 2-colour dark-G artifact) disappeared at `--min-reads 3`, while every certified variant survived
+# with its frequency stable to the third decimal. See `docs/detection.rst`.
+#
+# `min_reads_variant` is therefore a recommendation for rare-variant work only. Leave the default
+# for repertoire counting, single-cell, and anything where a molecule seen once is still a
+# molecule worth having.
+ASSAYS: dict[str, dict[str, object]] = {
+    "migec":       {"min_reads_variant": 3, "rt_error": "rt",
+                    "note": "5'-RACE RepSeq. Counting assay: keep --min-reads 1 unless calling "
+                            "variants."},
+    "primerid":    {"min_reads_variant": 3, "rt_error": "rt",
+                    "note": "HIV Primer ID. RT step, so the 1e-4 floor applies."},
+    "duplex":      {"min_reads_variant": 3, "rt_error": "high",
+                    "note": "Duplex tags are extracted but migec emits SINGLE-STRAND consensus; "
+                            "the duplex floor is not yet earned here."},
+    "10x":         {"min_reads_variant": 3, "rt_error": "rt", "note": "3' GEX, shallow by design."},
+    "10x-v2":      {"min_reads_variant": 3, "rt_error": "rt", "note": "5' and 3' v2."},
+    "tso500":      {"min_reads_variant": 3, "rt_error": 7.37e-5,
+                    "note": "Illumina specify 0.5% VAF LoD (v1) and 0.2% (v2) with ~35,000x raw "
+                            "coverage; a 5 nt UMI is only 1,024 barcodes, so position carries real "
+                            "key bits here."},
+    "smarter-umi": {"min_reads_variant": 3, "rt_error": "rt", "note": "Template-switch RNA-seq."},
+    "umi":         {"min_reads_variant": 3, "rt_error": "rt", "note": "Generic inline UMI."},
+}
+
+
 def format_presets() -> str:
     """The preset table, for `migec sheet --presets` and the docs."""
     out = []
@@ -267,6 +300,11 @@ def format_presets() -> str:
         out.append(f"{name}")
         out.append(f"    pattern  {master}" + (f"    slave  {slave}" if slave else ""))
         out.append(f"    {description}")
+        a = ASSAYS.get(name)
+        if a:
+            out.append(f"    for variant calling: --min-reads {a['min_reads_variant']} "
+                       f"--rt-error {a['rt_error']}")
+            out.append(f"    {a['note']}")
     return "\n".join(out)
 
 
