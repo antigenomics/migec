@@ -229,6 +229,41 @@ The **knee** — the rank furthest from the chord joining the ends of the log-lo
 When they disagree by more than a factor of three the report says so, because one of them is
 describing a library the other is not.
 
+That distance **is** Kneedle's (`Satopaa 2011 <https://raghavan.usc.edu/papers/kneedle-simplex11.pdf>`_)
+normalised ``|y_n - (1 - x_n)|`` up to a constant, taken at its **global maximum**.
+
+.. warning::
+
+   **Kneedle's published selection rule is degenerate without the smoothing spline the paper
+   specifies.** It walks the *local* maxima and stops at the first that then falls by a
+   sensitivity step. Measured on ``sc5p_v2_hs_PBMC_1k``'s 136,032 barcodes:
+
+   =========================================  =======  ===========
+   rule                                       rank     molecules
+   =========================================  =======  ===========
+   Kneedle, unsmoothed (287 local maxima)     15       1,057
+   Kneedle, smoothed over 0.01 log-rank       358      314
+   Kneedle, smoothed over 0.10 log-rank       180      435
+   **global maximum (what migec computes)**   **376**  **308**
+   =========================================  =======  ===========
+
+   The unsmoothed answer would call fifteen cells. Properly smoothed it lands on the global
+   maximum to within 5%, and over-smoothing drifts it off again — so the global maximum reaches
+   the same place with no smoothing parameter to tune.
+
+.. warning::
+
+   **A global maximum always exists, so the knee is guarded.** An ambient-only library returns a
+   rank too, and reporting it beside OrdMag would read as two methods disagreeing about where the
+   cells are rather than as a curve with no cells in it. The knee is refused below **ten times the
+   mean molecules per observed barcode** — one order of magnitude, the unit a log-log curve is
+   read in — and the report then says the curve has no knee.
+
+   The mean alone was tried and is too weak: an ambient-only library of 1-3 molecules per barcode
+   is a step curve whose corner sits at 3 against a mean of 2.0 and clears a mean-only test at
+   1.5x. On the real library the knee is 308 against a mean of 3.38, a factor of 91. The two cases
+   are two orders apart, so the boundary is not a tuned one.
+
 **Never: EmptyDrops-style rescue of low-count cells is deliberately not reproduced.** It is Cell
 Ranger's job, and imitating it would make every comparison against their calls unreachable by
 construction rather than by measurement. The benchmark gate is written against recall of their

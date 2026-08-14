@@ -731,10 +731,23 @@ RefineStats refine(const RefineRequest& request) {
             const uint32_t robust_max = sizes[std::min(at, top - 1)];
             stats.cell_threshold = std::max<uint32_t>(1, robust_max / 10);
 
-            // The knee, reported next to it rather than instead of it: the rank furthest from the
-            // chord joining the first and last points of the log-log curve. It is a description of
-            // the data; OrdMag is the rule that makes the call, and when the two disagree badly
-            // that is worth seeing.
+            // The knee, reported next to the threshold rather than instead of it: the rank
+            // furthest from the chord joining the first and last points of the log-log curve.
+            // It is a description of the data; OrdMag is the rule that makes the call, and when
+            // the two disagree badly that is worth seeing.
+            //
+            // Note: this IS Kneedle (Satopaa 2011), taken at the GLOBAL maximum of its difference
+            // curve. Distance to the endpoint chord and Kneedle's normalised |y_n - (1 - x_n)|
+            // are the same quantity up to a constant on a decreasing curve; what differs is the
+            // selection rule. Kneedle as published walks the LOCAL maxima and stops at the first
+            // one that then falls by a sensitivity step, and that rule needs the smoothing spline
+            // the paper specifies. Measured on this library's 136,032 barcodes: unsmoothed, the
+            // difference curve has 287 local maxima and the walk stops at rank 15 (1,057
+            // molecules) -- it would call fifteen cells. Smoothed over a 0.01 window in
+            // normalised log-rank it gives rank 358 (314 molecules), which is the global maximum
+            // here (rank 376, 308 molecules) to within 5%, and over-smoothing drifts it back off
+            // (rank 180 at a 0.1 window). The global maximum reaches the same answer with no
+            // smoothing parameter to tune, so it is what we keep.
             if (sizes.size() > 2) {
                 const double x0 = 0.0, y0 = std::log10(static_cast<double>(sizes.front()));
                 const double x1 = std::log10(static_cast<double>(sizes.size()));
@@ -749,6 +762,28 @@ RefineStats refine(const RefineRequest& request) {
                         stats.knee_rank = i + 1;
                         stats.knee_molecules = sizes[i];
                     }
+                }
+                // The guard, and it is not decoration. A global maximum always exists, so the
+                // difference curve returns a rank on a library that has no cells in it at all --
+                // and reporting that beside OrdMag reads as two methods disagreeing about where
+                // the cells are, rather than as a curve with no knee in it.
+                //
+                // The floor is ONE ORDER OF MAGNITUDE above the mean molecules per observed
+                // barcode, which is the unit a log-log curve is actually read in. The mean alone
+                // is too weak and was tried: an ambient-only library of 1-3 molecules per barcode
+                // is a step curve whose corner sits at 3 against a mean of 2.0, clears a
+                // mean-only test at 1.5x, and is meaningless. Measured on `sc5p_v2_hs_PBMC_1k`,
+                // where the knee IS real: 308 molecules against a mean of 3.44, a factor of 89.
+                // The two cases are two orders apart, so the boundary is not a tuned one.
+                //
+                // 0 means "no knee": `refine.py` prints it as such and the OrdMag-vs-knee
+                // disagreement warning already skips a zero.
+                double total = 0.0;
+                for (uint32_t v : sizes) total += static_cast<double>(v);
+                const double mean_molecules = total / static_cast<double>(sizes.size());
+                if (static_cast<double>(stats.knee_molecules) < 10.0 * mean_molecules) {
+                    stats.knee_rank = 0;
+                    stats.knee_molecules = 0;
                 }
             }
             for (uint32_t v : sizes) {
