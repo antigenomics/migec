@@ -397,6 +397,12 @@ model has to use the evidence that survives at one read:
       its own default compares defaults. **9.4-11.9x the wall clock** against a 3x gate, 3.5-3.7x
       less memory, and the molecule count is 0.09% over truth against v1's 13.6%: 99.8-99.99% of
       our consensuses are exactly a template, against 93.9-95.1%. `assets/migec_v1.tsv`
+- [x] **The published version is single-sourced** (2026-08-14). `docs/conf.py` was a fourth
+      hand-written copy of the version and the only one nothing checked, which is how every
+      published page said `2.0.0.dev0` for three releases while the wheel was right. It reads
+      `pyproject.toml` with `tomllib` now, so a release bumps THREE places and the docs follow.
+      Never: it must not `import migec` to get it -- `migec._core` is in `autodoc_mock_imports`,
+      so the package's own version-agreement assertion fires against a Mock and the docs build dies
 - Gate: grouping ARI ≥0.99 **met** (0.9967-0.9987); residual error ≤1e-5 on a clonal control;
   ≥3× MIGEC v1 wall-clock **met** (9.4-11.9x)
 
