@@ -599,8 +599,12 @@ correction is written up in `project/review-algorithms.md`.
   33x slower -- **200 kB/s against NCBI S3's 6.7 MB/s** on 8 connections, measured on SRR17220895.
   S3 plus `fasterq-dump` is the default; `--prefer ena` exists for studies that deposited a third
   file the `.sra` folds away.
-- **Note: Britanova et al aging (bulk TCR, shallow) lives on aldan3** and is the real dataset for the
-  1-3 read regime. Not pulled yet. aldan3 compute goes through SLURM, never the frontend.
+- **Britanova et al ageing IS the shallow validation and it is done.** One HiSeq lane, ten donors
+  by a 4 nt sample tag, 149,588,907 read pairs, 16 nt UMI, 2.44-2.57 reads/UMI: four donors through
+  correction and consensus in `assets/shallow_repertoire.tsv`, written up in `docs/validation.rst`.
+  It is `ngsik`'s **`Human Aging`** project (`aldan3 ngsik show --contains "Human Aging"`),
+  `/projects/cdr3_ngs/2012|2013/*_alv*`. Never: the raw reads do not leave the cluster and aldan3
+  compute goes through SLURM, never the frontend -- only derived summaries come back.
 - **Note: the ctDNA titration runs on aldan3** (`~/migec-ctdna`, `migec_ctdna.sbatch`, partition
   `medium`, 16 cores / 32 GB). The job builds its own micromamba env because the cluster's system
   python is **3.8** and migec needs >= 3.10, and it installs from PyPI rather than from source,

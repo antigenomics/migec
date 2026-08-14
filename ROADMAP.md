@@ -49,10 +49,11 @@ Everything below is either open or half-open. Nothing else on this page is.
 | 3 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
 | 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
-One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
-shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
-ground truth is no longer on that list: it was found rather than built, by screening SRA read
-structure instead of trusting the published claim that none exists (`scripts/sra_fetch.py probe`).
+Nothing is blocked on data any more. **Britanova et al ageing** (bulk TCR, shallow -- the real
+1-3 reads/UMI dataset) has been run: one HiSeq lane, ten donors, 149,588,907 read pairs at a 16 nt
+UMI and 2.44-2.57 reads per UMI, in `assets/shallow_repertoire.tsv` and `docs/validation.rst`. The
+ctDNA ground truth was **found** rather than built, by screening SRA read structure instead of
+trusting the published claim that none exists (`scripts/sra_fetch.py probe`).
 
 ## M0 — skeleton, format, simulator
 
