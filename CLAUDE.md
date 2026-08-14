@@ -530,19 +530,33 @@ correction is written up in `project/review-algorithms.md`.
   group over <= 8 pairs, stopping at two agreeing votes, for 1,288,686 against 2,115,912. Never:
   the mates are matched by POSITION and a short file is refused -- pairing off the remainder
   attaches one molecule's mate to another's and the consensus looks fine.
+- **refine's barcode table bounds itself (2026-08-14).** Past `table_budget_bytes` (1 GB, a
+  `refine.run()` kwarg, never a CLI flag) the table range-partitions into `<out>/.refine_spill` and
+  correction follows it, two passes with the key rotated. Nothing in the pipeline scales with the
+  library any more. Never: **the table carries the EVIDENCE, not just the counts** --
+  `BarcodeEvidence` as a side array is indexed against `entries()` and cannot survive a partition,
+  and dropping it leaves the bucketed run on the count ratio alone, which reports nothing at 1-3
+  reads/UMI. `UmiCounts::carry_evidence` partitions the barcode quality (summed, divided by the
+  count at hand-over) and the payload draft (first read wins, so a stable sort is load-bearing)
+  with the key. Never: **the two passes SCAN, they do not merge** -- a barcode can have a plausible
+  parent on each side of the boundary and merging inside a pass takes the first rather than the
+  best; both passes propose and ONE global apply decides, in the resident walk's order (child count
+  ascending, key descending). Never: **clonality is sampled in KEY order, never by array index** --
+  an index rule measures the array, so two partitionings drew different pairs and a borderline
+  merge followed, which made the output depend on the memory budget; `PayloadReservoir` keeps every
+  k-th barcode in key order and doubles k when full. With all three, resident and partitioned agree
+  on every scalar and every output file byte for byte
+  (`tests/synthetic/test_refine_bucketed.py`). Two frees came with it: the evidence pass folded
+  into the table pass (three read passes -> two) and the rank curve is derived from the size
+  spectrum rather than a sorted array of every molecule's count.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
-  1. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
-     `correct_umis` does it for a spilled counter. Note: refine also holds the reads for the
-     rewrite, so bounding it is not only the table -- and every table it writes (cells, rank,
-     bins, umi_errors, the residual FDR) is indexed against `entries()`, so bounding the
-     correction means streaming those too.
-  2. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
+  1. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
-  3. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
+  2. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
      built -- only the call sets are missing.
-  4. **Splitting the fitted floor into RT and first-cycle PCR** — not an estimator problem. The
+  3. **Splitting the fitted floor into RT and first-cycle PCR** — not an estimator problem. The
      same template through both chemistries is what it needs, which is data.
-  5. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+  4. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
   reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
   `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline

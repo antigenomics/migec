@@ -6,6 +6,28 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### `refine`'s barcode table bounds itself
+
+The last thing in the pipeline that scaled with the library. Past 1 GB the table range-partitions
+to disk, correction follows it into the partition, and every table refine writes is streamed one
+bucket at a time. Nothing changes but the wall clock: a partitioned run and a resident one agree on
+every scalar and on every output file byte for byte.
+
+Two things this needed that `checkout`'s counters did not. The table carries the **evidence** —
+the barcode's own quality at each position and its payload draft — because a side array indexed
+against the entry list cannot survive a partition, and dropping it would leave the bucketed run
+correcting on the count ratio alone, which reports nothing at 1–3 reads per UMI. And the two passes
+**scan**; they do not merge. A barcode can have a plausible parent on each side of the partition
+boundary, and merging inside a pass takes the first candidate rather than the best: 2 barcodes in
+6,591 landed on a different parent than the resident run gave them, and every table downstream
+moved with them. Both passes now propose and one global apply decides, in the same order the
+resident walk uses.
+
+The budget is a `refine.run()` argument, never a CLI flag. Two smaller things came with it: the
+evidence pass folded into the table pass, so refine streams the reads twice rather than three
+times, and the barcode-rank curve is read off the MIG size spectrum rather than off a sorted array
+of every molecule's count — the last allocation in the stage that was one entry per barcode.
+
 ### `--mate2`: both ends of the fragment are one molecule
 
 A read pair carries one barcode because it is one molecule, so `assemble` will take the other mate

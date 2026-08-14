@@ -624,7 +624,8 @@ PYBIND11_MODULE(_core, m) {
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
            int expect_cells, const std::string& cell_whitelist, double min_whitelist_posterior,
            double target_fdr, int gzip_level, int threads, uint64_t limit_reads,
-           uint64_t limit_umis, const std::vector<std::string>& mig_inputs) {
+           uint64_t limit_umis, const std::vector<std::string>& mig_inputs,
+           size_t table_budget_bytes, int table_bucket_bits) {
             RefineRequest req;
             req.input = input;
             req.mig_inputs = mig_inputs;
@@ -643,6 +644,8 @@ PYBIND11_MODULE(_core, m) {
             req.correction.threads = threads;
             req.limit.reads = limit_reads;
             req.limit.umis = limit_umis;
+            req.table_budget_bytes = table_budget_bytes;
+            req.table_bucket_bits = table_bucket_bits;
             RefineStats st;
             {
                 py::gil_scoped_release release;
@@ -687,6 +690,7 @@ PYBIND11_MODULE(_core, m) {
             wl["background_prior"] = st.whitelist.background_prior;
             d["whitelist"] = wl;
             d["table_bytes"] = st.table_bytes;
+            d["table_spilled"] = st.table_spilled;
             d["wall_seconds"] = st.wall_seconds;
             d["limited"] = st.limited;
             d["table_seconds"] = st.table_seconds;
@@ -713,6 +717,8 @@ PYBIND11_MODULE(_core, m) {
         py::arg("gzip_level") = RefineRequest{}.gzip_level, py::arg("threads") = 0,
         py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
         py::arg("mig_inputs") = std::vector<std::string>(),
+        py::arg("table_budget_bytes") = RefineRequest{}.table_budget_bytes,
+        py::arg("table_bucket_bits") = RefineRequest{}.table_bucket_bits,
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
         "correction can be audited. Given `mig_inputs` -- the buckets `checkout --mig` wrote for one "

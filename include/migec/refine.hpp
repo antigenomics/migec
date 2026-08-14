@@ -15,12 +15,17 @@
 // neighbourhood -- both are real errors. Note: It is NOT a substitute for whitelisting a 10x cell
 // barcode against the known list; that is a separate mechanism and is not implemented yet.
 //
-// Note: Correction is not bucketable by a plain range partition. A range partition on the top b bits
-// puts a barcode and its 1-substitution neighbours in the same bucket for every position EXCEPT
-// the top b/2, and a neighbour that crosses a bucket boundary can never be found. Doing it in
-// buckets needs two passes with the key rotated, so that every pair shares a bucket in at least
-// one of them. Until that lands the table is held whole and its size is reported, exactly as
-// checkout does with its counters.
+// Never: correction is not bucketable by a plain range partition. A range partition on the top b
+// bits puts a barcode and its 1-substitution neighbours in the same bucket for every position
+// EXCEPT the top b/2, and a neighbour that crosses a bucket boundary would never be found -- the
+// partition would silently stop correcting. So it runs in two passes, the second on keys rotated
+// past the partitioned prefix, and every pair is weighed in exactly one of them.
+//
+// Never: the table carries the EVIDENCE, not only the counts. A side array indexed against
+// `entries()` cannot survive a partition, and dropping it would leave the bucketed run correcting
+// on the count ratio alone -- which reports nothing at 1-3 reads per UMI, the regime the evidence
+// exists for. `UmiCounts::carry_evidence` partitions the barcode quality and the payload draft
+// with the key.
 
 #ifndef MIGEC_REFINE_HPP
 #define MIGEC_REFINE_HPP
@@ -42,11 +47,6 @@ struct RefineRequest {
     // so nothing here has to parse a tag -- and with a v2 file the barcode's own quality comes
     // with them, which is the evidence the posterior weighs at the position that differs.
     //
-    // Note: the correction still holds the whole table. The partition a bucket gives is on the
-    // TOP bits of the key, and a barcode's 1-substitution neighbours are only all in one bucket
-    // for the positions the prefix does not touch -- so correcting bucket by bucket needs the
-    // rotated second pass `correct_umis` already does for a spilled counter, and until refine
-    // spills its table there is nothing to gain by doing it here.
     std::vector<std::string> mig_inputs;
     // Write `.mig` buckets instead of a FASTQ. Requires `.mig` input: the buckets carry no read
     // name, and inventing one would put a name into the pipeline that no instrument produced.
@@ -78,6 +78,16 @@ struct RefineRequest {
     // Turn the evidence off, to measure what the count ratio alone would have done.
     bool use_quality = true;
     bool use_payload = true;
+    // Bytes the barcode table may hold before it range-partitions itself to disk, exactly as
+    // `checkout`'s UMI counters do. Never a CLI flag: a run that needs it is one whose library
+    // does not fit, which the stage can see for itself.
+    //
+    // Past the budget the table spills into `<out>/.refine_spill`, correction runs the same two
+    // passes with the key rotated, and every table refine writes is streamed one bucket at a time.
+    // Nothing else changes -- the resident case is one bucket, so there is one code path and not
+    // two, and `nbuckets == 1` makes pass 2 a no-op.
+    size_t table_budget_bytes = size_t{1} << 30;
+    int table_bucket_bits = 8;
     // Level 1, not zlib's default 6. Measured on refine's own output: level 6 spent 1.78 s of a
     // 2.14 s run compressing 500,000 reads -- 83% of the wall clock -- against 0.34 s at level 1
     // for 21% more bytes. Read payload is close to incompressible (checkout measured 7 MB/s at
@@ -135,6 +145,9 @@ struct RefineStats {
     // Bytes held by the barcode table. Reported for the same reason checkout reports its
     // counters: it is what decides whether a run fits.
     uint64_t table_bytes = 0;
+    // True when the table went past `table_budget_bytes` and partitioned itself to disk. The
+    // answers are the same either way; the wall clock is not, so the flag travels with them.
+    bool table_spilled = false;
     // MIG size histogram after correction, power-of-two bins.
     std::vector<uint64_t> size_histogram;
     double wall_seconds = 0.0;

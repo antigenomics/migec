@@ -131,8 +131,115 @@ double UmiComposition::expected_collisions(double n_molecules) const {
     return 0.5 * n_molecules * n_molecules * prod;
 }
 
+void UmiCounts::carry_evidence(int payload_width, bool quality) {
+    if (!buf_.empty() || !entries_.empty()) {
+        throw MigecError("UmiCounts::carry_evidence: the table already holds barcodes -- the "
+                         "evidence has to be carried from the first add, or the barcodes added "
+                         "before it would have none and nothing would say which");
+    }
+    ev_pw_ = std::max(0, payload_width);
+    ev_err_ = quality ? length_ : 0;
+}
+
+void UmiCounts::push_evidence(const float* pos_err, std::string_view payload) {
+    if (ev_averaged_) {
+        throw MigecError("UmiCounts: a barcode was added after the table had been read. The "
+                         "carried quality is accumulated as a sum and divided by the counts when "
+                         "the table is handed over, so a later add would fold a raw sum into an "
+                         "average");
+    }
+    if (ev_err_ > 0) {
+        const size_t at = buf_err_.size();
+        buf_err_.resize(at + static_cast<size_t>(ev_err_), 0.0f);
+        if (pos_err) std::copy_n(pos_err, ev_err_, buf_err_.begin() + static_cast<long>(at));
+    }
+    if (ev_pw_ > 0) {
+        const size_t at = buf_pay_.size();
+        buf_pay_.resize(at + static_cast<size_t>(ev_pw_), 0);
+        const size_t n = std::min(payload.size(), static_cast<size_t>(ev_pw_));
+        std::copy_n(payload.begin(), n, buf_pay_.begin() + static_cast<long>(at));
+    }
+}
+
+// The same flush, for a table that carries evidence. Two differences, both deliberate:
+//
+//   * the buffer is sorted through a PERMUTATION and stably, because the evidence lives in
+//     parallel arrays and because the payload draft is the first read's -- an unstable sort would
+//     make the draft depend on where the buffer boundaries happened to fall;
+//   * the merge goes forwards into fresh arrays rather than backwards into the grown one. The
+//     count-only path merges backwards because at 8.8 GB the transient copy is the peak memory of
+//     the process; a table that carries evidence is one that is being range-partitioned, so its
+//     resident set is the spill budget rather than the library and 2x of that is affordable.
+void UmiCounts::flush_evidence() const {
+    const size_t w = buf_.size();
+    std::vector<uint32_t> ord(w);
+    for (size_t i = 0; i < w; ++i) ord[i] = static_cast<uint32_t>(i);
+    std::stable_sort(ord.begin(), ord.end(),
+                     [this](uint32_t a, uint32_t b) { return buf_[a].key < buf_[b].key; });
+
+    std::vector<Entry> out;
+    std::vector<float> out_err;
+    std::vector<char> out_pay;
+    out.reserve(entries_.size() + w);
+    out_err.reserve(err_.size() + buf_err_.size());
+    out_pay.reserve(pay_.size() + buf_pay_.size());
+
+    auto append = [&](const Entry& e, const float* err, const char* pay) {
+        if (!out.empty() && out.back().key == e.key) {
+            out.back().count += e.count;
+            if (ev_err_ > 0) {
+                float* dst = out_err.data() + (out.size() - 1) * static_cast<size_t>(ev_err_);
+                for (int j = 0; j < ev_err_; ++j) dst[j] += err[j];
+            }
+            // The draft payload is the FIRST read's, so a later one is dropped rather than
+            // averaged: it is telling two molecules apart, not calling variants, and a draft that
+            // depends on the arrival order would not survive a partition.
+            if (ev_pw_ > 0) {
+                char* dst = out_pay.data() + (out.size() - 1) * static_cast<size_t>(ev_pw_);
+                if (dst[0] == 0) std::copy_n(pay, ev_pw_, dst);
+            }
+            return;
+        }
+        out.push_back(e);
+        if (ev_err_ > 0) out_err.insert(out_err.end(), err, err + ev_err_);
+        if (ev_pw_ > 0) out_pay.insert(out_pay.end(), pay, pay + ev_pw_);
+    };
+
+    size_t i = 0, j = 0;
+    while (i < entries_.size() || j < w) {
+        // Ties take the resident entry first: it is the older run, and "older wins" is what makes
+        // the payload draft the first read's however many times the buffer was flushed.
+        const bool left = j >= w || (i < entries_.size() && entries_[i].key <= buf_[ord[j]].key);
+        if (left) {
+            append(entries_[i],
+                   ev_err_ > 0 ? err_.data() + i * static_cast<size_t>(ev_err_) : nullptr,
+                   ev_pw_ > 0 ? pay_.data() + i * static_cast<size_t>(ev_pw_) : nullptr);
+            ++i;
+        } else {
+            const size_t k = ord[j];
+            append(buf_[k],
+                   ev_err_ > 0 ? buf_err_.data() + k * static_cast<size_t>(ev_err_) : nullptr,
+                   ev_pw_ > 0 ? buf_pay_.data() + k * static_cast<size_t>(ev_pw_) : nullptr);
+            ++j;
+        }
+    }
+
+    entries_.swap(out);
+    err_.swap(out_err);
+    pay_.swap(out_pay);
+    buf_.clear();
+    buf_err_.clear();
+    buf_pay_.clear();
+    flush_at_ = std::min(buffer_limit_, std::max(kMinBuffer, entries_.size() / 2));
+    if (spill_budget_ && entries_.size() * (sizeof(Entry) + ev_bytes()) > spill_budget_) spill();
+}
+
 void UmiCounts::flush() const {
     if (buf_.empty()) return;
+    if (carries_evidence()) {
+        flush_evidence();
+        return;
+    }
     std::sort(buf_.begin(), buf_.end(),
               [](const Entry& a, const Entry& b) { return a.key < b.key; });
     // Run-length reduce the buffer in place.
@@ -239,15 +346,26 @@ void UmiCounts::spill() const {
     if (spill_paths_.empty()) {
         std::filesystem::create_directories(spill_dir_);
         spill_paths_.resize(n_buckets);
+        if (ev_err_ > 0) spill_err_paths_.resize(n_buckets);
+        if (ev_pw_ > 0) spill_pay_paths_.resize(n_buckets);
         std::error_code ec;
-        for (size_t b = 0; b < n_buckets; ++b) {
-            spill_paths_[b] =
-                (std::filesystem::path(spill_dir_) / ("umi_" + std::to_string(b) + ".bin")).string();
+        auto claim = [&](std::vector<std::string>& into, size_t b, const char* stem) {
+            into[b] = (std::filesystem::path(spill_dir_) /
+                       (stem + std::to_string(b) + ".bin")).string();
             // Never: every spill APPENDS, so a bucket left behind by a run that died would be read
             // back as part of this library and its counts added to it -- silently, since a stale
             // bucket is a well-formed one. Only the files this counter is about to own are removed,
             // once, and nothing else in the directory is touched.
-            std::filesystem::remove(spill_paths_[b], ec);
+            std::filesystem::remove(into[b], ec);
+        };
+        for (size_t b = 0; b < n_buckets; ++b) {
+            claim(spill_paths_, b, "umi_");
+            // The evidence rides in its own file per bucket, on the same key and the same bit
+            // count, so bucket b of one is bucket b of the other entry for entry. Separate files
+            // rather than one interleaved record because a bucket is written as three contiguous
+            // runs and interleaving would cost a write per entry.
+            if (ev_err_ > 0) claim(spill_err_paths_, b, "err_");
+            if (ev_pw_ > 0) claim(spill_pay_paths_, b, "pay_");
         }
     }
     // entries_ is already sorted, so each bucket is one contiguous run: find the boundaries and
@@ -258,17 +376,30 @@ void UmiCounts::spill() const {
         const uint64_t b = entries_[i].key >> shift;
         size_t j = i;
         while (j < entries_.size() && (entries_[j].key >> shift) == b) ++j;
-        std::ofstream out(spill_paths_[static_cast<size_t>(b)],
-                          std::ios::binary | std::ios::app);
-        if (!out) throw MigecError("UmiCounts: cannot write spill file " + spill_paths_[static_cast<size_t>(b)]);
-        out.write(reinterpret_cast<const char*>(entries_.data() + i),
-                  static_cast<std::streamsize>((j - i) * sizeof(Entry)));
-        if (!out) throw MigecError("UmiCounts: short write to " + spill_paths_[static_cast<size_t>(b)]);
+        auto append_run = [&](const std::vector<std::string>& paths, const void* data,
+                              size_t bytes) {
+            const std::string& path = paths[static_cast<size_t>(b)];
+            std::ofstream out(path, std::ios::binary | std::ios::app);
+            if (!out) throw MigecError("UmiCounts: cannot write spill file " + path);
+            out.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+            if (!out) throw MigecError("UmiCounts: short write to " + path);
+        };
+        append_run(spill_paths_, entries_.data() + i, (j - i) * sizeof(Entry));
+        if (ev_err_ > 0) {
+            append_run(spill_err_paths_, err_.data() + i * static_cast<size_t>(ev_err_),
+                       (j - i) * static_cast<size_t>(ev_err_) * sizeof(float));
+        }
+        if (ev_pw_ > 0) {
+            append_run(spill_pay_paths_, pay_.data() + i * static_cast<size_t>(ev_pw_),
+                       (j - i) * static_cast<size_t>(ev_pw_));
+        }
         i = j;
     }
     // Release the capacity, not just the size: shrinking to zero size while holding the array is
     // exactly the allocation being bounded.
     std::vector<Entry>().swap(entries_);
+    std::vector<float>().swap(err_);
+    std::vector<char>().swap(pay_);
     distinct_known_ = false;
 }
 
@@ -330,6 +461,166 @@ void UmiCounts::for_each_bucket(const std::function<void(const std::vector<Entry
     }
 }
 
+namespace {
+
+// A whole spill file, as a vector of T. Empty when the file is not there, which is what an empty
+// bucket looks like.
+template <typename T>
+std::vector<T> read_spill(const std::string& path, const char* what) {
+    std::vector<T> out;
+    if (path.empty()) return out;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return out;
+    in.seekg(0, std::ios::end);
+    const std::streamoff bytes = in.tellg();
+    in.seekg(0, std::ios::beg);
+    if (bytes <= 0) return out;
+    // Never: a spill file is a whole number of records. A run killed mid-write leaves a partial
+    // one, and reading `bytes` into a buffer sized `bytes / sizeof(T)` overruns the heap --
+    // silently, since the read itself succeeds.
+    if (static_cast<size_t>(bytes) % sizeof(T) != 0) {
+        throw MigecError(std::string("UmiCounts: spill file ") + path + " holds " +
+                         std::to_string(bytes) + " bytes, which is not a whole number of " + what +
+                         " -- it was truncated, most likely by a run that was killed");
+    }
+    out.resize(static_cast<size_t>(bytes) / sizeof(T));
+    in.read(reinterpret_cast<char*>(out.data()), bytes);
+    if (!in) throw MigecError(std::string("UmiCounts: short read from ") + path);
+    return out;
+}
+
+}  // namespace
+
+void UmiCounts::for_each_bucket(
+    const std::function<void(const std::vector<Entry>&, const BarcodeEvidence&)>& fn) const {
+    flush();
+    const size_t E = static_cast<size_t>(ev_err_);
+    const size_t P = static_cast<size_t>(ev_pw_);
+    if (!carries_evidence()) {
+        const BarcodeEvidence none;
+        for_each_bucket([&](const std::vector<Entry>& bucket) { fn(bucket, none); });
+        return;
+    }
+
+    // `position_error` accumulates as a SUM, because a sum is what survives a partition -- it adds
+    // across spill generations and across the resident tail. The posterior wants the mean over the
+    // barcode's reads, so the division happens here, once.
+    auto average = [&](const std::vector<Entry>& bucket, std::vector<float>& err) {
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            const float c = static_cast<float>(bucket[i].count);
+            for (size_t j = 0; j < E; ++j) err[i * E + j] /= c;
+        }
+    };
+
+    if (spill_paths_.empty()) {
+        // Never: divided IN PLACE. Copying the evidence to divide it would momentarily double the
+        // resident set of exactly the table this machinery exists to bound. Adding after the table
+        // has been handed over is refused in `push_evidence` rather than silently folding a raw
+        // sum into an average.
+        if (E && !ev_averaged_) {
+            average(entries_, err_);
+            ev_averaged_ = true;
+        }
+        BarcodeEvidence ev;
+        if (E) ev.position_error.assign(err_.begin(), err_.end());
+        if (P) {
+            ev.payload.assign(pay_.begin(), pay_.end());
+            ev.payload_width = ev_pw_;
+        }
+        // A resident table hands the evidence over by value because the caller may hold it past
+        // the call; it is one allocation on a path that runs once.
+        fn(entries_, ev);
+        return;
+    }
+
+    const int shift = 64 - spill_bits_;
+    for (size_t b = 0; b < spill_paths_.size(); ++b) {
+        std::vector<Entry> raw = read_spill<Entry>(spill_paths_[b], "entries");
+        std::vector<float> raw_err =
+            E ? read_spill<float>(spill_err_paths_[b], "quality floats") : std::vector<float>();
+        std::vector<char> raw_pay =
+            P ? read_spill<char>(spill_pay_paths_[b], "payload bases") : std::vector<char>();
+        if (E && raw_err.size() != raw.size() * E) {
+            throw MigecError("UmiCounts: spill bucket " + std::to_string(b) + " holds " +
+                             std::to_string(raw.size()) + " entries but " +
+                             std::to_string(raw_err.size()) +
+                             " quality floats -- the two files disagree");
+        }
+        // Anything added since the last spill is still resident and belongs in its bucket. It goes
+        // last, which is the newest run, so "older wins" still picks the first read's payload.
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            if ((entries_[i].key >> shift) != b) continue;
+            raw.push_back(entries_[i]);
+            if (E) raw_err.insert(raw_err.end(), err_.begin() + static_cast<long>(i * E),
+                                  err_.begin() + static_cast<long>((i + 1) * E));
+            if (P) raw_pay.insert(raw_pay.end(), pay_.begin() + static_cast<long>(i * P),
+                                  pay_.begin() + static_cast<long>((i + 1) * P));
+        }
+        if (raw.empty()) continue;
+
+        // A key can appear once per spill plus once resident, so reduction happens HERE. Stable,
+        // through a permutation, so the surviving payload draft is still the first read's.
+        std::vector<uint32_t> ord(raw.size());
+        for (size_t i = 0; i < ord.size(); ++i) ord[i] = static_cast<uint32_t>(i);
+        std::stable_sort(ord.begin(), ord.end(),
+                         [&raw](uint32_t x, uint32_t y) { return raw[x].key < raw[y].key; });
+
+        std::vector<Entry> bucket;
+        BarcodeEvidence ev;
+        ev.payload_width = ev_pw_;
+        bucket.reserve(raw.size());
+        if (E) ev.position_error.reserve(raw.size() * E);
+        if (P) ev.payload.reserve(raw.size() * P);
+        for (uint32_t k : ord) {
+            if (!bucket.empty() && bucket.back().key == raw[k].key) {
+                bucket.back().count += raw[k].count;
+                for (size_t j = 0; j < E; ++j) {
+                    ev.position_error[(bucket.size() - 1) * E + j] += raw_err[k * E + j];
+                }
+                if (P && ev.payload[(bucket.size() - 1) * P] == 0) {
+                    std::copy_n(raw_pay.begin() + static_cast<long>(k * P), P,
+                                ev.payload.begin() + static_cast<long>((bucket.size() - 1) * P));
+                }
+                continue;
+            }
+            bucket.push_back(raw[k]);
+            if (E) ev.position_error.insert(ev.position_error.end(),
+                                            raw_err.begin() + static_cast<long>(k * E),
+                                            raw_err.begin() + static_cast<long>((k + 1) * E));
+            if (P) ev.payload.insert(ev.payload.end(),
+                                     raw_pay.begin() + static_cast<long>(k * P),
+                                     raw_pay.begin() + static_cast<long>((k + 1) * P));
+        }
+        if (E) average(bucket, ev.position_error);
+        fn(bucket, ev);
+    }
+}
+
+UmiCounts UmiCounts::rotated_copy(int r, const std::string& directory) const {
+    UmiCounts out(length_, buffer_limit_);
+    if (carries_evidence()) out.carry_evidence(ev_pw_, ev_err_ > 0);
+    if (spill_budget_) out.enable_spill(directory, spill_budget_, spill_bits_);
+    const size_t E = static_cast<size_t>(ev_err_);
+    std::vector<float> sums(E);
+    for_each_bucket([&](const std::vector<Entry>& bucket, const BarcodeEvidence& ev) {
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            // The evidence arrives averaged and is stored as a sum, so it is multiplied back by
+            // the count on the way in. Anything else divides by the count twice and the rotated
+            // pass weighs a barcode quality that is a factor of its own depth too small.
+            for (size_t j = 0; j < E; ++j) {
+                sums[j] = ev.position_error[i * E + j] * static_cast<float>(bucket[i].count);
+            }
+            out.add(rotate_barcode(bucket[i].key, length_, r), bucket[i].count,
+                    E ? sums.data() : nullptr,
+                    ev.has_payload()
+                        ? std::string_view(ev.payload.data() + i * static_cast<size_t>(ev_pw_),
+                                           static_cast<size_t>(ev_pw_))
+                        : std::string_view());
+        }
+    });
+    return out;
+}
+
 size_t UmiCounts::distinct() const {
     flush();
     if (spill_paths_.empty()) return entries_.size();
@@ -345,6 +636,10 @@ size_t UmiCounts::distinct() const {
 void UmiCounts::merge(const UmiCounts& other) {
     other.flush();
     other.require_resident("merge()");
+    if (carries_evidence() || other.carries_evidence()) {
+        throw MigecError("UmiCounts::merge: this counter carries per-barcode evidence, and merging "
+                         "would have to reduce it too. Add the reads to one counter instead");
+    }
     for (const Entry& e : other.entries_) add(e.key, e.count);
 }
 
@@ -358,7 +653,9 @@ const uint32_t* UmiCounts::find(uint64_t key) const {
 }
 
 size_t UmiCounts::memory_bytes() const {
-    return entries_.capacity() * sizeof(Entry) + buf_.capacity() * sizeof(Entry);
+    return entries_.capacity() * sizeof(Entry) + buf_.capacity() * sizeof(Entry) +
+           (err_.capacity() + buf_err_.capacity()) * sizeof(float) +
+           pay_.capacity() + buf_pay_.capacity();
 }
 
 size_t index_of(const UmiCounts& counts, uint64_t key) {
@@ -619,9 +916,97 @@ namespace {
 // same shape drawn a few thousand times, and the posterior weighs an exact per-size probability
 // against the error hypothesis, so estimating it per bucket moves borderline decisions. Measured:
 // one merge in 547 differed from the resident answer until this was threaded through.
+// How often two UNRELATED barcodes carry the same payload anyway -- the library's clonality, which
+// is exactly what payload agreement is worth: log(1/clonality). Deterministic sampling, a fixed
+// stride over the payloads it was handed, so the answer does not depend on an RNG seed and two
+// runs of the pipeline agree.
+double payload_agreement(const std::vector<char>& payload, int pw,
+                         const CorrectionParams& params) {
+    if (pw <= 0 || params.payload_null_samples <= 0) return 1.0;
+    const size_t n_entries = payload.size() / static_cast<size_t>(pw);
+    if (n_entries < 3) return 1.0;
+    const size_t samples =
+        std::min<size_t>(static_cast<size_t>(params.payload_null_samples), n_entries * 4);
+    const size_t stride = std::max<size_t>(1, n_entries / 977 + 1);
+    uint64_t same = 0, tried = 0;
+    for (size_t s = 0; s < samples; ++s) {
+        const size_t a = (s * 7919) % n_entries;
+        const size_t b = (a + stride * (1 + s % 97)) % n_entries;
+        if (a == b) continue;
+        int mism = 0, cmp = 0;
+        for (int j = 0; j < pw; ++j) {
+            const char x = payload[a * static_cast<size_t>(pw) + static_cast<size_t>(j)];
+            const char y = payload[b * static_cast<size_t>(pw) + static_cast<size_t>(j)];
+            if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
+            ++cmp;
+            mism += x != y;
+        }
+        if (cmp < 8) continue;
+        ++tried;
+        same += static_cast<double>(mism) <= params.payload_same_fraction * cmp;
+    }
+    return tried ? std::max(static_cast<double>(same) / static_cast<double>(tried),
+                            1.0 / static_cast<double>(tried + 1)) : 1.0;
+}
+
+// Payload drafts sampled evenly along the table, in key order, bounded.
+//
+// Never: sampling by INDEX INTO THE ARRAY measures the array, not the library. Two partitionings
+// of one library hand the sampler different arrays, so an index rule draws different pairs, the
+// clonality lands a few percent apart, and a borderline merge follows it -- which makes the output
+// depend on the memory budget. Barcodes arrive in KEY order whatever the partition, so a rule
+// written on that order sees the same barcodes either way, and a run that spilled and a run that
+// did not agree byte for byte.
+//
+// Keeps every `stride_`-th barcode and doubles the stride whenever the buffer fills, so what is
+// held is always "every k-th barcode in key order" for the k it ended on -- the same set however
+// many times it doubled. Under kMax barcodes that is all of them.
+class PayloadReservoir {
+public:
+    explicit PayloadReservoir(int width) : pw_(width) {}
+
+    void add(const char* payload) {
+        if (pw_ <= 0) return;
+        const uint64_t idx = seen_++;
+        if (idx % stride_) return;
+        kept_.insert(kept_.end(), payload, payload + pw_);
+        if (kept_.size() / static_cast<size_t>(pw_) < kMax) return;
+        // Half of what is held is at an index divisible by twice the stride: keep those.
+        const size_t w = static_cast<size_t>(pw_);
+        size_t out = 0;
+        for (size_t i = 0; i < kept_.size() / w; i += 2, ++out) {
+            std::copy_n(kept_.begin() + static_cast<long>(i * w), w,
+                        kept_.begin() + static_cast<long>(out * w));
+        }
+        kept_.resize(out * w);
+        stride_ *= 2;
+    }
+
+    double clonality(const CorrectionParams& params) const {
+        return payload_agreement(kept_, pw_, params);
+    }
+
+private:
+    static constexpr size_t kMax = 8192;  // 256 kB at a 32 nt draft
+    int pw_;
+    uint64_t seen_ = 0, stride_ = 1;
+    std::vector<char> kept_;
+};
+
+// One barcode's best parent, by KEY, from one pass over one array. This is what a bucketed run
+// collects instead of merging: a barcode can have a candidate parent in each pass -- one
+// substitution in the positions the partition leaves alone, one in the positions it hides -- and
+// merging in the first pass would take the first candidate rather than the best.
+struct Proposal {
+    uint64_t child, parent;
+    uint32_t child_count, parent_count;
+    double posterior;
+};
+
 CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
                                  const CorrectionParams& params, const BarcodeEvidence& evidence,
-                                 const std::map<uint32_t, uint64_t>* library_sizes = nullptr) {
+                                 const std::map<uint32_t, uint64_t>* library_sizes = nullptr,
+                                 std::vector<Proposal>* proposals = nullptr) {
     CorrectionResult res;
     const size_t n_entries = m.size();
 
@@ -700,31 +1085,13 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
     // evidence self-calibrates to the library it is given.
     const int pw = evidence.has_payload() ? evidence.payload_width : 0;
     double clonality = 1.0;
-    if (pw > 0 && n_entries > 2 && params.payload_null_samples > 0) {
-        // Deterministic sampling: a fixed stride over the sorted entries, so the answer does not
-        // depend on an RNG seed and two runs of the pipeline agree.
-        const size_t samples =
-            std::min<size_t>(static_cast<size_t>(params.payload_null_samples), n_entries * 4);
-        size_t same = 0, tried = 0;
-        const size_t stride = std::max<size_t>(1, n_entries / 977 + 1);
-        for (size_t s = 0; s < samples; ++s) {
-            const size_t a = (s * 7919) % n_entries;
-            const size_t b = (a + stride * (1 + s % 97)) % n_entries;
-            if (a == b) continue;
-            int mism = 0, cmp = 0;
-            for (int j = 0; j < pw; ++j) {
-                const char x = evidence.payload[a * static_cast<size_t>(pw) + static_cast<size_t>(j)];
-                const char y = evidence.payload[b * static_cast<size_t>(pw) + static_cast<size_t>(j)];
-                if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
-                ++cmp;
-                mism += x != y;
-            }
-            if (cmp < 8) continue;
-            ++tried;
-            same += static_cast<double>(mism) <= params.payload_same_fraction * cmp;
-        }
-        clonality = tried ? std::max(static_cast<double>(same) / static_cast<double>(tried),
-                                     1.0 / static_cast<double>(tried + 1)) : 1.0;
+    if (params.library_clonality > 0.0) {
+        // A bucket's own sample is a sample of the bucket: its barcodes share a key prefix, and
+        // what payload agreement is worth is a property of the library. The bucketed driver
+        // measures it over the whole partition and passes it down.
+        clonality = params.library_clonality;
+    } else if (pw > 0 && n_entries > 2) {
+        clonality = payload_agreement(evidence.payload, pw, params);
     }
     res.payload_clonality = pw > 0 ? clonality : 0.0;
 
@@ -866,6 +1233,12 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         const double best_post = decisions[child_idx].posterior;
 
         if (best_post >= params.min_posterior && best_parent != static_cast<size_t>(-1)) {
+            if (proposals) {
+                // Scan only. The apply is the caller's, over every pass at once.
+                proposals->push_back(Proposal{m[child_idx].key, m[best_parent].key, c_child,
+                                              m[best_parent].count, best_post});
+                continue;
+            }
             if (m[best_parent].count <= c_child) ++res.merged_by_payload;
             // Follow the parent to its current root -- it may itself already have been merged.
             uint32_t root = static_cast<uint32_t>(best_parent);
@@ -883,6 +1256,8 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         }
     }
 
+    if (proposals) return res;  // the scalars are the caller's to compute, over the whole library
+
     // Flatten. A child merged early can point at a parent that was itself merged later in the
     // walk, so the invariant "root[root[i]] == root[i]" only holds after this pass. The read
     // counts were already correct -- they follow the chain as it forms -- but a consumer reading
@@ -891,6 +1266,12 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         uint32_t r = res.root[i];
         for (int guard = 0; guard < 64 && res.root[r] != r; ++guard) r = res.root[r];
         res.root[i] = r;
+        // ...and the same thing by KEY, which is what survives a range partition. `root` indexes
+        // `entries()`, and a bucketed run has no such array.
+        if (r != i) {
+            res.merges.push_back(
+                CorrectionResult::Merge{m[i].key, m[r].key, m[i].count});
+        }
     }
 
     res.molecules_observed = 0;
@@ -957,17 +1338,41 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     const std::string rot_dir =
         (std::filesystem::path(counts.spill_dir()) / "rotated").string();
     UmiCounts rotated(L);
+    if (counts.carries_evidence()) {
+        rotated.carry_evidence(counts.payload_width(), true);
+    }
     rotated.enable_spill(rot_dir, counts.spill_budget(), counts.spill_bits());
+    const size_t E = static_cast<size_t>(L);
+    const size_t P = static_cast<size_t>(counts.payload_width());
+    PayloadReservoir reservoir(counts.payload_width());
+    std::vector<float> sums(E);
 
-    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
-        for (const UmiCounts::Entry& e : bucket) {
+    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                               const BarcodeEvidence& ev) {
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            const UmiCounts::Entry& e = bucket[i];
             for (int j = 0; j < L; ++j) {
                 const size_t code = static_cast<size_t>((e.key >> (62 - 2 * j)) & 3u);
                 comp.freq[static_cast<size_t>(j)][code] += 1.0;
             }
             n += 1.0;
             ++sizes[e.count];
-            rotated.add(rotate_barcode(e.key, L, pb), e.count);
+            // The evidence rotates with the key. It arrives averaged over the barcode's reads and
+            // is stored as a sum, so it is multiplied back on the way in -- otherwise the second
+            // pass weighs a barcode quality a factor of its own depth too small.
+            if (ev.has_quality()) {
+                for (size_t j = 0; j < E; ++j) {
+                    sums[j] = ev.position_error[i * E + j] * static_cast<float>(e.count);
+                }
+            }
+            rotated.add(rotate_barcode(e.key, L, pb), e.count,
+                        ev.has_quality() ? sums.data() : nullptr,
+                        ev.has_payload()
+                            ? std::string_view(ev.payload.data() + i * P, P)
+                            : std::string_view());
+            // Clonality is a property of the LIBRARY, and the buckets arrive in key order, so the
+            // reservoir sees the same barcodes a resident table would.
+            if (ev.has_payload()) reservoir.add(ev.payload.data() + i * P);
         }
         d1 += d1_census(bucket, pb, L, params.threads);
     });
@@ -981,6 +1386,10 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     });
 
     CorrectionParams sub = params;
+    if (counts.payload_width() > 0) {
+        sub.library_clonality = reservoir.clonality(params);
+        res.payload_clonality = sub.library_clonality;
+    }
     sub.library_distinct = static_cast<size_t>(n);
     sub.library_collision = collision_of(comp, L);
     sub.library_space = comp.effective_space();
@@ -994,41 +1403,107 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     // error budget as a ratio of zero. Caught by diffing a whole run against its resident twin.
     if (sub.sequencing_error <= 0.0) sub.sequencing_error = 1e-4;
 
-    auto accumulate = [&res](const CorrectionResult& r) {
-        res.merged += r.merged;
-        res.merged_reads += r.merged_reads;
-        res.merged_by_payload += r.merged_by_payload;
-    };
-
-    // Pass 1: the positions the partition leaves alone.
-    std::vector<uint64_t> merged_keys;
+    // `unrotate` is how many bases to rotate the keys BACK by: 0 in pass 1, and L - pb in pass 2,
+    // whose keys arrived rotated left by pb. Reporting a merge in rotated coordinates would name a
+    // barcode that never existed.
+    // Both passes SCAN; neither merges. Every pair is seen by exactly one of them -- pass 1 owns
+    // the barcode positions the partitioned prefix does not touch, pass 2 on the rotated copy owns
+    // exactly the ones it hides -- so the two proposal sets together are the same set of
+    // candidates a resident scan over every position produces, and the apply below is the resident
+    // apply. Never: merging inside a pass instead would take the FIRST candidate rather than the
+    // best, and a barcode with a plausible parent on each side of the boundary would land on
+    // whichever pass ran first. Measured before this was split out: 2 barcodes in 6,591 went to a
+    // different (still valid) parent than the resident run gave them, and every table downstream
+    // differed with them.
+    std::vector<Proposal> p1, p2;
     sub.scan_from = pb;
     sub.scan_to = L;
-    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
-        const CorrectionResult r = correct_entries(bucket, L, sub, BarcodeEvidence{}, &sizes);
-        accumulate(r);
-        for (size_t i = 0; i < bucket.size(); ++i) {
-            if (r.root[i] != static_cast<uint32_t>(i)) {
-                merged_keys.push_back(rotate_barcode(bucket[i].key, L, pb));
-            }
-        }
+    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                               const BarcodeEvidence& ev) {
+        correct_entries(bucket, L, sub, ev, &sizes, &p1);
     });
-    std::sort(merged_keys.begin(), merged_keys.end());
-
-    // Pass 2: the positions it hides, on the rotated copy. A barcode merged in pass 1 is no longer
-    // a molecule, so it is dropped rather than offered a second parent -- otherwise one barcode
-    // could be merged twice and `merged` would count opportunities instead of barcodes.
     sub.scan_from = L - pb;
     sub.scan_to = L;
-    std::vector<UmiCounts::Entry> live;
-    rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
-        live.clear();
-        live.reserve(bucket.size());
-        for (const UmiCounts::Entry& e : bucket) {
-            if (!std::binary_search(merged_keys.begin(), merged_keys.end(), e.key)) live.push_back(e);
+    rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                                const BarcodeEvidence& ev) {
+        const size_t at = p2.size();
+        correct_entries(bucket, L, sub, ev, &sizes, &p2);
+        // Back into the coordinates every other number is in. A merge reported in rotated
+        // coordinates names a barcode that never existed.
+        for (size_t i = at; i < p2.size(); ++i) {
+            p2[i].child = rotate_barcode(p2[i].child, L, L - pb);
+            p2[i].parent = rotate_barcode(p2[i].parent, L, L - pb);
         }
-        accumulate(correct_entries(live, L, sub, BarcodeEvidence{}, &sizes));
     });
+
+    // One proposal per child, the best of the two. Pass 2 goes in first because it owns the LOW
+    // barcode positions, which a resident scan reaches first, so an exact tie resolves the same
+    // way there as here.
+    std::unordered_map<uint64_t, Proposal> best;
+    best.reserve(p1.size() + p2.size());
+    for (const Proposal& p : p2) {
+        auto it = best.find(p.child);
+        if (it == best.end() || p.posterior > it->second.posterior) best[p.child] = p;
+    }
+    for (const Proposal& p : p1) {
+        auto it = best.find(p.child);
+        if (it == best.end() || p.posterior > it->second.posterior) best[p.child] = p;
+    }
+
+    // Apply, serially, smallest MIG first and ties by descending key -- the order the resident
+    // walk applies in, because merges CHAIN and which root a child lands on depends on what
+    // happened before it.
+    std::vector<Proposal> apply;
+    apply.reserve(best.size());
+    for (const auto& kv : best) apply.push_back(kv.second);
+    std::sort(apply.begin(), apply.end(), [](const Proposal& a, const Proposal& b) {
+        if (a.child_count != b.child_count) return a.child_count < b.child_count;
+        return a.child > b.child;
+    });
+
+    // Running read counts, and the union-find, keyed rather than indexed. Both are O(barcodes
+    // actually corrected): every key either of them touches appears in some proposal, which is
+    // what makes seeding them from the proposals complete.
+    std::unordered_map<uint64_t, uint32_t> live, own;
+    std::unordered_map<uint64_t, uint64_t> parent_of;
+    live.reserve(apply.size() * 4);
+    for (const Proposal& p : apply) {
+        live.emplace(p.child, p.child_count);
+        live.emplace(p.parent, p.parent_count);
+        own.emplace(p.child, p.child_count);
+    }
+    for (const Proposal& p : apply) {
+        if (p.parent_count <= p.child_count) ++res.merged_by_payload;
+        uint64_t root = p.parent;
+        for (int guard = 0; guard < 64; ++guard) {
+            auto it = parent_of.find(root);
+            if (it == parent_of.end()) break;
+            root = it->second;
+        }
+        if (root == p.child) continue;  // never make a cycle
+        parent_of[p.child] = root;
+        live[root] += live[p.child];
+        // This barcode's OWN reads, not its running total: merges chain, and a descendant's reads
+        // were counted when the descendant moved.
+        res.merged_reads += p.child_count;
+        live[p.child] = 0;
+        ++res.merged;
+    }
+    for (const auto& kv : parent_of) {
+        uint64_t r = kv.second;
+        for (int guard = 0; guard < 64; ++guard) {
+            auto it = parent_of.find(r);
+            if (it == parent_of.end()) break;
+            r = it->second;
+        }
+        res.merges.push_back(CorrectionResult::Merge{kv.first, r, own[kv.first]});
+    }
+    // Key order, so the answer does not depend on a hash table's iteration order.
+    std::sort(res.merges.begin(), res.merges.end(),
+              [](const CorrectionResult::Merge& a, const CorrectionResult::Merge& b) {
+                  return a.child < b.child;
+              });
+
     // Best effort: the rotated copy is a temporary of this call, and failing to remove it is not
     // a reason to lose a correction result that is already computed.
     std::error_code rm_ec;
@@ -1058,10 +1533,11 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
     if (counts.spilled()) {
         if (evidence.has_quality() || evidence.has_payload()) {
             throw MigecError(
-                "correct_umis: barcode evidence is indexed against entries(), which a spilled "
-                "counter does not have. Correct the counter before it spills, or drop the "
-                "evidence deliberately -- ignoring it here would report a merge count from a "
-                "weaker model as if it came from the full one.");
+                "correct_umis: a side BarcodeEvidence is indexed against entries(), which a "
+                "spilled counter does not have. Carry the evidence with the counter "
+                "(UmiCounts::carry_evidence) so it is partitioned with it, or drop it "
+                "deliberately -- ignoring it here would report a merge count from a weaker model "
+                "as if it came from the full one.");
         }
         return correct_spilled(counts, params);
     }
@@ -1076,6 +1552,25 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         if (p.sequencing_error < 0.0) {
             p.sequencing_error = estimate_umi_error(counts, comp, params.threads);
         }
+    }
+    if (counts.carries_evidence()) {
+        // A resident table that carries its own evidence is one bucket of a partition that
+        // happened to fit. Same call, same evidence, so the answer does not depend on whether the
+        // budget was reached.
+        CorrectionResult out;
+        counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                                   const BarcodeEvidence& ev) {
+            if (ev.has_payload()) {
+                PayloadReservoir reservoir(ev.payload_width);
+                for (size_t i = 0; i < bucket.size(); ++i) {
+                    reservoir.add(ev.payload.data() +
+                                  i * static_cast<size_t>(ev.payload_width));
+                }
+                p.library_clonality = reservoir.clonality(p);
+            }
+            out = correct_entries(bucket, counts.length(), p, ev);
+        });
+        return out;
     }
     return correct_entries(counts.entries(), counts.length(), p, evidence);
 }

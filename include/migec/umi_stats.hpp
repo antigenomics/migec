@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace migec {
@@ -147,6 +148,32 @@ ErrorBudget error_budget(const UmiComposition& comp, const std::array<uint64_t, 
                          double estimated, uint64_t observed_barcodes,
                          double polymerase_error = 1e-5, int pcr_cycles = 25);
 
+// What a barcode's own reads say about it, beyond how many there are. Both fields are optional
+// and both exist because the count ratio -- the only evidence the first version used -- carries
+// nothing on a library sequenced at 1-3 reads per UMI, which is the common case rather than the
+// exotic one. Measured in `scripts/correction_accuracy.py`: recall 0.80 at 3.1 reads/UMI, 0.02 at
+// 1.1. A parent with 2 reads and a child with 1 is not an asymmetry, and two singletons are not
+// one either.
+//
+// Both are laid out flat and indexed in parallel with UmiCounts::entries(), or with the bucket
+// UmiCounts::for_each_bucket() hands over.
+struct BarcodeEvidence {
+    // Mean error probability at each barcode position, over that barcode's reads: entry i,
+    // position j is at [i * length + j]. A sequencing miscall in the barcode carries a LOW Phred
+    // at the base it changed, and an early-PCR child carries a high one in every read -- so this
+    // separates the two mechanisms the global rate has to average over. Works at one read.
+    std::vector<float> position_error;
+    // Draft payload consensus per barcode, `payload_width` bases each, entry i at
+    // [i * payload_width]. A barcode error child is a read of the PARENT'S molecule, so its
+    // payload matches; an independent molecule one substitution away has its own. Works at one
+    // read, and it is the only thing that does when both barcodes are singletons.
+    std::vector<char> payload;
+    int payload_width = 0;
+
+    bool has_quality() const { return !position_error.empty(); }
+    bool has_payload() const { return payload_width > 0 && !payload.empty(); }
+};
+
 // Observed UMI counts. Keys are packed barcodes (see types.hpp).
 //
 // Storage is a bounded append buffer that is periodically sorted and run-length reduced into a
@@ -181,7 +208,26 @@ public:
         flush_at_ = std::min<size_t>(buffer_limit_, kMinBuffer);
     }
 
-    void add(uint64_t packed, uint32_t n = 1) {
+    void add(uint64_t packed, uint32_t n = 1) { add(packed, n, nullptr, {}); }
+
+    // Carry per-barcode evidence alongside the counts, so a range-partitioned table still has it.
+    // Must be called before the first add.
+    //
+    // Never: `BarcodeEvidence` as a side array is indexed against `entries()`, which a spilled
+    // counter deliberately does not have -- so a spilled table could be counted but not corrected
+    // with the evidence that works at 1-3 reads/UMI, which is the whole regime the evidence exists
+    // for. Carrying it here is what lets `refine` correct in buckets at all. It costs nothing when
+    // it is not asked for: `checkout` leaves the stride at zero and every branch below is skipped.
+    void carry_evidence(int payload_width, bool quality);
+    bool carries_evidence() const { return ev_pw_ > 0 || ev_err_ > 0; }
+    int payload_width() const { return ev_pw_; }
+
+    // One read's contribution. `pos_err` is `length()` floats (null means "no reported quality",
+    // which accumulates zero and is read downstream as "fall back to the global rate"); `payload`
+    // is the read's first bases, and the FIRST read of a barcode wins -- a later one is dropped,
+    // which is what makes the draft reproducible whatever the partition.
+    void add(uint64_t packed, uint32_t n, const float* pos_err, std::string_view payload) {
+        push_evidence(pos_err, payload);
         buf_.push_back(Entry{packed, n});
         total_ += n;
         if (buf_.size() >= flush_at_) flush();
@@ -272,11 +318,26 @@ public:
     // the substitution misses the partitioned prefix -- and `for_each` is written on top of it.
     void for_each_bucket(const std::function<void(const std::vector<Entry>&)>& fn) const;
 
+    // The same stream with the bucket's evidence beside it, aligned entry for entry and with
+    // `position_error` already averaged over each barcode's reads. Empty when nothing is carried.
+    void for_each_bucket(
+        const std::function<void(const std::vector<Entry>&, const BarcodeEvidence&)>& fn) const;
+
+    // A copy of this table with every key rotated left by `r` bases, spilled under `directory`
+    // with the same budget and bit count. This is the second pass of a bucketed correction: what
+    // the partitioned prefix hid is in the clear once the key is rotated past it.
+    UmiCounts rotated_copy(int r, const std::string& directory) const;
+
 private:
     // const because every accessor needs it and none of them change what the object *means*.
     void flush() const;
+    void flush_evidence() const;
     void spill() const;
     void require_resident(const char* what) const;
+    void push_evidence(const float* pos_err, std::string_view payload);
+    size_t ev_bytes() const {
+        return static_cast<size_t>(ev_err_) * sizeof(float) + static_cast<size_t>(ev_pw_);
+    }
 
     static constexpr size_t kMinBuffer = 4096;
 
@@ -286,6 +347,18 @@ private:
     uint64_t total_ = 0;
     mutable std::vector<Entry> buf_;
     mutable std::vector<Entry> entries_;
+
+    // Carried evidence, in lockstep with buf_/entries_: `ev_err_` floats then `ev_pw_` chars per
+    // entry. Both empty and both strides zero on every counter that does not ask for them.
+    int ev_pw_ = 0;
+    int ev_err_ = 0;
+    mutable std::vector<float> buf_err_, err_;
+    mutable std::vector<char> buf_pay_, pay_;
+    // A resident table's `position_error` is divided by the counts in place, once, rather than
+    // copied to be divided. Adding after that would fold a raw sum into an average, so it is
+    // refused instead.
+    mutable bool ev_averaged_ = false;
+    mutable std::vector<std::string> spill_err_paths_, spill_pay_paths_;
 
     // Spill state. Empty `spill_paths_` means "never spilled", which is the resident case and the
     // only one `refine` ever sees.
@@ -349,31 +422,11 @@ struct CorrectionParams {
     // and `merged` is a count of barcodes rather than of opportunities to look at them.
     int scan_from = 0;
     int scan_to = -1;
-};
-
-// What a barcode's own reads say about it, beyond how many there are. Both fields are optional
-// and both exist because the count ratio -- the only evidence the first version used -- carries
-// nothing on a library sequenced at 1-3 reads per UMI, which is the common case rather than the
-// exotic one. Measured in `scripts/correction_accuracy.py`: recall 0.80 at 3.1 reads/UMI, 0.02 at
-// 1.1. A parent with 2 reads and a child with 1 is not an asymmetry, and two singletons are not
-// one either.
-//
-// Both are laid out flat and indexed in parallel with UmiCounts::entries().
-struct BarcodeEvidence {
-    // Mean error probability at each barcode position, over that barcode's reads: entry i,
-    // position j is at [i * length + j]. A sequencing miscall in the barcode carries a LOW Phred
-    // at the base it changed, and an early-PCR child carries a high one in every read -- so this
-    // separates the two mechanisms the global rate has to average over. Works at one read.
-    std::vector<float> position_error;
-    // Draft payload consensus per barcode, `payload_width` bases each, entry i at
-    // [i * payload_width]. A barcode error child is a read of the PARENT'S molecule, so its
-    // payload matches; an independent molecule one substitution away has its own. Works at one
-    // read, and it is the only thing that does when both barcodes are singletons.
-    std::vector<char> payload;
-    int payload_width = 0;
-
-    bool has_quality() const { return !position_error.empty(); }
-    bool has_payload() const { return payload_width > 0 && !payload.empty(); }
+    // Fraction of unrelated barcode pairs whose payloads agree anyway. Measured once over the
+    // whole partition and passed down, because a bucket's own sample is a sample of the bucket:
+    // the barcodes in it share a key prefix, and what payload agreement is worth is a property of
+    // the library. 0 means "measure it from the array you were handed", the resident case.
+    double library_clonality = 0.0;
 };
 
 struct CorrectionResult {
@@ -400,6 +453,17 @@ struct CorrectionResult {
     // nothing in a clonal one, and this says which this library is.
     double payload_clonality = 0.0;
     size_t merged_by_payload = 0;  // merges the count ratio alone would have refused
+
+    // Every barcode that was folded into a parent, by KEY rather than by index, with chains
+    // already resolved. This is what survives a range partition: `root` and `corrected` are
+    // indexed against `entries()`, which a spilled counter does not have, and this costs 20 bytes
+    // per barcode actually corrected -- the error rate, not the count.
+    struct Merge {
+        uint64_t child;
+        uint64_t root;
+        uint32_t reads;  // the child's own reads, which moved to the root
+    };
+    std::vector<Merge> merges;
 };
 
 // Estimates the per-base UMI error rate from the excess of 1-mismatch neighbours over what
@@ -425,15 +489,16 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, i
 // Works whether or not the counter has spilled. A spilled counter is corrected bucket by bucket,
 // in two passes with the key rotated by the width of the partitioned prefix, so a substitution in
 // the prefix -- which the partition would otherwise hide forever -- is seen by the second pass.
-// Never: a bucketed run answers with the SCALARS only. `root` and `corrected` are per-entry
-// arrays indexed against `entries()`, which a spilled counter does not have and whose whole
-// purpose is to not be resident, so they come back empty; `merged`, `merged_reads`,
+// Never: a bucketed run answers with the SCALARS and with `merges`. `root` and `corrected` are
+// per-entry arrays indexed against `entries()`, which a spilled counter does not have and whose
+// whole purpose is to not be resident, so they come back empty; `merged`, `merged_reads`,
 // `molecules_observed`, `molecules_corrected`, `estimated_error` and `saturated` are all defined
-// library-wide and are what `checkout` reports. The stage that rewrites reads is `refine`, and
-// `refine` does not spill.
-// Never: `evidence` is indexed against `entries()` too, so it is refused rather than ignored on a
-// spilled counter -- silently dropping the payload term would report a merge count from a weaker
-// model as if it came from the full one.
+// library-wide, and `merges` names every corrected barcode by key, which is what `refine` needs to
+// rewrite reads without holding the table.
+// Never: the side `evidence` argument is indexed against `entries()`, so it is refused rather than
+// ignored on a spilled counter -- silently dropping the payload term would report a merge count
+// from a weaker model as if it came from the full one. Evidence that travelled with the counter
+// (`carry_evidence`) is partitioned with it and IS used.
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {},
                               const BarcodeEvidence& evidence = {});
 

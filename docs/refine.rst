@@ -238,22 +238,38 @@ What it holds
 -------------
 
 The **barcode table**, never the reads: ``(key, count)`` plus this barcode's own evidence — the
-mean error at each barcode position and a 32-base payload draft. The reads are streamed three
-times instead, and the table size is reported for the same reason ``checkout`` reports its
-counters.
+mean error at each barcode position and a 32-base payload draft. The reads are streamed twice
+instead, and the table size is reported for the same reason ``checkout`` reports its counters.
 
 .. code-block:: text
 
-   0.5 s, three passes over the reads
+   0.5 s, two passes over the reads
    peak RSS 184.3 MB of which the barcode table 2.2 MB
+
+**And the table bounds itself.** Past 1 GB it range-partitions to disk, correction follows it into
+the partition, and every table refine writes is streamed one bucket at a time. Nothing changes but
+the wall clock: a partitioned run and a resident one agree on every number and on every output file
+byte for byte, which is what ``tests/synthetic/test_refine_bucketed.py`` asserts. The budget is a
+``refine.run()`` argument, never a CLI flag — a run that needs it is one whose library does not fit,
+and the stage can see that for itself.
 
 .. warning::
 
    **Correction is not bucketable by a plain range partition.** A range partition on the top *b*
    bits keeps a barcode and its 1-substitution neighbours together for every position except the
-   top *b*/2 — and a neighbour that crosses a bucket boundary can never be found. Doing this in
-   buckets needs two passes with the key rotated, so that every pair shares a bucket in at least
-   one of them. Until that lands the table is held whole.
+   top *b*/2 — and a neighbour that crosses a bucket boundary would never be found, so the
+   partition would bound the memory and silently stop correcting. It runs in **two passes**: over
+   the buckets as they stand, owning the positions the prefix does not touch, then over a copy with
+   the key rotated past it, owning exactly the ones it hid.
+
+   Two things follow, and both were bugs before they were rules. The table carries the
+   **evidence** — the barcode's own quality and its payload draft — because a side array indexed
+   against the entry list cannot survive a partition, and dropping it would leave the bucketed run
+   correcting on the count ratio alone, which reports nothing at 1–3 reads per UMI. And the two
+   passes **scan**; they do not merge. A barcode can have a plausible parent on each side of the
+   boundary, and merging inside a pass takes the first candidate rather than the best: measured, 2
+   barcodes in 6,591 landed on a different parent than the resident run gave them, and every table
+   downstream moved with them.
 
 Output
 ------
