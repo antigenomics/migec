@@ -146,3 +146,57 @@ def test_peak_memory_does_not_track_input_size(corpus):
     overhead = s["peak_rss_bytes"] - s["umi_memory_bytes"]
     print(f"\n  non-counter RSS {overhead / 2**20:.0f} MB")
     assert overhead < 1 << 30, "buffers should be bounded by chunk size x threads"
+
+
+def _corpus_of(directory, reads):
+    """A shallow library of `reads` reads, one distinct barcode per 4 of them."""
+    path = directory / f"reads_{reads}.fq.gz"
+    rng = random.Random(0)
+    with gzip.open(path, "wt", compresslevel=1) as fh:
+        i = 0
+        while i < reads:
+            sample = list(TAGS)[(i // READS_PER_UMI) % 4]
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(90))
+            for _ in range(READS_PER_UMI):
+                seq = ("AA" + TAGS[sample] + ADAPTER + umi[:4] + "T" + umi[4:8] + "T" + umi[8:]
+                       + payload)
+                fh.write(f"@r{i}\n{seq}\n+\n{'I' * len(seq)}\n")
+                i += 1
+    (directory / "barcodes.txt").write_text(BARCODES)
+    return path
+
+
+@pytest.mark.xfail(reason="roadmap item 1: the counters are not partitioned yet", strict=True)
+def test_the_counters_do_not_grow_with_the_library(tmp_path):
+    """The one unbounded allocation left in the pipeline, stated as something that can fail.
+
+    Everything else in `checkout` is bounded by chunk x threads. The UMI counters are not: ~22 B
+    per DISTINCT barcode held in one piece, which is 8.8 GB at NovaSeq scale. A warning past 1 GB
+    reports the problem rather than fixing it.
+
+    Never: assert a SCALING property, not a fixed budget. A budget test passes vacuously at any
+    corpus small enough to run in CI -- 50,000 barcodes is 1 MB, under any threshold worth naming,
+    so the test would go green while the term it exists to bound grew without limit. Doubling the
+    distinct barcodes and watching what the counters do is the question that has the same answer at
+    every scale.
+
+    Never: the fix is the range partition, not a smaller struct. 16 B per entry is already near the
+    floor for (key, count); shaving it buys a constant factor against a term that grows without
+    limit, which is the wrong axis.
+    """
+    from migec.checkout import run
+
+    small = run(_corpus_of(tmp_path, 100_000), tmp_path / "barcodes.txt", tmp_path / "a", threads=4)
+    large = run(_corpus_of(tmp_path, 400_000), tmp_path / "barcodes.txt", tmp_path / "b", threads=4)
+
+    def distinct(s):
+        return sum(x["umis"] for x in s["samples"])
+
+    growth = large["umi_memory_bytes"] / max(small["umi_memory_bytes"], 1)
+    print(f"\n  {distinct(small):,} barcodes: {small['umi_memory_bytes'] / 2**20:6.1f} MB"
+          f"\n  {distinct(large):,} barcodes: {large['umi_memory_bytes'] / 2**20:6.1f} MB"
+          f"  ({growth:.2f}x for {distinct(large) / distinct(small):.2f}x the barcodes)")
+    assert growth < 1.5, (
+        f"4x the distinct barcodes cost {growth:.2f}x the counter memory -- still one piece, "
+        f"still growing with the library")
