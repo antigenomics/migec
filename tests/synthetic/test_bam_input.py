@@ -154,6 +154,49 @@ def test_a_paired_bam_carries_both_mates_and_collate_keeps_them_together(tmp_pat
     assert from_aligned == from_fastq
 
 
+def test_a_umi_in_a_separate_index_read_reaches_the_same_molecules(tmp_path):
+    """The motivating case, end to end: R1 plus an I1 holding the UMI, and no `checkout` at all.
+
+    A capture, exome or ctDNA kit reads the UMI on the index, so it is never inside R1. One
+    `samtools import` puts it in `RX` and the answer has to be the one `checkout` would have
+    reached from the un-split reads -- otherwise the entry point is a different pipeline wearing
+    the same name.
+    """
+    sim = simulate(
+        SimConfig(adapter=ADAPTER, n_molecules=2_000, n_clones=50, coverage=5.0, umi_len=12,
+                  umi_error=2e-3, seed=11),
+        tmp_path / "sim",
+    )
+    r1, i1 = tmp_path / "R1.fq", tmp_path / "I1.fq"
+    with gzip.open(sim["reads"], "rt") as fh, open(r1, "w") as fr, open(i1, "w") as fi:
+        for i, line in enumerate(fh):
+            if i % 4 == 0:
+                name = line[1:].split()[0]
+            elif i % 4 == 1:
+                seq = line.strip()
+            elif i % 4 == 3:
+                qual = line.strip()
+                fr.write(f"@{name}\n{seq[12:]}\n+\n{qual[12:]}\n")
+                fi.write(f"@{name}\n{seq[:12]}\n+\n{qual[:12]}\n")
+
+    tagged = tmp_path / "tagged.bam"
+    # Never: `--barcode-tag RX`. Left at its default, `samtools import` writes an index read into
+    # `BC`, which is the SAMPLE barcode -- refine would then find no RX and refuse the file.
+    subprocess.run(
+        ["samtools", "import", "-0", str(r1), "--i1", str(i1),
+         "--barcode-tag", "RX", "--quality-tag", "QX", "-o", str(tagged)], check=True,
+    )
+    from_index = refine_run(tagged, tmp_path / "rf_idx", sample_id="S1")
+
+    (tmp_path / "bc.txt").write_text(f"S1\t{sim['pattern']}\n")
+    checkout_run(sim["reads"], tmp_path / "bc.txt", tmp_path / "co")
+    from_checkout = refine_run(tmp_path / "co" / "S1.fq.gz", tmp_path / "rf_co", sample_id="S1")
+
+    for key in ("reads", "barcodes", "merged", "molecules"):
+        assert from_index[key] == from_checkout[key], key
+    assert from_index["molecules"] == 2_000
+
+
 def test_a_bam_without_rx_is_refused_rather_than_reporting_no_molecules(tmp_path):
     sim = simulate(
         SimConfig(adapter=ADAPTER, n_molecules=200, n_clones=10, coverage=3.0, umi_len=12, seed=2),

@@ -74,31 +74,56 @@ Two things about that command are load-bearing.
    next to your output, not in ``/tmp`` — the same siting as the range-partition buckets, for the
    same reason.
 
-Getting the UMI into ``RX`` in the first place
-----------------------------------------------
+Starting from an index read
+---------------------------
 
-If your BAM does not have it yet, one of these does it. All three are the vendor's own tool; migec
-does not reimplement any of them.
+This is the common case and it needs no BAM at all to begin with: the facility gives you R1, R2 and
+an ``I1``/``UMI`` FASTQ, and the UMI is in the third file. One ``samtools`` command puts it where
+migec reads it, and ``samtools`` is already required for the BAM path:
 
 .. code-block:: bash
 
-   # Illumina-style: R1, R2 and a separate UMI read
-   fgbio FastqToBam -i R1.fq.gz R2.fq.gz UMI.fq.gz --read-structures +T +T +M -o tagged.bam
+   samtools import -1 R1.fq.gz -2 R2.fq.gz --i1 UMI.fq.gz \
+       --barcode-tag RX --quality-tag QX -o tagged.bam
+   migec refine   tagged.bam  -o ref/
+   migec assemble ref/S1.fq.gz -o asm/
+
+``--barcode-tag RX`` is the whole trick: ``samtools import`` writes an index read into ``BC``/``QT``
+by default, which is the *sample* barcode, and the two are not the same thing.
+
+Measured, on a 2,000-molecule simulated library where the UMI was split out into its own FASTQ:
+this route and ``checkout`` → ``refine`` on the un-split reads agree exactly — 9,297 reads, 2,193
+distinct barcodes, 193 merged, **2,000 molecules** from 2,000 injected, on both.
+
+Getting the UMI into ``RX`` some other way
+------------------------------------------
+
+If it is already in a BAM from the vendor's pipeline, it is already ``RX`` and there is nothing to
+do. Otherwise these write it; all are the vendor's own tool and migec reimplements none of them.
+
+.. code-block:: bash
 
    # a BAM plus the UMI read
    fgbio AnnotateBamWithUmis -i in.bam -f UMI.fq.gz -o tagged.bam
 
-   # Picard, from FASTQ
+   # from FASTQ, with a read structure
+   fgbio FastqToBam -i R1.fq.gz R2.fq.gz UMI.fq.gz --read-structures +T +T +M -o tagged.bam
+
+   # Picard
    picard FastqToSam F1=R1.fq.gz F2=R2.fq.gz UMI_FASTQ=UMI.fq.gz ... O=tagged.bam
 
-Then run ``migec refine`` on ``tagged.bam``.
+Note: the ``samtools import`` recipe above was run here; these three are quoted from their own
+documentation. fgbio needs a **JDK 17+**, and on an older JDK it fails with an
+``UnsupportedClassVersionError`` from htsjdk rather than a version message.
 
 .. warning::
 
    ``umi_tools extract`` puts the UMI in the **read name**, not in a tag, and migec does not parse
-   read names — the name is only ever copied through. Convert it, or use a tool that writes ``RX``.
-   This is deliberate: a name is free-form and a tag is not, so guessing at a name is how one
-   pipeline's ``_`` separator becomes another's silent truncation.
+   read names — the name is only ever copied through. This is deliberate: a name is free-form and a
+   tag is not, so guessing at a name is how one pipeline's ``_`` separator becomes another's silent
+   truncation. ``samtools import -U`` converts a name-borne UMI into ``RX``, but only for the
+   Illumina/CASAVA convention — on a ``read_ACGTACGT`` name it silently writes no tag, which is why
+   migec refuses a file with no ``RX`` by name rather than reporting zero molecules.
 
 From a FASTQ somebody else tagged
 ---------------------------------
