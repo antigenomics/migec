@@ -447,6 +447,43 @@ counting. Measured on certified cfDNA reference material at 20 ng and 10x:
 with its frequency stable to the third decimal.** Requiring three reads discards the molecules that
 were never error-corrected, which is exactly the population the dark-G bias rides on.
 
+It is not free, and the trade is worth stating in full. Measured on the 20 ng / 10x arm:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 22 22
+
+   * -
+     - ``--min-reads 1``
+     - ``--min-reads 3``
+     - change
+   * - molecules at the site
+     - 12,471
+     - 7,393
+     - **-41%**
+   * - molecule-limited LOD
+     - 5.1e-4
+     - 8.5e-4
+     - 1.7x worse
+   * - artifact floor (measured)
+     - **6.6e-3**
+     - none observed
+     - removed
+   * - **what actually binds**
+     - **6.6e-3** (the artifact)
+     - **8.5e-4** (the molecules)
+     - **8x better**
+
+So the filter throws away 41% of molecules and makes the molecule-limited limit 1.7x worse -- while
+removing a floor that was **13x higher than the molecule limit to begin with**. Never: judge
+``--min-reads`` on molecules retained and it looks like a loss. Judge it on what binds and it is an
+eightfold gain, because at ``--min-reads 1`` the molecules were never the constraint.
+
+Note: retention across the arm was 63% at ``--min-reads 3`` and 54% at 5. Going to 5 costs another
+9% of molecules and removed nothing further here, so 3 is where the curve flattens on this
+chemistry. On a library with more reads per molecule the same threshold costs less; on a shallower
+one it costs more, which is why it is a recommendation per assay rather than a new default.
+
 What you can do blind
 ---------------------
 
