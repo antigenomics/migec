@@ -45,7 +45,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 | # | item | milestone | why it is next |
 |---|---|---|---|
 | 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
-| 2 | The rest of the published comparisons | M5 | **MIGEC v1, MAGERI, UMIErrorCorrect, UMI-tools and fgbio are done and scored** (`docs/postprocessing.rst`, `docs/validation.rst`, `docs/grouping.rst`). Open: Cell Ranger, and UMI-VarCal which is running. This is what the version number is waiting on, not the code |
+| 2 | The rest of the published comparisons | M5 | **MIGEC v1, MAGERI, UMIErrorCorrect, UMI-tools, fgbio and Cell Ranger are done and scored** (`docs/postprocessing.rst`, `docs/validation.rst`, `docs/grouping.rst`, `docs/single_cell.rst`). Open: UMI-VarCal, which cannot run on the certified arms (single-end). This is what the version number is waiting on, not the code |
 | 3 | The last two rows of the ctDNA table | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI. Done: LoFreq and Mutect2 on the identical consensus BAM, a MAPQ 20 floor, adapter trimming, and UMIErrorCorrect end to end (`assets/ctdna_callers.tsv`). Running: the **no-consensus baseline** -- same reads, same aligner, same callers, reads instead of molecules -- and **UMI-VarCal** |
 | 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
@@ -376,8 +376,30 @@ model has to use the evidence that survives at one read:
       UMI the two are indistinguishable, and at **1.5 reads per UMI they separate 28x** with the
       consensus quality matched to 5e-4 -- 142 calls of which 137 are false against 5 of 5 clean.
       `assets/mageri.tsv`, `assets/mageri_variants.tsv`
-- [ ] `2026-migec-benchmark` repo and `isalgo/umi_data`. Cell Ranger is the one comparator still
-      unrun, and its only overlap is cell calling, which is OrdMag plus a knee by design
+- [ ] `2026-migec-benchmark` repo and `isalgo/umi_data`. Every comparator is now run.
+- [x] **Cell Ranger 5.0.0 head to head** (2026-08-14), `scripts/compare_cellranger.py`, on
+      `sc5p_v2_hs_PBMC_1k` VDJ-T, both lanes. migec calls **888 cells against 479**, sharing 470,
+      and loses **1.9 points of reads-in-cells** (84.88% against 86.80%) -- the 418 extra barcodes
+      are nearly empty, so a cell count alone is not an accuracy figure. Barcode validity 88.90%
+      against 90.60%. Never: Cell Ranger is not re-run (Linux x86_64, licence-gated), so the
+      comparator is 10x's own published 5.0.0 output AND a `cellranger vdj` **10.1.0 run here**
+      (`scripts/cellranger_vdj.sbatch`, 16 cores on aldan3, 8m44s / 936 MB). The two versions agree
+      at **Jaccard 0.9938**, which is the control saying the migec gap is not version drift. Cost:
+      **35.0 s / 679 MB against 524.5 s / 936 MB** for the stages that answer these axes, ~90 s end
+      to end with `assemble --contig` + arda. Never: the two cell sets are different populations, so
+      five counts and never a ratio. It also found the `checkout` UMI-counter bug and proved
+      5.0.0's published `Median TRB UMIs per Cell` wrong -- see `CLAUDE.md`.
+      `assets/cellranger.tsv`, `docs/single_cell.rst`
+- [x] **The per-cell chain axis** (2026-08-14), `scripts/compare_cellranger_chains.py`. migec
+      assembles per MOLECULE, arda annotates (`--cell-from migec`), the cell's chain is a vote:
+      **TRA 426/426 and TRB 468/469 recall** against 5.0.0, and 424/424 + 468/469 against 10.1.0,
+      junction agreement 0.95 / 0.99, in 22 s over 47,584 consensuses with no per-cell assembler.
+      Never: **depth does not buy junction coverage on a co-terminal chemistry** -- a molecule is a
+      pile at one position, mean consensus 204 nt against the ~508 nt amplicon, 16.5% carry a
+      junction where a per-read-uniform model predicts 0.975. `assets/cellranger_chains.tsv`
+- [x] **`--contig` is 19.7x faster, byte-identical** (2026-08-14): `place_reads` asks union-find
+      before it runs the seed scan, because `join` already returns when the roots match. 640.9 s ->
+      32.6 s on 47,584 molecules, consensus FASTQ and `mig.tsv` MD5-identical
 - [x] ctDNA ground truth **located, not simulated** (2026-08-13): `PRJNA788522` (72 runs, cfDNA
       reference material at 0 / 0.125 / 0.25 / 1% VAF x 5/20/80 ng x 3.3/10/30x, three replicates)
       and `PRJNA507366` (28 runs, six polymerases plus 0.031% / 0.0625% VAF). Both carry a real
