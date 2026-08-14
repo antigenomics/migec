@@ -213,9 +213,49 @@ does**: at 0.125% the assay finds 8% of real variants while still calling 25% of
 negatives. That is the worst possible shape, and it is not fixed by choosing a different caller --
 :doc:`detection` shows the artifact is systematic, reproducible and ``-> G`` biased.
 
-Never: **1% is the reliable limit for this panel as run.** The commonly quoted figure for
-UMI-based ctDNA is 0.1%, and reaching it needs what this pipeline does not have -- a per-position
-background model built from normals, and ideally duplex chemistry to lower the floor underneath it.
+Never: **that table is ``--min-reads 1``, which is the wrong setting for variant calling**, and it
+is why the numbers looked so poor. Re-run at ``--min-reads 3`` (:doc:`detection`), three replicates
+per arm at 20 ng / 10x:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 20 20 20 24
+
+   * - truth
+     - ``mr=1`` called
+     - ``mr=1`` VAF
+     - ``mr=3`` called
+     - ``mr=3`` VAF
+   * - **0%**
+     - 3/3 **wrong**
+     - 0.66%
+     - **0/3 correct**
+     - --
+   * - 0.125%
+     - 1/3
+     - 0.17%
+     - 1/3
+     - 0.05%
+   * - **0.25%**
+     - 3/3
+     - **0.79%** (3.2x too high)
+     - **3/3**
+     - **0.22%**
+   * - 1%
+     - 3/3
+     - 1.01%
+     - 3/3
+     - 1.02%
+
+Note: **the artifact was inflating true positives, not only inventing false ones.** At 0.25% it
+read 0.79%, and 0.25% + the 0.57% artifact floor is 0.82% -- the contamination is additive, so a
+quantitative result was wrong by threefold at a frequency where the call itself looked fine.
+
+**The reliable limit is 0.25%, quantified accurately**, once singleton molecules are excluded. That
+is fourfold better than the same pipeline at ``--min-reads 1`` and in the range Illumina specify
+for TruSight Oncology 500 ctDNA v2 (0.2% for SNVs at 20 ng). 0.125% remains out of reach here at
+1 of 3 replicates -- that arm is molecule-limited, and the published <0.1% claims for this
+chemistry assume both more input and a per-position background model.
 
 Note: **depth does buy molecules, until it does not.** Deeper sequencing recovers more of the
 molecules that are in the tube -- 20 ng of undiluted material gives 6,310 / 10,299 / 16,809
