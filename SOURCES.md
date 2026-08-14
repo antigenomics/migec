@@ -276,6 +276,26 @@ McInerney 2014's published fidelities can be checked against.
 | Regenerate | `python scripts/compare_grouping.py --out DIR --molecules 20000 --clones {1,20,200,20000} --coverage {1.2,2.5,5,10} --umi-error 3e-3 --tsv out.tsv` |
 | Provenance | derived (computed from simulated reads); the drawn conclusion is in `docs/grouping.rst` |
 
+### MIGEC 1.2.9 (the Groovy implementation this repo replaced)
+
+| Item | Value |
+|---|---|
+| Use | the implementation comparison: same barcode dialect, same sheet, same library, both pipelines end to end |
+| Get it | `gh release download 1.2.9 --repo antigenomics/migec -p 'migec-1.2.9.zip'` → `migec-1.2.9.jar`. Runs on JDK 11 |
+| Run | `java -jar migec-1.2.9.jar Checkout -cute sheet.txt R1.fq.gz . co/` then `Assemble -c --filter-collisions -m <n> co/S1_R0.fastq.gz . asm/` |
+| Never | `--min-count` must be given to BOTH -- v1 defaults to 5 and migec 2 to 1, and v1 names its output `.t5.` because of it. Leaving each at its own default compares defaults |
+| Source | this repository, branch `legacy-v1` / tag `v1-final`; the release predates the rewrite |
+| Compared by | `scripts/compare_migec_v1.py` → `assets/migec_v1.tsv`, drawn in `docs/validation.rst` |
+| Provenance | derived (simulated reads); the jar itself is the published 2018 artefact |
+
+### `assets/migec_v1.tsv`
+
+| Item | Value |
+|---|---|
+| What | consensuses, exactness, wall clock and peak RSS for MIGEC 1.2.9 and migec 2 at matched MIG-size thresholds |
+| Regenerate | `python scripts/compare_migec_v1.py --out DIR --jar migec-1.2.9.jar --molecules 20000 --clones 200 --coverage 8 --min-count {1,5} --tsv out.tsv` |
+| Provenance | derived (computed) |
+
 ### Example QC figures in `assets/`
 
 | Item | Value |

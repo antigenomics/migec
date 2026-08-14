@@ -6,6 +6,19 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### MIGEC 1.2.9, head to head
+
+`scripts/compare_migec_v1.py` runs the Groovy implementation this repo replaced and migec 2 over
+the same simulated library, same barcode dialect, same sheet, both pipelines end to end.
+**9.4-11.9x the wall clock** against an M5 gate of 3x, 3.5-3.7x less memory, and the molecule count
+is 0.09% over truth against v1's 13.6% -- 99.8-99.99% of our consensuses are exactly a template,
+against 93.9-95.1%. The over-count is barcode errors `--filter-collisions` did not catch, because
+its rule is a count ratio and a count ratio carries nothing below ~3 reads per UMI.
+
+`--min-count` is given to both: v1 defaults to 5 and migec 2 to 1, so leaving each at its own
+default would have credited us with recovering molecules v1 was told to throw away.
+`docs/validation.rst`, `assets/migec_v1.tsv`.
+
 ### UMI-tools and fgbio, measured
 
 `scripts/compare_grouping.py` runs both map-first tools end to end and scores all three partitions

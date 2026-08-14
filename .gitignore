@@ -39,3 +39,4 @@ docs/_build/
 *.bai
 *.crai
 build-verify/
+_migec_error.log

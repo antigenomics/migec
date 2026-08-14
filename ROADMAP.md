@@ -45,7 +45,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 | # | item | milestone | why it is next |
 |---|---|---|---|
 | 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
-| 2 | The rest of the published comparisons | M5 | **UMI-tools and fgbio are done and scored** (`docs/grouping.rst`, `assets/grouping_tools.tsv`). Open: MIGEC v1, MAGERI, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 2 | The rest of the published comparisons | M5 | **MIGEC v1, UMI-tools and fgbio are done and scored** (`docs/validation.rst`, `docs/grouping.rst`). Open: MAGERI, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
 | 3 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
 | 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
@@ -384,7 +384,14 @@ model has to use the evidence that survives at one read:
 - [ ] Re-run the arms with adapter trimming or `-q 20`. Adapter read-through is the diagnosed cause
       of the chr2 mismapping (87S52M at MAPQ 4-16, TruSeq adapter), but the fix is **diagnosed, not
       measured**: nothing has been re-run with it applied
-- Gate: grouping ARI ≥0.99; residual error ≤1e-5 on a clonal control; ≥3× MIGEC v1 wall-clock
+- [x] **MIGEC 1.2.9 head to head** (2026-08-14), `scripts/compare_migec_v1.py`. Same dialect, same
+      sheet, same library, both pipelines end to end, `--min-count` matched -- v1 defaults to 5 and
+      we default to 1, and v1 names its output `.t5.` for exactly that reason, so leaving each at
+      its own default compares defaults. **9.4-11.9x the wall clock** against a 3x gate, 3.5-3.7x
+      less memory, and the molecule count is 0.09% over truth against v1's 13.6%: 99.8-99.99% of
+      our consensuses are exactly a template, against 93.9-95.1%. `assets/migec_v1.tsv`
+- Gate: grouping ARI ≥0.99 **met** (0.9967-0.9987); residual error ≤1e-5 on a clonal control;
+  ≥3× MIGEC v1 wall-clock **met** (9.4-11.9x)
 
 ## Deliberately not doing
 

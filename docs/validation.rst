@@ -174,3 +174,75 @@ that holds the reads — so they are also a check that the artefact on PyPI work
 developed on. Peak RSS was 932 MB for the demultiplex, of which 568 MB was the UMI counters, on a
 lane that is 21 GB compressed: the allocation that :doc:`performance` bounds, measured on the
 library that produces it.
+
+MIGEC 1.2.9, the implementation this replaced
+---------------------------------------------
+
+The rewrite's claim is that the *algorithms* are the specification and the *code* is not, so the
+comparison worth running is against the Groovy MIGEC this repo replaced — the same barcode
+dialect, the same sheet, the same simulated library, both pipelines end to end.
+
+.. code-block:: bash
+
+   gh release download 1.2.9 --repo antigenomics/migec -p 'migec-1.2.9.zip'
+   python scripts/compare_migec_v1.py --out /tmp/v1 --jar migec-1.2.9.jar \
+       --molecules 20000 --clones 200 --coverage 8 --min-count 1
+
+20,000 molecules over 200 clones, 149,103 reads, a 12 nt barcode at a 2·10⁻³ per-base error rate.
+v1 is ``Checkout`` → ``Assemble --filter-collisions``; migec 2 is ``checkout`` → ``refine`` →
+``assemble``. ``assets/migec_v1.tsv``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 18 16 14 14 12 14
+
+   * - min reads
+     - tool
+     - consensuses
+     - exactly a template
+     - precision
+     - seconds
+     - peak RSS
+   * - 1
+     - MIGEC 1.2.9
+     - 22,717
+     - 21,338
+     - 0.9393
+     - 2.95
+     - 974 MB
+   * - 1
+     - **migec 2**
+     - **20,017**
+     - **19,977**
+     - **0.9980**
+     - **0.31**
+     - **267 MB**
+   * - 5
+     - MIGEC 1.2.9
+     - 16,292
+     - 15,490
+     - 0.9508
+     - 3.54
+     - 941 MB
+   * - 5
+     - **migec 2**
+     - **16,636**
+     - **16,635**
+     - **0.9999**
+     - **0.30**
+     - **266 MB**
+
+* **9.4–11.9× the wall clock**, against an M5 gate of 3×, and 3.5–3.7× less memory. Single core in
+  both cases; migec 2 threads and v1 does not, so this understates it.
+* **The molecule count is right.** 20,017 consensuses for 20,000 molecules — 0.09% over. v1 emits
+  22,717, 13.6% over, which is the barcode errors ``--filter-collisions`` did not catch: its rule
+  is a count ratio, and :doc:`refine` is where the measurement lives that says a count ratio
+  carries nothing below ~3 reads per UMI.
+* **99.8–99.99% of consensuses are exactly a template**, against 93.9–95.1%.
+
+.. warning::
+
+   ``--min-count`` is applied to **both**. v1 defaults to 5 and migec 2 to 1 — v1 names its output
+   ``.t5.`` for exactly this reason — so leaving each at its own default compares defaults rather
+   than implementations, and would have credited us with recovering molecules v1 was told to throw
+   away.

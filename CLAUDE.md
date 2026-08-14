@@ -549,6 +549,29 @@ correction is written up in `project/review-algorithms.md`.
   (`tests/synthetic/test_refine_bucketed.py`). Two frees came with it: the evidence pass folded
   into the table pass (three read passes -> two) and the rank curve is derived from the size
   spectrum rather than a sorted array of every molecule's count.
+- **What the alignment position is worth, measured (2026-08-14).** `scripts/compare_grouping.py`
+  runs UMI-tools `group` and fgbio `GroupReadsByUmi` end to end -- barcode into the read name /
+  into `RX`, minimap2 onto the simulator's own `clones.fa`, then group -- and scores all three
+  partitions against the truth with `compare_calib.adjusted_rand`. Never: **on ONE reference the
+  position carries nothing and migec wins** -- ARI 0.9967 against 0.9864 (UMI-tools) and 0.9817
+  (fgbio), with 0.65% of reads in clusters that MIX molecules against 3.0% and 3.9%. That is 4.6x
+  and 6x fewer molecules destroyed, and destroying one is the error nothing downstream can detect.
+  On 200 or 20,000 distinct references they win by 0.001 ARI, which is the barcode collision rate
+  and nothing else. 8-48x faster throughout, including the alignment they cannot skip; depth
+  (1.2/2.5/5/10 reads per molecule) changes neither ranking. `docs/grouping.rst`,
+  `assets/grouping_tools.tsv`. Note: the simulator now writes `clones.fa` because a map-first tool
+  cannot run at all without a reference. Note: fgbio needs a **JDK 17+** (JDK 11 gives
+  `UnsupportedClassVersionError` from htsjdk, not a version message); UMI-tools needs
+  `--no-build-isolation` and a `setuptools` on Python 3.12+.
+- **MIGEC 1.2.9 head to head (2026-08-14).** `scripts/compare_migec_v1.py`, same dialect, same
+  sheet, same library, both pipelines end to end. **9.4-11.9x the wall clock** against a 3x gate,
+  3.5-3.7x less memory, and the molecule count 0.09% over truth against v1's 13.6% -- 99.8-99.99%
+  of our consensuses are exactly a template against 93.9-95.1%. The over-count is barcode errors
+  `--filter-collisions` missed: its rule is a count ratio, and a count ratio carries nothing below
+  ~3 reads/UMI. Never: **`--min-count` goes to BOTH** -- v1 defaults to 5 and we default to 1, and
+  v1 names its output `.t5.` for exactly that reason, so leaving each at its own default compares
+  defaults and credits us with recovering molecules v1 was told to discard. `assets/migec_v1.tsv`,
+  `docs/validation.rst`. Note: the jar is `gh release download 1.2.9`, and it runs on JDK 11.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
   1. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
