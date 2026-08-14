@@ -143,7 +143,10 @@ process() {
     fq=$(fastq_for "$acc") || { echo "  no fastq $acc" >&2; return 1; }
     mkdir -p "$out"
     local ubam="$out/$acc.raw.bam"
-    local extracted="$out/EXTRACTED/$acc.raw/$acc.raw_extracted_sorted.bam"
+    # Never: the final BAM is `<name>_extracted.bam`, not `<name>_extracted_sorted.bam`. The
+    # source sorts INTO the `_sorted` name and then renames it back over the unsorted one
+    # (`Extract.py` 187-191), so the `_sorted` file exists only between two statements.
+    local extracted="$out/EXTRACTED/$acc.raw/$acc.raw_extracted.bam"
 
     [ -s "$ubam" ] || samtools import -0 "$fq" -o "$ubam"
 
@@ -156,9 +159,9 @@ process() {
             -i "$ubam" -f "$LOCALREF" -l 12 ) > "$out/extract.log" 2>&1 \
             || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
     fi
-    [ -s "$extracted" ] || { echo "  extract wrote no sorted BAM for $acc"; ls -R "$out/EXTRACTED" 2>/dev/null | head -10; return 1; }
+    [ -s "$extracted" ] || { echo "  extract wrote no BAM for $acc"; ls -R "$out/EXTRACTED" 2>/dev/null | head -10; return 1; }
 
-    if [ ! -s "$out/$acc.raw_extracted_sorted.vcf" ]; then
+    if ! compgen -G "$out"/*.vcf > /dev/null; then
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \
             "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$extracted" -b "$PANEL" \
             -f "$LOCALREF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
