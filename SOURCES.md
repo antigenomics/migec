@@ -17,6 +17,14 @@ are never conflated in a table row.
 | `assets/SRR1763769.mig.tsv`, `assets/assemble.coverage.tsv` | `isalgo/umi_data` CI fixture | derived | `migec refine ci/SRR1763769_umi0.5pct.fq.gz -o r/ && migec assemble r/CTRL.fq.gz -o a/` |
 | `assets/*.svg`, `assets/*.gp` | the tables beside them | derived | `migec plot assets/ -o assets/` |
 | `assets/ctdna_titration.tsv` (+ `_runs.tsv`) | 100 runs of `PRJNA788522` + `PRJNA507366` | derived (migec over experimental data) | `python scripts/sra_fetch.py get <runs> -o simsen/` then `python scripts/ctdna_titration.py --reads simsen/ --out ctdna/ --design design.tsv` |
+| `assets/ctdna_panel.bed` | inferred from coverage, 3 deepest `PRJNA788522` runs aligned to GRCh38 | **derived** | `job/infer_panel.sbatch` on aldan3: minimap2 -> `bedtools genomecov` above a depth floor -> `merge -d 50` -> named against Ensembl 110 |
+| `assets/ctdna_per_target.tsv` | per-TARGET molecule counts, 72 runs | **derived** | `job/per_site.sbatch` then `python scripts/ctdna_persite.py --molecules m.tsv --variants v.tsv --design d.tsv --out out/` |
+
+Note: `ctdna_titration.tsv` is kept beside `ctdna_per_target.tsv` deliberately. The first divides a
+library total by an amplicon count inferred from consensus prefixes; the second counts molecules
+actually aligned to each target. The gap between them is what a reference buys, and deleting the
+first would hide it: it reported 5 amplicons where there are 6 intervals (one of them off-target),
+and a per-panel average where the weakest target holds **0.09-0.64x** the mean.
 
 Result tables and figures are output, not data, so they live here next to the script that made
 them rather than in `isalgo/umi_data`. Test corpora go the other way: HuggingFace, never git.
