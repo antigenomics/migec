@@ -323,13 +323,38 @@ The append buffer grows with the data rather than sitting at a fixed ceiling per
 buffer costs that ceiling for every sample whatever the sample holds, which on a 96-plex sheet is
 gigabytes of empty space.
 
-.. warning::
+8.8 GB still does not fit a laptop, so past a budget the counters **partition themselves**.
 
-   8.8 GB still does not fit a laptop. The counters are **not yet partitioned**, so a full run is
-   held in one piece. The fix is the range partition — process one bucket of the barcode space at a
-   time, so the counter only ever holds 1/2\ :sup:`bits` of the library — and it lands with ``.mig``
-   bucket output in M2. Until then ``checkout`` warns when the counters pass 1 GB rather than
-   letting you find out from the OOM killer.
+The budget is ``umi_budget_bytes``, 1 GB for the whole run, divided by the number of samples.
+Beyond it a counter splits its sorted array on the top bits of the key into one append-only file
+per bucket and drops it, so what stays resident is the budget rather than the library. Everything
+that reads the counters — the coverage histogram, the base composition, the distance-1 census, the
+correction — streams one bucket at a time. The buckets live in ``<out_dir>/.umi_spill`` and are
+removed when the summary has been written; ``umi_spilled`` in the summary says whether it happened.
+
+Range, never hash. A hash sends a barcode and its 1-substitution neighbours to uncorrelated
+buckets, and correction has to be able to find them.
+
+.. note::
+
+   **A range partition alone would bound the memory and silently stop correcting.** The bucket is
+   the top ``bits`` of the key, so a barcode whose error landed in those first positions is in a
+   different bucket from its parent and the two can never meet — and every barcode error in the
+   first third of the UMI would go uncorrected while the summary reported a smaller merge count as
+   if it were a cleaner library.
+
+   Correction therefore runs **twice**: once over the buckets as they stand, owning the positions
+   the prefix does not touch, and once over a copy whose keys are rotated left by the width of the
+   prefix, owning exactly the positions the first pass could not see. Every pair is weighed in one
+   pass and only one, which is what keeps the merge count a count of barcodes rather than of
+   opportunities to look at them. Verified against the resident answer field by field, on a
+   simulated library and on a 500,000-read corpus: identical, down to the estimated error rate.
+
+Partitioning costs about half the throughput on a shallow library — 718,000 reads/s resident
+against 333,000 when it fires, on the 500,000-read benchmark corpus — because the partition is read
+back four times: once for the library composition and the census, once for the rotated copy, and
+once per correction pass. That is the price of finishing rather than dying, and it is only paid
+past the budget.
 
 Benchmarks
 ----------

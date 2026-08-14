@@ -25,6 +25,8 @@ def run(
     threads: int = 0,
     max_offset: int | None = None,
     limit_reads: int = 0,
+    umi_budget_bytes: int = 1 << 30,
+    mig: bool = False,
 ) -> dict:
     """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`.
 
@@ -32,6 +34,18 @@ def run(
     anything with an adapter to place it gets a free scan. Never guess the other way -- a free
     scan over an unanchored pattern has no evidence to choose an offset with, and `compile()`
     refuses it rather than picking one.
+
+    `umi_budget_bytes` caps what the UMI counters may hold resident for the whole run. Past it
+    they range-partition into `<out_dir>/.umi_spill`, which is removed when the summary is
+    written, and every statistic over them streams one bucket at a time. It is not a CLI flag: 1
+    GB is the point past which a counter is a problem on any machine, and the stage below it costs
+    nothing. 0 keeps everything resident, which is what the counters did before they could
+    partition.
+
+    `mig=True` writes `<sample>.<bbb>.mig` buckets instead of one FASTQ per sample. They come out
+    range-partitioned on the key `assemble` groups by, so `assemble` reads them directly and skips
+    its own partition pass. FASTQ is the default and stays it: it is what every aligner and every
+    existing pipeline speaks, and a `.mig` file is an intermediate only migec reads.
     """
     rows: list[SampleRow] = read_barcodes(barcodes)
     out = Path(out_dir)
@@ -54,6 +68,8 @@ def run(
         threads,
         max_offset,
         limit_reads,
+        umi_budget_bytes,
+        mig,
     )
     summary["input"] = str(reads)
     summary["input2"] = "" if reads2 is None else str(reads2)
@@ -194,6 +210,7 @@ def format_report(summary: dict) -> str:
     lines.append(
         f"peak RSS {_bytes(c.get('peak_rss_bytes', 0))} "
         f"of which UMI counters {_bytes(c.get('umi_memory_bytes', 0))}"
+        + (" (range-partitioned to disk)" if c.get("umi_spilled") else "")
     )
     lines.append("")
     lines.append(
@@ -240,14 +257,15 @@ def format_report(summary: dict) -> str:
             )
 
     warnings = []
-    # The UMI counters are the one allocation that grows with the library rather than with the
-    # chunk size, so they are the thing that decides whether a run fits. Range partitioning is
-    # what fixes it; until that lands (M2) the honest thing is to say so before the OOM.
-    if c.get("umi_memory_bytes", 0) > 1 << 30:
+    # The UMI counters were the one allocation that grew with the library rather than with the
+    # chunk size, so they were the thing that decided whether a run fits. They partition now, and
+    # a counter that is still over the budget is one that could not: a barcode too short to hold
+    # two partition prefixes, or spilling switched off.
+    if c.get("umi_memory_bytes", 0) > 1 << 30 and not c.get("umi_spilled"):
         warnings.append(
-            f"UMI counters hold {_bytes(c['umi_memory_bytes'])}. This grows with the number of "
-            f"distinct UMIs and is not yet partitioned across buckets, so a much larger input may "
-            f"not fit in memory"
+            f"UMI counters hold {_bytes(c['umi_memory_bytes'])} and did not partition. This grows "
+            f"with the number of distinct UMIs, so a much larger input may not fit in memory -- "
+            f"check that umi_budget_bytes is not 0 and that the barcode is long enough to split"
         )
     if cal.get("fitted") and cal["slope"] > 2.0:
         warnings.append(

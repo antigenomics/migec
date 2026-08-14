@@ -134,6 +134,23 @@ uint64_t pack_barcode(std::string_view seq, bool* has_n = nullptr);
 
 std::string unpack_barcode(uint64_t packed, int len);
 
+// Rotates a packed barcode left by `r` bases inside its `len`-base field, so the bases the range
+// partition sees are a different `r` of them. This is what makes a pairwise algorithm bucketable:
+// a plain range partition splits a barcode from its 1-substitution neighbour whenever the
+// substitution lands in the partitioned prefix, and rotating the prefix out of the way lets the
+// pair meet in a second pass. Nothing below the field moves, so an unused-tail key stays valid.
+inline uint64_t rotate_barcode(uint64_t key, int len, int r) {
+    if (len <= 0 || len > kMaxBarcodeLen) return key;
+    r %= len;
+    if (r < 0) r += len;
+    if (r == 0) return key;
+    const int w = 2 * len;   // significant bits, packed against the top of the word
+    const int s = 64 - w;    // the unused tail below them
+    const uint64_t field = key >> s;
+    const uint64_t mask = w == 64 ? ~uint64_t{0} : (uint64_t{1} << w) - 1;
+    return (((field << (2 * r)) | (field >> (w - 2 * r))) & mask) << s;
+}
+
 // Bucket index for the range partition: the top `bits` bits of the key. Barcodes are close to
 // uniform over their alphabet, so this balances as well as a hash while preserving order.
 inline uint32_t bucket_of(uint64_t key, int bits) {

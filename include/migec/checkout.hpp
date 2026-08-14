@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -191,6 +192,15 @@ private:
 // ---------------------------------------------------------------------------------------------
 // The whole-file driver.
 
+// `.mig` output sizing. The writer count is a RUN budget: 256 open files is already more than
+// polite, and it is the number of buckets across every sample rather than within one.
+inline constexpr int kMaxMigBucketBits = 8;
+inline constexpr size_t kMaxMigWriters = 256;
+// Bytes shared across every open bucket writer. Split, not per writer: each writer accumulates a
+// block before compressing it, so a fixed per-writer block would make a finer partition cost more
+// memory, which is backwards. The same rule, and the same number, as `assemble`'s partition pass.
+inline constexpr size_t kMigWriterBudgetBytes = 32u << 20;
+
 struct CheckoutRequest {
     // Stop after this many input reads; 0 reads all of them. A smoke test, never a sample: the
     // first N reads of a FASTQ are one corner of one flowcell. `subsample` is the sampler.
@@ -211,6 +221,48 @@ struct CheckoutRequest {
     // -t rather than with the library. 8192 x threads reads in flight costs ~5 MB per thread and
     // leaves the thread-spawn overhead per round under a tenth of a percent.
     size_t chunk_reads = 8192;
+    // Resident bytes the UMI counters may hold between them before they range-partition to disk.
+    // This was the last allocation in the pipeline that grew with the library rather than with the
+    // chunk: ~22 B per distinct barcode in one piece, 8.8 GB at NovaSeq scale. Past the budget the
+    // counters spill and everything downstream of them streams instead.
+    //
+    // Note: it is a whole-run budget and is divided by the number of samples, because a 96-plex
+    // sheet holds 96 of these. The floor keeps a heavily multiplexed run from spilling a counter
+    // small enough to be free to hold.
+    //
+    // Note: 0 disables spilling. The counters then grow without bound and `umi_memory_bytes` is
+    // the only thing that says so, which is where this was before the partition existed.
+    size_t umi_budget_bytes = size_t{1} << 30;
+    // Where the partition goes. Empty puts it next to the output, in `<out_prefix>.umi_spill`, and
+    // it is removed when the statistics that read it are done with it.
+    std::string umi_spill_dir;
+
+    // Write `.mig` buckets -- `<prefix><sample>.<bbb>.mig` -- instead of one FASTQ per sample.
+    //
+    // The reads are range-partitioned on the same key `assemble` groups by, so `assemble` reads
+    // them as its own buckets and skips its partition pass entirely. Opt-in: FASTQ stays the
+    // default, because it is what every aligner, every existing pipeline and `docs/downstream.rst`
+    // speak, and a `.mig` file is an intermediate that only migec reads.
+    //
+    // Never: RANGE, on the whole barcode. A hash would split a barcode from its 1-substitution
+    // neighbours across buckets and correction could never be applied locally; and the partition
+    // key is the cell when there is one, exactly as in `assemble`, because a molecule is
+    // sample + cell + UMI and grouping on the UMI alone merges two molecules.
+    bool mig_output = false;
+    // 0 chooses from the number of samples: the open-file budget is for the RUN, not per sample,
+    // so a 96-plex sheet gets a couple of buckets each rather than 96 x 256 open writers.
+    int mig_bucket_bits = 0;
+};
+
+// Owns a directory of spilled UMI buckets for as long as anything can still read it.
+//
+// Never: the spill files outlive `run_checkout`. The per-sample statistics -- histogram,
+// composition, correction -- stream the partition *after* the run returns, so deleting it at the
+// end of the run would leave every counter pointing at nothing. It dies with the last copy of the
+// stats instead, which is the object those readers hold.
+struct UmiSpillDir {
+    std::string path;
+    ~UmiSpillDir();
 };
 
 struct CheckoutStats {
@@ -228,7 +280,14 @@ struct CheckoutStats {
     double reads_per_second = 0.0;
     size_t peak_rss_bytes = 0;
     size_t umi_memory_bytes = 0;  // the part of the above that is the UMI counters
+    bool umi_spilled = false;     // at least one counter went past the budget and partitioned
+    std::shared_ptr<UmiSpillDir> umi_spill;  // keeps the partition readable; see UmiSpillDir
     int threads = 1;
+    // `.mig` output only: how the reads were partitioned, and the files that came out. The paths
+    // are what `assemble` is handed to skip its own partition pass.
+    bool mig_output = false;
+    int mig_bucket_bits = 0;
+    std::vector<std::string> mig_paths;  // sample-major, then bucket; empty buckets are omitted
 };
 
 // Demultiplex, extract, trim and write. Throws MigecError on malformed input or an unwritable

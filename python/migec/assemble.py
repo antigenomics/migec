@@ -106,6 +106,36 @@ def _quantiles_by_depth(grid: list[dict]) -> list[tuple]:
     return out
 
 
+def _mig_buckets(reads: str | Path) -> list[str]:
+    """The `.mig` buckets `reads` names, or an empty list when it is a FASTQ.
+
+    A directory is every bucket in it, sorted -- which is bucket order, because the suffix is
+    zero-padded. One `.mig` file brings its siblings with it: a single bucket of a partition is a
+    corner of the barcode space, and assembling it alone would silently drop the rest of the
+    sample rather than fail.
+    """
+    p = Path(reads)
+    if p.suffix == ".mig":
+        sample = p.name.split(".")[0]
+        return sorted(str(f) for f in p.parent.glob(f"{sample}.*.mig"))
+    if not p.is_dir():
+        return []
+    # A checkout output directory holds every sample's buckets. Never: assembling them together
+    # would group two samples' reads as one, and a UMI repeats across samples by design -- so the
+    # ambiguity is refused here, by name, rather than resolved by guessing.
+    by_sample: dict[str, list[str]] = {}
+    for f in sorted(p.glob("*.mig")):
+        by_sample.setdefault(f.name.split(".")[0], []).append(str(f))
+    if len(by_sample) > 1:
+        names = ", ".join(sorted(by_sample))
+        raise ValueError(
+            f"{p} holds buckets for {len(by_sample)} samples ({names}). assemble is a per-sample "
+            f"stage: point it at one sample's buckets, e.g. {p}/{sorted(by_sample)[0]}.000.mig, "
+            f"which brings the rest of that sample with it"
+        )
+    return next(iter(by_sample.values()), [])
+
+
 def run(
     reads: str | Path,
     out_dir: str | Path,
@@ -121,14 +151,22 @@ def run(
     limit_reads: int = 0,
     limit_umis: int = 0,
 ) -> dict:
-    """Assemble consensuses from a checkout-tagged FASTQ into `out_dir`."""
+    """Assemble consensuses from a checkout-tagged FASTQ into `out_dir`.
+
+    `reads` may also be the `.mig` buckets `checkout --mig` wrote -- one bucket file, a directory
+    holding them, or a glob -- in which case the partition pass does not run at all: the reads are
+    already range-partitioned on the key this stage groups by, which is the only thing that pass
+    builds. One sample's buckets, never two: a UMI repeats across samples by design.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    mig_inputs = _mig_buckets(reads)
     summary = _core.assemble(
-        str(reads), str(out), sample_id, rt_floor, linkage_threshold, contig, fast, min_reads,
-        gzip_level, 0, threads, limit_reads, limit_umis,
+        "" if mig_inputs else str(reads), str(out), sample_id, rt_floor, linkage_threshold,
+        contig, fast, min_reads, gzip_level, 0, threads, limit_reads, limit_umis, mig_inputs,
     )
     summary["input"] = str(reads)
+    summary["mig_input"] = mig_inputs
     summary["rt_floor"] = rt_floor
     summary["linkage_threshold"] = linkage_threshold
 

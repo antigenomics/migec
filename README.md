@@ -689,9 +689,18 @@ climbing.
 
 The UMI counters are a sorted `(key, count)` array rather than a hash map: **~22 bytes per distinct
 UMI against ~48**, which at the 4·10⁸ distinct UMIs of an ordinary NovaSeq run is 8.8 GB against
-19 GB. That still does not fit a laptop — the counters are not yet partitioned, so checkout warns
-when they pass 1 GB rather than letting you find out from the OOM killer. See
+19 GB. That still does not fit a laptop, so past 1 GB the counters **range-partition themselves to
+disk** and every statistic over them streams one bucket at a time — including correction, which
+runs a second pass on keys rotated by the width of the partitioned prefix so that a barcode whose
+error landed in that prefix can still meet its parent. Bounding the memory without that second pass
+would have silently stopped correcting a third of the errors. See
 [`docs/performance.rst`](docs/performance.rst).
+
+`checkout --mig` writes the reads into that same range partition — `<sample>.<bbb>.mig` — which is
+the pass `assemble` otherwise spends most of its wall clock building for itself, so pointing
+`assemble` at a bucket skips it: **1.16 s → 0.98 s** end to end on 500,000 reads over four samples,
+for the identical 124,878 molecules. Opt-in, because a `.mig` file is a migec intermediate and
+everything downstream speaks FASTQ.
 
 ### Grouping accuracy is measured against Calib
 

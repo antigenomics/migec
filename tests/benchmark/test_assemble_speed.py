@@ -227,3 +227,50 @@ def test_shallow_memory_is_still_bounded_by_the_bucket(shallow_corpus, tmp_path)
     per_group = many["rss"] / many["groups"]
     print(f"  {per_group:.0f} B per distinct barcode resident")
     assert per_group < 1_000
+
+
+def test_premade_buckets_skip_the_partition_pass(tmp_path):
+    """`checkout --mig` writes the partition, so assemble does not have to.
+
+    The saving is assemble's whole first pass, and it is paid for by a little extra work in
+    checkout -- so the number that matters is the two stages together, not either alone. Measured
+    on 500,000 reads over four samples at four threads: 1.16 s to 0.98 s for the identical 124,878
+    molecules.
+
+    Never: the assertion is that the partition pass is GONE, not that the total is faster. A
+    wall-clock comparison across two stages on a shared CI runner is noise; `partition_seconds`
+    from a run that did not partition is zero on any machine.
+    """
+    import gzip
+
+    from migec.assemble import run as assemble
+    from migec.checkout import run as checkout
+
+    adapter = "CAGTGGTATCAACGCAGAGT"
+    reads = tmp_path / "reads.fq.gz"
+    rng = random.Random(0)
+    with gzip.open(reads, "wt", compresslevel=1) as fh:
+        i = 0
+        while i < N_READS:
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(PAYLOAD))
+            for _ in range(READS_PER_UMI):
+                seq = umi + adapter + payload
+                fh.write(f"@r{i}\n{seq}\n+\n{'I' * len(seq)}\n")
+                i += 1
+    (tmp_path / "bc.txt").write_text(f"S1\t{'N' * 12}{adapter.lower()}\n")
+
+    fastq = checkout(reads, tmp_path / "bc.txt", tmp_path / "co_fastq", threads=4)
+    mig = checkout(reads, tmp_path / "bc.txt", tmp_path / "co_mig", threads=4, mig=True)
+    a = assemble(tmp_path / "co_fastq" / "S1.fq.gz", tmp_path / "as_fastq", threads=4)
+    b = assemble(tmp_path / "co_mig" / "S1.000.mig", tmp_path / "as_mig", threads=4)
+    print(f"\n  FASTQ route: checkout {fastq['wall_seconds']:.2f} s + assemble "
+          f"{a['wall_seconds']:.2f} s (partition {a['partition_seconds']:.2f})"
+          f"\n  .mig route:  checkout {mig['wall_seconds']:.2f} s + assemble "
+          f"{b['wall_seconds']:.2f} s (partition {b['partition_seconds']:.2f})")
+
+    assert b["partition_seconds"] == 0.0, "the partition pass ran on an already-partitioned input"
+    assert a["partition_seconds"] > 0.0, "the FASTQ route stopped partitioning -- compare to what?"
+    # ...and the point of all of it: the same molecules either way.
+    assert b["molecules"] == a["molecules"]
+    assert b["groups"] == a["groups"]

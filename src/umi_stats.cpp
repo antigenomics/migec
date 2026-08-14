@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <numeric>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -146,10 +150,15 @@ void UmiCounts::flush() const {
         flush_at_ = std::min(buffer_limit_, std::max(kMinBuffer, entries_.size() / 2));
     };
 
+    // Never: the FIRST flush is the one that swaps the buffer in wholesale, and it has to check the
+    // budget like any other. Returning early here meant a counter whose whole library arrives in
+    // one buffer's worth never spilled at all -- the partition switched itself off on exactly the
+    // small-and-simple case, and reported a resident answer that happened to be right.
     if (entries_.empty()) {
         entries_.swap(buf_);
         buf_.clear();
         set_next_flush();
+        if (spill_budget_ && entries_.size() * sizeof(Entry) > spill_budget_) spill();
         return;
     }
 
@@ -186,15 +195,153 @@ void UmiCounts::flush() const {
     }
     buf_.clear();
     set_next_flush();
+    if (spill_budget_ && entries_.size() * sizeof(Entry) > spill_budget_) spill();
+}
+
+void UmiCounts::enable_spill(const std::string& directory, size_t budget_bytes, int bits) {
+    if (bits < 1 || bits > 20) {
+        throw MigecError("UmiCounts::enable_spill: bits must be in 1..20, got " +
+                         std::to_string(bits));
+    }
+    if (budget_bytes == 0) throw MigecError("UmiCounts::enable_spill: budget must be positive");
+    // Correction runs a second pass on keys rotated by the width of the partitioned prefix, and
+    // the two prefixes have to be disjoint or a substitution inside the first one is invisible to
+    // both passes. The prefix is (bits + 1) / 2 bases, so it has to fit twice into the barcode.
+    // Refused here, on the caller's thread, where the number is attributable -- not later, as a
+    // merge count that is quietly short.
+    if (2 * ((bits + 1) / 2) > length_) {
+        throw MigecError("UmiCounts::enable_spill: " + std::to_string(bits) +
+                         " partition bits need " + std::to_string(2 * ((bits + 1) / 2)) +
+                         " barcode positions for the rotated correction pass, but the barcode is " +
+                         std::to_string(length_) + " long");
+    }
+    spill_dir_ = directory;
+    spill_budget_ = budget_bytes;
+    spill_bits_ = bits;
+    // Note: the directory is created by the first spill, not here. Most runs never reach the
+    // budget, and a stage that mkdirs next to its output on every run has to explain itself.
+}
+
+void UmiCounts::require_resident(const char* what) const {
+    if (!spill_paths_.empty()) {
+        throw MigecError(std::string("UmiCounts: ") + what +
+                         " needs every entry resident, but this counter has spilled to a range "
+                         "partition -- that is the point of spilling. Use for_each(), which "
+                         "streams one bucket at a time.");
+    }
+}
+
+// The top `spill_bits_` bits of the key decide the bucket, so buckets are key-ordered ranges and
+// concatenating them in index order is ascending key order.
+void UmiCounts::spill() const {
+    if (entries_.empty()) return;
+    const size_t n_buckets = size_t{1} << spill_bits_;
+    if (spill_paths_.empty()) {
+        std::filesystem::create_directories(spill_dir_);
+        spill_paths_.resize(n_buckets);
+        std::error_code ec;
+        for (size_t b = 0; b < n_buckets; ++b) {
+            spill_paths_[b] =
+                (std::filesystem::path(spill_dir_) / ("umi_" + std::to_string(b) + ".bin")).string();
+            // Never: every spill APPENDS, so a bucket left behind by a run that died would be read
+            // back as part of this library and its counts added to it -- silently, since a stale
+            // bucket is a well-formed one. Only the files this counter is about to own are removed,
+            // once, and nothing else in the directory is touched.
+            std::filesystem::remove(spill_paths_[b], ec);
+        }
+    }
+    // entries_ is already sorted, so each bucket is one contiguous run: find the boundaries and
+    // append each run in one write rather than per entry.
+    const int shift = 64 - spill_bits_;
+    size_t i = 0;
+    while (i < entries_.size()) {
+        const uint64_t b = entries_[i].key >> shift;
+        size_t j = i;
+        while (j < entries_.size() && (entries_[j].key >> shift) == b) ++j;
+        std::ofstream out(spill_paths_[static_cast<size_t>(b)],
+                          std::ios::binary | std::ios::app);
+        if (!out) throw MigecError("UmiCounts: cannot write spill file " + spill_paths_[static_cast<size_t>(b)]);
+        out.write(reinterpret_cast<const char*>(entries_.data() + i),
+                  static_cast<std::streamsize>((j - i) * sizeof(Entry)));
+        if (!out) throw MigecError("UmiCounts: short write to " + spill_paths_[static_cast<size_t>(b)]);
+        i = j;
+    }
+    // Release the capacity, not just the size: shrinking to zero size while holding the array is
+    // exactly the allocation being bounded.
+    std::vector<Entry>().swap(entries_);
+    distinct_known_ = false;
+}
+
+void UmiCounts::for_each(const std::function<void(const Entry&)>& fn) const {
+    for_each_bucket([&fn](const std::vector<Entry>& bucket) {
+        for (const Entry& e : bucket) fn(e);
+    });
+}
+
+void UmiCounts::for_each_bucket(const std::function<void(const std::vector<Entry>&)>& fn) const {
+    flush();
+    if (spill_paths_.empty()) {
+        fn(entries_);
+        return;
+    }
+    // Anything added since the last spill is still resident and belongs in its bucket.
+    const int shift = 64 - spill_bits_;
+    std::vector<Entry> bucket;
+    for (size_t b = 0; b < spill_paths_.size(); ++b) {
+        bucket.clear();
+        std::ifstream in(spill_paths_[b], std::ios::binary);
+        if (in) {
+            in.seekg(0, std::ios::end);
+            const std::streamoff bytes = in.tellg();
+            in.seekg(0, std::ios::beg);
+            if (bytes > 0) {
+                bucket.resize(static_cast<size_t>(bytes) / sizeof(Entry));
+                in.read(reinterpret_cast<char*>(bucket.data()), bytes);
+                if (!in) throw MigecError("UmiCounts: short read from " + spill_paths_[b]);
+            }
+        }
+        for (const Entry& e : entries_) {
+            if ((e.key >> shift) == b) bucket.push_back(e);
+        }
+        if (bucket.empty()) continue;
+        // A key can appear once per spill plus once resident, so reduction happens HERE rather
+        // than at spill time -- which is what makes a spill O(1) per entry.
+        std::sort(bucket.begin(), bucket.end(),
+                  [](const Entry& a, const Entry& c) { return a.key < c.key; });
+        size_t w = 0;
+        for (size_t r = 0; r < bucket.size(); ++r) {
+            if (w > 0 && bucket[w - 1].key == bucket[r].key) {
+                bucket[w - 1].count += bucket[r].count;
+            } else {
+                bucket[w++] = bucket[r];
+            }
+        }
+        bucket.resize(w);
+        fn(bucket);
+    }
+}
+
+size_t UmiCounts::distinct() const {
+    flush();
+    if (spill_paths_.empty()) return entries_.size();
+    if (!distinct_known_) {
+        uint64_t n = 0;
+        for_each([&n](const Entry&) { ++n; });
+        distinct_cache_ = n;
+        distinct_known_ = true;
+    }
+    return static_cast<size_t>(distinct_cache_);
 }
 
 void UmiCounts::merge(const UmiCounts& other) {
     other.flush();
+    other.require_resident("merge()");
     for (const Entry& e : other.entries_) add(e.key, e.count);
 }
 
 const uint32_t* UmiCounts::find(uint64_t key) const {
     flush();
+    require_resident("find()");
     auto it = std::lower_bound(entries_.begin(), entries_.end(), key,
                                [](const Entry& e, uint64_t k) { return e.key < k; });
     if (it == entries_.end() || it->key != key) return nullptr;
@@ -215,11 +362,11 @@ size_t index_of(const UmiCounts& counts, uint64_t key) {
 
 CoverageHistogram UmiCounts::histogram() const {
     CoverageHistogram h;
-    for (const Entry& e : entries()) {
+    for_each([&h](const Entry& e) {
         const int b = log2_bin(e.count);
         h.reads[static_cast<size_t>(b)] += e.count;
         h.units[static_cast<size_t>(b)] += 1;
-    }
+    });
     return h;
 }
 
@@ -228,14 +375,15 @@ UmiComposition UmiCounts::composition(bool weight_by_reads) const {
     c.length = length_;
     c.freq.assign(static_cast<size_t>(length_), {0.0, 0.0, 0.0, 0.0});
     double total = 0.0;
-    for (const Entry& e : entries()) {
+    const int L = length_;
+    for_each([&](const Entry& e) {
         const double w = weight_by_reads ? static_cast<double>(e.count) : 1.0;
-        for (int j = 0; j < length_; ++j) {
+        for (int j = 0; j < L; ++j) {
             const uint8_t code = static_cast<uint8_t>((e.key >> (62 - 2 * j)) & 3u);
             c.freq[static_cast<size_t>(j)][code] += w;
         }
         total += w;
-    }
+    });
     if (total > 0.0) {
         for (auto& row : c.freq) {
             for (double& v : row) v /= total;
@@ -244,28 +392,43 @@ UmiComposition UmiCounts::composition(bool weight_by_reads) const {
     return c;
 }
 
-double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, int threads) {
-    const int L = counts.length();
-    if (L <= 0 || counts.distinct() < 2) return 0.0;
+namespace {
 
-    const std::vector<UmiCounts::Entry>& m = counts.entries();
-    // Binary search over the entry array we already hold. Not UmiCounts::find, which flushes the
-    // append buffer and could reallocate the very array `m` refers to.
+// Distinct MIG sizes and how many barcodes carry each, ascending. The expectation below sums over
+// it rather than over the entries, which is what lets the sum be accumulated bucket by bucket --
+// and it is kept in size order rather than in a hash order so the sum is the same everywhere.
+using SizeHist = std::vector<std::pair<uint32_t, uint64_t>>;
+
+SizeHist size_hist_of(const std::vector<UmiCounts::Entry>& m) {
+    std::unordered_map<uint32_t, uint64_t> h;
+    for (const UmiCounts::Entry& e : m) ++h[e.count];
+    SizeHist out(h.begin(), h.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// Observed distinct-barcode pairs at Hamming distance 1 *within this array*, counted once each,
+// over substitutions at positions [j0, j1). Threaded: a barcode's probes read the sorted table and
+// nothing else, so each worker keeps its own tally and they are added up afterwards -- an integer
+// sum, so the total does not depend on who counted what.
+//
+// The position range is how a range-partitioned library is censused without double counting: a
+// pair that differs at a position outside the partitioned prefix is in one bucket and is seen
+// here, and the rest are seen by the same call on the rotated copy.
+uint64_t d1_census(const std::vector<UmiCounts::Entry>& m, int j0, int j1, int threads) {
+    if (m.size() < 2 || j1 <= j0) return 0;
+    // Binary search over the array we were handed. Not UmiCounts::find, which flushes the append
+    // buffer and could reallocate the very array this refers to.
     auto present = [&m](uint64_t key) {
         auto it = std::lower_bound(m.begin(), m.end(), key,
                                    [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
         return it != m.end() && it->key == key;
     };
-
-    // Observed distinct-barcode pairs at Hamming distance 1, counted once each. Threaded: a
-    // barcode's 3L probes read the sorted table and nothing else, so each worker keeps its own
-    // tally and they are added up afterwards -- an integer sum, so the total does not depend on
-    // who counted what.
     const int workers = worker_count(threads, m.size());
     std::vector<uint64_t> tally(static_cast<size_t>(workers), 0);
     parallel_for(m.size(), workers, [&](size_t i, int w) {
         const UmiCounts::Entry& e = m[i];
-        for (int j = 0; j < L; ++j) {
+        for (int j = j0; j < j1; ++j) {
             const int shift = 62 - 2 * j;
             const uint64_t cur = (e.key >> shift) & 3u;
             for (uint64_t b = 0; b < 4; ++b) {
@@ -275,10 +438,18 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, i
             }
         }
     });
-    uint64_t d1_obs = 0;
-    for (uint64_t v : tally) d1_obs += v;
+    uint64_t total = 0;
+    for (uint64_t v : tally) total += v;
+    return total;
+}
 
-    const double n = static_cast<double>(counts.distinct());
+// Inverts the distance-1 census into a per-base error rate. Split out of `estimate_umi_error` so
+// the bucketed driver can feed it a census summed over buckets and both rotations: the census is
+// the only part that needs the table, and everything here is a function of the library totals.
+double solve_umi_error(uint64_t d1_obs, double n, const UmiComposition& comp, int L,
+                       const std::vector<std::pair<uint32_t, uint64_t>>& sizes) {
+    if (L <= 0 || n < 2.0) return 0.0;
+
     double p_coll = 1.0;
     for (int j = 0; j < L; ++j) p_coll *= comp.collision(j);
     // Independent pairs that happen to sit at distance 1: agree everywhere but position j, and
@@ -308,10 +479,11 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, i
     // occupancy from 0.3% upwards.
     auto expected = [&](double eps) {
         double parent_child = 0.0, sibling = 0.0;
-        for (const UmiCounts::Entry& e : m) {
-            const double t = 1.0 - std::exp(-static_cast<double>(e.count) * eps / 3.0);
-            parent_child += t;
-            sibling += t * t;
+        for (const auto& kv : sizes) {
+            const double t = 1.0 - std::exp(-static_cast<double>(kv.first) * eps / 3.0);
+            const double w = static_cast<double>(kv.second);
+            parent_child += w * t;
+            sibling += w * t * t;
         }
         return 3.0 * L * (parent_child + sibling);
     };
@@ -328,6 +500,18 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, i
         }
     }
     return std::sqrt(lo * hi);
+}
+
+}  // namespace
+
+double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, int threads) {
+    const int L = counts.length();
+    if (L <= 0 || counts.distinct() < 2) return 0.0;
+    // Every position, because this table is the whole library: `entries()` refuses a spilled
+    // counter, and a partition is censused by `correct_umis` in two passes instead.
+    const std::vector<UmiCounts::Entry>& m = counts.entries();
+    return solve_umi_error(d1_census(m, 0, L, threads), static_cast<double>(m.size()), comp, L,
+                           size_hist_of(m));
 }
 
 BarcodeSpace barcode_space(const UmiComposition& comp, uint64_t observed_barcodes,
@@ -414,11 +598,22 @@ double log_binom_pmf(int d, int n, double p) {
 
 }  // namespace
 
-CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params,
-                              const BarcodeEvidence& evidence) {
+namespace {
+
+// Correction over one sorted, reduced barcode array. The array is the whole library on a resident
+// counter and one range-partition bucket on a spilled one, which is the only difference between
+// the two: everything the posterior needs that a bucket cannot see for itself -- the library's
+// distinct count, its collision probability, its effective space and its error rate -- arrives
+// through `params`, and `params.scan_from/scan_to` say which barcode positions this call owns.
+// `library_sizes` is the MIG size distribution of the whole library, or null when this array is
+// the whole library. Never: a bucket's own size distribution is NOT the library's -- it is the
+// same shape drawn a few thousand times, and the posterior weighs an exact per-size probability
+// against the error hypothesis, so estimating it per bucket moves borderline decisions. Measured:
+// one merge in 547 differed from the resident answer until this was threaded through.
+CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
+                                 const CorrectionParams& params, const BarcodeEvidence& evidence,
+                                 const std::map<uint32_t, uint64_t>* library_sizes = nullptr) {
     CorrectionResult res;
-    const int L = counts.length();
-    const std::vector<UmiCounts::Entry>& m = counts.entries();
     const size_t n_entries = m.size();
 
     res.root.resize(n_entries);
@@ -442,17 +637,26 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         return static_cast<size_t>(it - m.begin());
     };
 
-    const UmiComposition comp = counts.composition(false);
     double eps = params.sequencing_error;
-    if (eps < 0.0) eps = estimate_umi_error(counts, comp, params.threads);
     if (eps <= 0.0) eps = 1e-4;  // a floor, so correction still runs on a clean small library
     res.estimated_error = eps;
 
-    double p_coll = 1.0;
-    for (int j = 0; j < L; ++j) p_coll *= comp.collision(j);
-    const double n = static_cast<double>(n_entries);
-    const double space = comp.effective_space();
+    const double p_coll = params.library_collision;
+    // The library's distinct count, which on a bucket is not this array's. Both are needed and
+    // they are not interchangeable: `n` is how many molecules could have landed on a neighbouring
+    // barcode, `n_local` is how many barcodes this call can see and is what the empirical MIG size
+    // distribution below is estimated from.
+    const double n =
+        params.library_distinct ? static_cast<double>(params.library_distinct)
+                                : static_cast<double>(n_entries);
+    const double n_local = static_cast<double>(n_entries);
+    const double space = params.library_space;
     res.saturated = space > 0.0 && n > 0.05 * space;
+
+    // Barcode positions this call owns. All of them for a resident table; for a bucket, the ones
+    // whose substitutions cannot have moved the barcode out of the bucket.
+    const int j_from = std::max(0, params.scan_from);
+    const int j_to = params.scan_to < 0 ? L : std::min(params.scan_to, L);
 
     // Prior that a neighbour one substitution away is polymerase-derived rather than a miscall:
     // eps_pol per base per cycle, over the cycles that matter, over the L barcode positions.
@@ -469,9 +673,16 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
     // distribution. Using the empirical distribution rather than a parametric one means the test
     // adapts to how deeply the library was sequenced without another tunable.
     std::unordered_map<uint32_t, double> size_pmf;  // keyed by MIG size, so it stays small
-    for (const UmiCounts::Entry& e : m) size_pmf[e.count] += 1.0;
-    for (auto& kv : size_pmf) kv.second /= n;
-    const double size_floor = 1.0 / (n + 1.0);  // never claim a size is impossible
+    const double n_sizes = library_sizes ? n : n_local;
+    if (library_sizes) {
+        for (const auto& kv : *library_sizes) {
+            size_pmf[kv.first] = static_cast<double>(kv.second) / n_sizes;
+        }
+    } else {
+        for (const UmiCounts::Entry& e : m) size_pmf[e.count] += 1.0;
+        for (auto& kv : size_pmf) kv.second /= n_sizes;
+    }
+    const double size_floor = 1.0 / (n_sizes + 1.0);  // never claim a size is impossible
 
     // How often do two UNRELATED barcodes carry the same payload anyway? That is the library's
     // clonality, and it is exactly what payload agreement is worth: log(1/clonality). In a diverse
@@ -539,7 +750,7 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         size_t best_parent = static_cast<size_t>(-1);
         double best_post = 0.0;
 
-        for (int j = 0; j < L; ++j) {
+        for (int j = j_from; j < j_to; ++j) {
             const int shift = 62 - 2 * j;
             const uint64_t cur = (child >> shift) & 3u;
             for (uint64_t b = 0; b < 4; ++b) {
@@ -693,6 +904,168 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         res.saturated = true;
     }
     return res;
+}
+
+// Collision probability and effective space of a whole library, from its composition.
+double collision_of(const UmiComposition& comp, int L) {
+    double p = 1.0;
+    for (int j = 0; j < L; ++j) p *= comp.collision(j);
+    return p;
+}
+
+// Correction over a range-partitioned counter, bucket by bucket, in two passes.
+//
+// The partition is on the top `bits` of the key, so a barcode and its 1-substitution neighbour
+// share a bucket exactly when the substitution missed the first `pb = (bits + 1) / 2` positions.
+// Pass 1 therefore owns positions [pb, L) and sees every such pair. Pass 2 runs on a copy of the
+// counter whose keys are rotated left by `pb` bases -- so what used to be positions [pb, 2pb) is
+// now the prefix, and the positions the first partition hid are in the clear -- and owns exactly
+// the complementary set, which in rotated coordinates is [L - pb, L).
+//
+// Never: every pair is weighed in exactly ONE pass. The alternative -- scan every position in both
+// and deduplicate -- would need the pairs, not the merges, to be remembered, which is the resident
+// set being bounded here in the first place.
+//
+// Note: peak memory here is one bucket, plus the rotated copy's own budget (it partitions the same
+// way), plus the merged-barcode list. That list is the only part that scales with the library at
+// all: 8 bytes per barcode actually corrected, which is the error rate rather than the count -- at
+// 1e-3 per base on a 12 nt barcode, ~1.2% of the distinct barcodes, 38 MB against a library of
+// 8.8 GB. Spilling it too is the upgrade path if a library ever makes it matter.
+CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams& params) {
+    const int L = counts.length();
+    const int pb = counts.spill_prefix_bases();
+    CorrectionResult res;
+
+    // One pass over the spilled buckets does four things at once, because each is a full read of
+    // the partition off disk: the library composition, its distinct count, the census of the pairs
+    // this partition can see, and the rotated copy the second pass needs.
+    UmiComposition comp;
+    comp.length = L;
+    comp.freq.assign(static_cast<size_t>(L), {0.0, 0.0, 0.0, 0.0});
+    double n = 0.0;
+    uint64_t d1 = 0;
+    std::map<uint32_t, uint64_t> sizes;  // ordered: the expectation sums over it
+    const std::string rot_dir =
+        (std::filesystem::path(counts.spill_dir()) / "rotated").string();
+    UmiCounts rotated(L);
+    rotated.enable_spill(rot_dir, counts.spill_budget(), counts.spill_bits());
+
+    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
+        for (const UmiCounts::Entry& e : bucket) {
+            for (int j = 0; j < L; ++j) {
+                const size_t code = static_cast<size_t>((e.key >> (62 - 2 * j)) & 3u);
+                comp.freq[static_cast<size_t>(j)][code] += 1.0;
+            }
+            n += 1.0;
+            ++sizes[e.count];
+            rotated.add(rotate_barcode(e.key, L, pb), e.count);
+        }
+        d1 += d1_census(bucket, pb, L, params.threads);
+    });
+    if (n > 0.0) {
+        for (auto& row : comp.freq) {
+            for (double& v : row) v /= n;
+        }
+    }
+    rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
+        d1 += d1_census(bucket, L - pb, L, params.threads);
+    });
+
+    CorrectionParams sub = params;
+    sub.library_distinct = static_cast<size_t>(n);
+    sub.library_collision = collision_of(comp, L);
+    sub.library_space = comp.effective_space();
+    if (sub.sequencing_error < 0.0) {
+        sub.sequencing_error =
+            solve_umi_error(d1, n, comp, L, SizeHist(sizes.begin(), sizes.end()));
+    }
+    // Never: the same floor the buckets are about to apply, applied HERE too, or the rate reported
+    // is not the rate used. A clean library has no distance-1 excess, the census returns 0, each
+    // bucket quietly corrects at 1e-4 -- and the summary said 0.0, which then propagated into the
+    // error budget as a ratio of zero. Caught by diffing a whole run against its resident twin.
+    if (sub.sequencing_error <= 0.0) sub.sequencing_error = 1e-4;
+
+    auto accumulate = [&res](const CorrectionResult& r) {
+        res.merged += r.merged;
+        res.merged_reads += r.merged_reads;
+        res.merged_by_payload += r.merged_by_payload;
+    };
+
+    // Pass 1: the positions the partition leaves alone.
+    std::vector<uint64_t> merged_keys;
+    sub.scan_from = pb;
+    sub.scan_to = L;
+    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
+        const CorrectionResult r = correct_entries(bucket, L, sub, BarcodeEvidence{}, &sizes);
+        accumulate(r);
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            if (r.root[i] != static_cast<uint32_t>(i)) {
+                merged_keys.push_back(rotate_barcode(bucket[i].key, L, pb));
+            }
+        }
+    });
+    std::sort(merged_keys.begin(), merged_keys.end());
+
+    // Pass 2: the positions it hides, on the rotated copy. A barcode merged in pass 1 is no longer
+    // a molecule, so it is dropped rather than offered a second parent -- otherwise one barcode
+    // could be merged twice and `merged` would count opportunities instead of barcodes.
+    sub.scan_from = L - pb;
+    sub.scan_to = L;
+    std::vector<UmiCounts::Entry> live;
+    rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
+        live.clear();
+        live.reserve(bucket.size());
+        for (const UmiCounts::Entry& e : bucket) {
+            if (!std::binary_search(merged_keys.begin(), merged_keys.end(), e.key)) live.push_back(e);
+        }
+        accumulate(correct_entries(live, L, sub, BarcodeEvidence{}, &sizes));
+    });
+    std::filesystem::remove_all(rot_dir);
+
+    // The per-bucket molecule counts mean nothing on their own -- a bucket is a slice of the
+    // barcode space, not of the molecules -- so they are recomputed here from the totals. Every
+    // merge zeroes exactly one barcode, which is what makes this a subtraction rather than a scan.
+    res.estimated_error = sub.sequencing_error;
+    res.molecules_observed = static_cast<size_t>(n) - res.merged;
+    const double space = sub.library_space;
+    const double m_obs = static_cast<double>(res.molecules_observed);
+    res.saturated = space > 0.0 && n > 0.05 * space;
+    if (space > 0.0 && m_obs < 0.9 * space) {
+        res.molecules_corrected = space * -std::log1p(-m_obs / space);
+    } else {
+        res.molecules_corrected = m_obs;
+        res.saturated = true;
+    }
+    return res;
+}
+
+}  // namespace
+
+CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params,
+                              const BarcodeEvidence& evidence) {
+    if (counts.spilled()) {
+        if (evidence.has_quality() || evidence.has_payload()) {
+            throw MigecError(
+                "correct_umis: barcode evidence is indexed against entries(), which a spilled "
+                "counter does not have. Correct the counter before it spills, or drop the "
+                "evidence deliberately -- ignoring it here would report a merge count from a "
+                "weaker model as if it came from the full one.");
+        }
+        return correct_spilled(counts, params);
+    }
+    CorrectionParams p = params;
+    // A resident table IS the library, so it supplies its own context. Filling it here rather than
+    // inside the core keeps the bucketed and the resident path on one implementation.
+    if (p.library_distinct == 0) {
+        const UmiComposition comp = counts.composition(false);
+        p.library_distinct = counts.distinct();
+        p.library_collision = collision_of(comp, counts.length());
+        p.library_space = comp.effective_space();
+        if (p.sequencing_error < 0.0) {
+            p.sequencing_error = estimate_umi_error(counts, comp, params.threads);
+        }
+    }
+    return correct_entries(counts.entries(), counts.length(), p, evidence);
 }
 
 }  // namespace migec
