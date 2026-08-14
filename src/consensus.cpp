@@ -332,10 +332,15 @@ bool seed_offset(const ConsensusRead& a, const ConsensusRead& b, const Consensus
     const int k = params.seed_length;
     const int la = read_length(a), lb = read_length(b);
     if (la < k || lb < k) return false;
-    // ponytail: a plain map of seed -> first position, and O(n^2) pairs per group. Contig mode
-    // runs on random-primed data where a barcode carries a handful of reads (X1: 1.5% of 10x
-    // groups hold more than one), so the quadratic is over single digits. Index the group once if
-    // a benchmark ever puts hundreds of reads on one barcode.
+    // ponytail: a plain map of seed -> first position, rebuilt per pair. The comment here used to
+    // say the quadratic was "over single digits" because X1 found only 1.5% of 10x groups hold
+    // more than one read -- that is true of ALL groups and false of the ones contig mode is run
+    // on. Measured on `sc5p_v2_hs_PBMC_1k` at `--min-reads 30`: 47,584 molecules averaging 110
+    // reads, the deepest 802. The named ceiling was reached, so the upgrade path was taken -- but
+    // in `place_reads`, by not asking about pairs union-find has already joined, which is exact
+    // and was worth 19.7x. Indexing the group once is the remaining move and is NOT taken: after
+    // the short-circuit the seed scan runs O(components) times per group, not O(reads^2), so
+    // there is no longer a benchmark that justifies it.
     std::unordered_map<std::string_view, int> seeds;
     seeds.reserve(static_cast<size_t>(la - k + 1));
     for (int i = 0; i <= la - k; ++i) {
@@ -361,8 +366,24 @@ bool seed_offset(const ConsensusRead& a, const ConsensusRead& b, const Consensus
 std::vector<std::vector<ConsensusRead>> place_reads(const std::vector<ConsensusRead>& reads,
                                                     const ConsensusParams& params) {
     OffsetUnion uf(reads.size());
+    // Two reads already in one component cannot change the partition, and `join` says so itself --
+    // it returns immediately when the roots match. Asking union-find FIRST is therefore exactly
+    // equivalent and skips the seed scan, which is the expensive half: the pairs it skips are
+    // precisely the ones whose answer `join` would have thrown away.
+    //
+    // This is the common case, not a corner. Reads of one (CB, UMI) are co-terminal in 92% of 10x
+    // groups, so a molecule is a PILE that closes into one component after a handful of joins and
+    // then spends the rest of an 800-read quadratic re-deriving it. Measured on 47,584 molecules
+    // of `sc5p_v2_hs_PBMC_1k`: 640.9 s -> 32.6 s, consensus FASTQ and `mig.tsv` byte-identical.
+    //
+    // ponytail: breaking out of the loop entirely once one component holds every read is also
+    // exact, and was measured at 33.4 s against 32.6 -- nothing, because what remains after the
+    // short-circuit is path-compressed `find` calls at a few ns. Not taken; the ceiling it would
+    // bound is a single group at the 10,000-read cap, and no benchmark asks for it.
     for (size_t i = 0; i < reads.size(); ++i) {
         for (size_t j = i + 1; j < reads.size(); ++j) {
+            int oi = 0, oj = 0;
+            if (uf.find(static_cast<int>(i), oi) == uf.find(static_cast<int>(j), oj)) continue;
             int shift = 0;
             // seed_offset returns offset(j) - offset(i), so join(j, i, shift).
             if (seed_offset(reads[i], reads[j], params, shift)) {
