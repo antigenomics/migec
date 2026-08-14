@@ -26,6 +26,11 @@ ROOT=/projects/tcr_bcr_rnaseq/migec_ctdna
 FASTQ=$ROOT/fastq
 PANEL=$ROOT/panel/panel_named.bed
 MMI=$ROOT/ref/GRCh38.sr.mmi
+# Never: give UMI-VarCal the SYMLINK in our own ref/, not the shared reference path. `ParseFASTA`
+# caches a msgpack index of the FASTA beside it as `<ref>.dic` -- so pointing it at
+# /projects/cdr3_common writes a multi-GB index into a shared, read-mostly reference tree, and a
+# killed run leaves a 0-byte `.dic` there that every later run of every user then "finds".
+LOCALREF=$ROOT/ref/GRCh38.fa
 WORK=$ROOT/umivarcal
 UVDIR=$ROOT/env-uv
 SRC=$ROOT/src-umivarcal
@@ -46,6 +51,14 @@ fastq_for() {
 }
 
 echo "host=$(hostname) job=${SLURM_JOB_ID:-local} threads=$THREADS"
+
+# Never: `if not os.path.isfile(dictPath)` treats a 0-BYTE index as a valid one, so one killed run
+# poisons every run after it with "Unpack failed: incomplete input" from a line that says
+# "Index found". Drop an empty one, here and in the shared tree an earlier attempt polluted.
+for d in "${LOCALREF%.fa}.dic" \
+         /projects/cdr3_common/reference/genome/human/Homo_sapiens.GRCh38.dna.primary_assembly.dic; do
+    [ -f "$d" ] && [ ! -s "$d" ] && { rm -f "$d" && echo "removed empty index $d"; }
+done || true
 
 export MAMBA_ROOT_PREFIX=$ROOT/mamba
 MICROMAMBA=$HOME/bin/micromamba
@@ -117,8 +130,17 @@ process() {
 
     # 12 nt UMI at the read start, the same layout `migec checkout --bc-pattern '0:12'` reads.
     if [ ! -s "$out/extracted.fastq" ]; then
-        "$UVDIR/bin/python" "$SRC/umi-varcal.py" extract -i "$fq" -u 12 -o "$out/extracted.fastq" \
+        # Never: `extract` requires `-f` as well. `Extract.py` reads `config['fasta']` and the tool
+        # exits with "The parameter --fasta | -f is required but missing" -- into its own log, so a
+        # loop that only checks for output sees an empty FASTQ and carries on to align nothing.
+        "$UVDIR/bin/python" "$SRC/umi-varcal.py" extract -i "$fq" -u 12 -f "$LOCALREF" \
+            -o "$out/extracted.fastq" \
             > "$out/extract.log" 2>&1 || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
+    fi
+    # A BAM built from an empty extraction is a few kB and passes `-s`. Rebuild anything that
+    # holds fewer records than the FASTQ it came from could possibly justify.
+    if [ -f "$out/$acc.bam" ] && [ "$(stat -c%s "$out/$acc.bam")" -lt 100000 ]; then
+        rm -f "$out/$acc.bam" "$out/$acc.bam.bai"
     fi
     if [ ! -s "$out/$acc.bam" ]; then
         minimap2 -ax sr -t "$THREADS" "$MMI" "$out/extracted.fastq" 2>/dev/null \
@@ -133,7 +155,7 @@ process() {
             ! -name "$acc.bam.bai" ! -name '*.log' -delete
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \
             "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$out/$acc.bam" -b "$PANEL" \
-            -f "$REF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
+            -f "$LOCALREF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
             || { echo "  call failed for $acc"; tail -5 "$out/call.log"; return 1; }
     fi
     echo "  done $acc (${ARMS[$acc]})"
