@@ -338,6 +338,14 @@ private:
     size_t ev_bytes() const {
         return static_cast<size_t>(ev_err_) * sizeof(float) + static_cast<size_t>(ev_pw_);
     }
+    // The append buffer's ceiling, in ENTRIES, from a ceiling in BYTES. Never: `buffer_umis` is a
+    // count, and a table that carries evidence has entries six times the size of a bare
+    // (key, count) -- so the same count is six times the buffer, and it showed up as peak RSS
+    // growing with the READS on a library whose barcode count was fixed. It is what a bounded
+    // table is bounded against; hold the bytes constant, not the count.
+    size_t buffer_cap() const {
+        return std::max<size_t>(1, buffer_limit_ * sizeof(Entry) / (sizeof(Entry) + ev_bytes()));
+    }
 
     static constexpr size_t kMinBuffer = 4096;
 

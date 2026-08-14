@@ -360,7 +360,19 @@ RefineStats refine(const RefineRequest& request) {
 
     stats.barcodes = counts.distinct();
     stats.table_spilled = counts.spilled();
-    stats.table_bytes = counts.memory_bytes();
+    // What the whole table costs: (key, count) plus this barcode's evidence, per distinct barcode.
+    // Arithmetic on purpose -- it is the number that says whether a library fits, and it stays
+    // meaningful once the table has partitioned itself and most of it is on disk.
+    stats.table_bytes =
+        static_cast<uint64_t>(stats.barcodes) *
+        (sizeof(UmiCounts::Entry) +
+         (request.use_quality
+              ? sizeof(float) * static_cast<size_t>(stats.umi_length + stats.cell_length)
+              : 0) +
+         static_cast<size_t>(pw));
+    // ...and what is actually held while it runs, which is the budget rather than the library once
+    // the partition fires. The pair is the point: one is what it would cost, the other what it did.
+    stats.table_resident_bytes = counts.memory_bytes();
     // The whole barcode: cell then UMI. Correction walks its 3L neighbourhood, so a substitution
     // in either part is found and neither is corrected across the other.
     const int L = stats.umi_length + stats.cell_length;

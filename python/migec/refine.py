@@ -140,8 +140,8 @@ def format_report(summary: dict) -> str:
         f"peak RSS {_bytes(s['peak_rss_bytes'])} of which the barcode table "
         f"{_bytes(s['table_bytes'])}"
         + (
-            " -- past its budget, so the table range-partitioned to disk and correction ran "
-            "in two passes with the key rotated"
+            f", of which {_bytes(s['table_resident_bytes'])} resident -- past its budget, so the "
+            f"table range-partitioned to disk and correction ran in two passes with the key rotated"
             if s.get("table_spilled")
             else ""
         ),

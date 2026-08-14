@@ -690,6 +690,7 @@ PYBIND11_MODULE(_core, m) {
             wl["background_prior"] = st.whitelist.background_prior;
             d["whitelist"] = wl;
             d["table_bytes"] = st.table_bytes;
+            d["table_resident_bytes"] = st.table_resident_bytes;
             d["table_spilled"] = st.table_spilled;
             d["wall_seconds"] = st.wall_seconds;
             d["limited"] = st.limited;

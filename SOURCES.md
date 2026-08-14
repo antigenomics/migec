@@ -245,6 +245,37 @@ McInerney 2014's published fidelities can be checked against.
 | Storage | Never: do not store simulated reads — record the exact command and seed here instead |
 | Provenance | derived (simulated) |
 
+### UMI-tools (github.com/CGATOxford/UMI-tools)
+
+| Item | Value |
+|---|---|
+| Use | comparator for UMI grouping accuracy — the map-first approach: align the raw reads, group on *(position, UMI)* |
+| Cite | Smith, Heger & Sudbery, *Genome Res* 27:491 (2017), doi:10.1101/gr.209601.116 |
+| Get it | `uv pip install --no-build-isolation umi_tools` (v1.1.6 here). Never: it needs `setuptools` present and `distutils`, so on Python 3.12+ install `setuptools` first and pass `--no-build-isolation` |
+| Run | `umi_tools group -I sorted.bam --group-out groups.tsv --umi-separator _` after moving the barcode into the read name |
+| Truth used here | **our** simulator, `tests/synthetic/_sim.py` — `truth_reads.tsv` plus `clones.fa` as the reference to align to |
+| Compared by | `scripts/compare_grouping.py`, scored by `scripts/compare_calib.py`'s adjusted Rand index |
+| Provenance | derived (simulated) |
+
+### fgbio (fulcrumgenomics.github.io/fgbio)
+
+| Item | Value |
+|---|---|
+| Use | the other map-first comparator; `GroupReadsByUmi -s adjacency` is the standard for consensus calling from duplex and single-strand UMIs |
+| Get it | `brew install fgbio` (v4.1.1 here). Never: it needs a **JDK 17 or newer** — a JDK 11 default gives `UnsupportedClassVersionError` from htsjdk, not a version message. `brew install openjdk@21` and point `JAVA_HOME` at it |
+| Run | `fgbio FastqToBam --read-structures <n>M+T`, align carrying `RX`, then `fgbio GroupReadsByUmi -s adjacency -e 1` → `MI` tag per read |
+| Truth used here | as UMI-tools above |
+| Compared by | `scripts/compare_grouping.py` |
+| Provenance | derived (simulated) |
+
+### `assets/grouping_tools.tsv`
+
+| Item | Value |
+|---|---|
+| What | grouping accuracy, wall clock and peak RSS for migec, UMI-tools and fgbio over a clone-diversity and a depth sweep |
+| Regenerate | `python scripts/compare_grouping.py --out DIR --molecules 20000 --clones {1,20,200,20000} --coverage {1.2,2.5,5,10} --umi-error 3e-3 --tsv out.tsv` |
+| Provenance | derived (computed from simulated reads); the drawn conclusion is in `docs/grouping.rst` |
+
 ### Example QC figures in `assets/`
 
 | Item | Value |

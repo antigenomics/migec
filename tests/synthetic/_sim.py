@@ -27,6 +27,7 @@ Truth files written by `simulate()`:
   truth_reads.tsv       read_id, molecule_id, clone_id, umi_true, umi_observed, n_errors
   truth_molecules.tsv   molecule_id, clone_id, umi_true, n_reads, rt_errors, early_pcr_errors
   truth_consensus.fa    molecule_id -> the sequence a perfect assembler would report
+  clones.fa             the clone sequences, as a reference for map-first tools to align to
                         (template + RT errors + any PCR error that reached >50% of the reads)
 """
 
@@ -147,6 +148,13 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
     truth_reads = out / "truth_reads.tsv"
     truth_mols = out / "truth_molecules.tsv"
     truth_cons = out / "truth_consensus.fa"
+    # The clone sequences the molecules were drawn from, as a reference. Map-first UMI tools
+    # (UMI-tools, fgbio) group on (position, UMI) and so need an alignment before they can be
+    # compared with us at all; this is what they align to.
+    truth_clones = out / "clones.fa"
+    with open(truth_clones, "w") as cf:
+        for i, seq in enumerate(clones):
+            cf.write(f">clone{i}\n{seq}\n")
 
     n_reads = 0
     n_collisions = 0
@@ -209,6 +217,7 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         "truth_reads": str(truth_reads),
         "truth_molecules": str(truth_mols),
         "truth_consensus": str(truth_cons),
+        "clones": str(truth_clones),
         "n_reads": n_reads,
         "n_molecules": cfg.n_molecules,
         "n_distinct_umis": len(seen_umis),
