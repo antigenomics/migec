@@ -16,8 +16,8 @@ Methods* 2014) and [MAGERI](https://doi.org/10.1371/journal.pcbi.1005480) (Shuga
 Computational Biology* 2017).
 
 > **Version 2 is under construction.** All three stages work today, with cell barcodes, whitelists,
-> dual-end and positional (10x) layouts, cell calling, QC figures, and `suggest`/`subsample`/`plot`.
-> Index hopping and the published benchmark comparisons are what remain; see
+> dual-end and positional (10x) layouts, mate merging, cell calling, index-hopping estimation, QC
+> figures, and `suggest`/`subsample`/`plot`. The published benchmark comparisons are what remain; see
 > [`ROADMAP.md`](https://github.com/antigenomics/migec/blob/master/ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on branch
 > [`legacy-v1`](https://github.com/antigenomics/migec/tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
 > [1.2.9 release](https://github.com/antigenomics/migec/releases/tag/1.2.9).
@@ -32,7 +32,7 @@ information rather than something to threshold away; and no consensus can repair
 before the first amplification cycle, because it is in every read. migec measures that floor from
 the data and refuses to claim a quality above it.
 
-<p align="center"><img alt="the migec pipeline" src="assets/pipeline.svg" width="42%"></p>
+<p align="center"><img alt="the migec pipeline" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/pipeline.svg" width="42%"></p>
 
 ## Install
 
@@ -145,7 +145,7 @@ TACATAACATACACGTCAGCACGAAACTTGTTGGCCCAGTGTGAATCGCTT
 migec plot cons/          # twenty QC panels with gnuplot, straight off those TSVs
 ```
 
-<p align="center"><img alt="barcode rank plot" src="assets/cell_rank.svg" width="60%"></p>
+<p align="center"><img alt="barcode rank plot" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/cell_rank.svg" width="60%"></p>
 
 Each of these was run against real output ([downstream](https://antigenomics.github.io/migec/downstream.html)):
 
@@ -165,8 +165,9 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
 - Barcode correction uses the evidence that survives at **one read per UMI** — the barcode's own
   base quality and payload agreement, not only the count ratio, which reports zero there
   ([refine](https://antigenomics.github.io/migec/refine.html)).
-- Emitted quality is capped at the **measured** RT/first-cycle floor, Q40 by default, never at the
-  instrument's ([quality floor](https://antigenomics.github.io/migec/quality_floor.html)).
+- Emitted quality is capped at the **measured** RT/first-cycle floor, Q40 by default and fitted
+  from the data with `--pre-amp-error auto`, never taken from the instrument's
+  ([quality floor](https://antigenomics.github.io/migec/quality_floor.html)).
 - Every model-derived number has something model-free beside it: collisions, the barcode error rate,
   the split threshold ([nulls](https://antigenomics.github.io/migec/nulls.html), [barcode space](https://antigenomics.github.io/migec/barcode_space.html)).
 - Nothing scales with the library — a range partition into buckets and a sorted counter array, 22 B
