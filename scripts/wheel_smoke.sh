@@ -25,7 +25,11 @@ adapter=CAGTGGTATCAACGCAGAGT
     printf '@r%s\n%s\n+\n%s\n' "$i" "ACGTACGT${adapter}TTTTCCCCGGGGAAAA" "IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII"
   done
 } > reads.fq
-printf 'S1\t%s\n' "NNNNNNNN${adapter}" | tr 'A-Z' 'a-z' | sed 's/nnnnnnnn/NNNNNNNN/' > bc.txt
+# Never: lowercase the ADAPTER only. Lowercasing the whole line lowercases the sample id too, so
+# checkout writes `co/s1.fq.gz` and the next line asks for `co/S1.fq.gz` -- which passes on macOS,
+# whose filesystem is case-insensitive, and fails on Linux. It failed exactly once, in the 2.4.0
+# publish run, on the first release that ran this script at all.
+printf 'S1\t%s\n' "NNNNNNNN$(printf '%s' "$adapter" | tr 'A-Z' 'a-z')" > bc.txt
 
 migec checkout reads.fq -b bc.txt -o co
 migec refine co/S1.fq.gz -o re
