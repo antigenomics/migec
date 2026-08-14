@@ -7,7 +7,7 @@
 # the molecules actually aligned to each target of a panel inferred from coverage, so
 # "molecules at a site" is a count rather than a mean.
 #
-# Inputs are produced by `integrations/../job/per_site.sbatch` on a cluster:
+# Inputs are produced by `scripts/ctdna_per_site.sbatch` on a cluster:
 #   molecules_per_target.tsv   run, chrom, start, end, gene, molecules
 #   variants.tsv               run, chrom, pos, ref, alt, dp, af
 #   design.tsv                 run_accession, sample_alias
