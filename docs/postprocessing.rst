@@ -14,7 +14,7 @@ aligner, matched molecule-support thresholds:
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 16 14 14 14 12
+   :widths: 26 14 11 11 11 13 14
 
    * - pipeline
      - false calls per sample, 0% arm
@@ -22,24 +22,35 @@ aligner, matched molecule-support thresholds:
      - 0.25%
      - 1%
      - measured VAF at 1%
+     - median depth
    * - **migec + Mutect2**
      - **0.67**
      - 0 of 3
      - 1 of 3
      - **3 of 3**
      - 0.0103
+     - 2,811 molecules
    * - **migec + LoFreq**
      - **2.00**
      - **1 of 3**
      - **3 of 3**
      - **3 of 3**
      - **0.0102**
+     - 2,832 molecules
+   * - no consensus + LoFreq
+     - 5.67
+     - 0 of 3
+     - 3 of 3
+     - 3 of 3
+     - 0.0127
+     - **52,628 reads**
    * - UMIErrorCorrect (own consensus + own caller)
      - 7.67
      - 1 of 3
      - 3 of 3
      - 2 of 2
      - 0.0094
+     - 5,010
 
 Substitutions only, because migec emits no indels by design and 56% of UMIErrorCorrect's calls are
 deletions; both totals are in ``assets/ctdna_callers.tsv``. Detection is at the certified hotspot,
@@ -54,6 +65,34 @@ Note: **UMIErrorCorrect is not losing on evidence.** The median depth at the sit
 7,475 molecules against migec + LoFreq's 4,046 at the matched threshold -- it has *more* molecules
 and still reports 3.8x more calls on a sample where the right answer is none. The difference is in
 what each pipeline does with them, not in how many it has.
+
+What the collapsing itself is worth
+-----------------------------------
+
+The **no consensus** row is the same reads, the same trimming, the same barcode correction, the
+same aligner and the same caller as the migec + LoFreq row. One thing differs: a record is a read
+rather than a molecule. It is the row that says what ``assemble`` is for, and it moves everything:
+
+* **2.8x the false positives** on the certified true negative -- 5.67 calls per sample against
+  2.00.
+* **The measured frequency stops being right.** 0.0127 against a certified 1% (1.27x) and 0.0038
+  against a certified 0.25% (1.52x), where the consensus reads 0.0102 and 0.0022. The gap is an
+  additive floor of 0.1-0.3%, which is what an uncollapsed pileup carries and what a consensus
+  removes.
+* **It detects less, from 38x more depth.** At 0.125% the consensus finds the hotspot in 1 of 3
+  replicates and the read pileup in **0 of 3**, with 197,772x read coverage against 5,903
+  molecules.
+
+Never: **a read count is not a molecule count, and no amount of the first substitutes for the
+second.** 153,675x coverage on a sample whose right answer is "nothing" produced more wrong answers
+than 4,046 molecules did. Depth buys statistical power over a noise process the depth itself does
+not reduce; collapsing reduces the noise process.
+
+Note: the surviving artifact is also *more* concentrated after collapsing -- 77% of migec's
+0%-arm substitutions are ``-> G`` against 41% without the consensus. That is the expected
+direction: the consensus removes the random per-read errors and leaves the common-mode ones, which
+is exactly the class :doc:`detection` says needs a per-position background model rather than a
+threshold.
 
 Two things this does *not* say. It does not say Mutect2 is a better caller than LoFreq in general
 -- both were run at defaults plus the one non-default each needs on consensus input, and that flag

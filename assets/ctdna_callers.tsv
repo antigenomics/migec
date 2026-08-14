@@ -55,6 +55,10 @@ migec-trimmed+lofreq	lofreq	0	3	0.125	0.00125	3	5.33	5.33	1	0.001409	5892
 migec-trimmed+lofreq	lofreq	0	3	0.25	0.0025	3	6.00	6.00	3	0.002248	4804
 migec-trimmed+lofreq	lofreq	0	3	1	0.01	3	6.33	6.33	3	0.010244	2825
 migec-trimmed+lofreq	lofreq	0	3	WT	0	3	2.33	2.33	0	0	4043
+no-consensus+lofreq	lofreq	0	0	0.125	0.00125	3	6.00	6.00	0	0	197772
+no-consensus+lofreq	lofreq	0	0	0.25	0.0025	3	6.67	6.67	3	0.003811	186495
+no-consensus+lofreq	lofreq	0	0	1	0.01	3	5.33	5.33	3	0.012720	52628
+no-consensus+lofreq	lofreq	0	0	WT	0	3	5.67	5.67	0	0	153675
 umierrorcorrect	umierrorcorrect	0	3	0.125	0.00125	3	22.67	10.33	1	0.001425	5619
 umierrorcorrect	umierrorcorrect	0	3	0.25	0.0025	3	25.33	11.67	3	0.002271	6377
 umierrorcorrect	umierrorcorrect	0	3	1	0.01	2	26.50	12.50	2	0.009438	5010

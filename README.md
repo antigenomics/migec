@@ -167,11 +167,12 @@ arm that is a true negative by construction. Three replicates per arm, one panel
 matched molecule-support thresholds, substitutions only — migec emits no indels by design and 56%
 of UMIErrorCorrect's calls are deletions ([post-processing](https://antigenomics.github.io/migec/postprocessing.html), `assets/ctdna_callers.tsv`).
 
-| pipeline | false calls / sample, 0% arm | 0.125% | 0.25% | 1% | VAF at 1% |
-|---|---|---|---|---|---|
-| **migec + Mutect2** | **0.67** | 0/3 | 1/3 | **3/3** | 0.0103 |
-| **migec + LoFreq** | **2.00** | **1/3** | **3/3** | **3/3** | **0.0102** |
-| UMIErrorCorrect (its own consensus **and** caller) | 7.67 | 1/3 | 3/3 | 2/2 | 0.0094 |
+| pipeline | false calls / sample, 0% arm | 0.125% | 0.25% | 1% | VAF at 1% | median depth |
+|---|---|---|---|---|---|---|
+| **migec + Mutect2** | **0.67** | 0/3 | 1/3 | **3/3** | 0.0103 | 2,811 molecules |
+| **migec + LoFreq** | **2.00** | **1/3** | **3/3** | **3/3** | **0.0102** | 2,832 molecules |
+| no consensus + LoFreq | 5.67 | 0/3 | 3/3 | 3/3 | 0.0127 | **52,628 reads** |
+| UMIErrorCorrect (its own consensus **and** caller) | 7.67 | 1/3 | 3/3 | 2/2 | 0.0094 | 5,010 |
 
 **migec + LoFreq matches the best sensitivity at every arm and reports 3.8× fewer false positives on
 the true negative**; migec + Mutect2 reports the fewest of anything measured and pays for it at
@@ -179,6 +180,12 @@ the true negative**; migec + Mutect2 reports the fewest of anything measured and
 both tools emit the *same* consensuses at the same accuracy: MAGERI reports 142 variants of which
 **137 are at positions nothing was injected at**, migec + LoFreq reports 5 and is right about all
 five ([validation](https://antigenomics.github.io/migec/validation.html)).
+
+The **no consensus** row is the same reads, trimming, barcode correction, aligner and caller — only
+a record is a read rather than a molecule. Collapsing cuts false positives 2.8×, makes the measured
+frequency right (1.02× of certified against 1.27×), and **detects more from 38× less depth**: at
+0.125% the consensus finds the hotspot in 1 of 3 replicates and a 197,772× read pileup finds it in
+none. A read count is not a molecule count.
 
 Two flags decide more than the choice of caller, and both are measured rather than argued:
 
