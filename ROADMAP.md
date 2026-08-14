@@ -17,6 +17,10 @@ count. `scripts/spikein_ratio.py` computes the published spike-in validation met
 `scripts/compare_calib.py` scores UMI grouping against Calib by adjusted Rand index with splitting
 and merging reported separately.
 
+**Nothing in the pipeline scales with the library any more.** `checkout`'s counters and `refine`'s
+barcode table both range-partition themselves past a byte budget, and correction follows both into
+the partition in two passes with the key rotated.
+
 **Throughput and footprint**: every stage threads and every stage is byte-identical at any `-t` --
 checkout 1.55 M reads/s end to end (1.70 M matching), refine 1.55 M, assemble 2.47 M, all at 16
 threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
@@ -40,11 +44,10 @@ Everything below is either open or half-open. Nothing else on this page is.
 
 | # | item | milestone | why it is next |
 |---|---|---|---|
-| 1 | Bucketed correction in `refine` | M3 | the table is the last thing in the pipeline that scales with the library. `checkout`'s counters spill and correct in two passes with the key rotated; refine holds its table whole and reports its size |
-| 2 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
-| 3 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
-| 4 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
-| 5 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
+| 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
+| 2 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 3 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
+| 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
 One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
 shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
@@ -294,10 +297,19 @@ model has to use the evidence that survives at one read:
       reads per UMI**, which is where it is worst. On a 1.23 reads/barcode library: 5.25% of 1-read
       molecules, threshold ≥2; on 4.62 reads/barcode: 0%, threshold 1. Never: Reported, never applied —
       every molecule stays in the output
-- [ ] **Note: Bucketed correction.** A range partition on the top b bits splits a barcode from its
-      neighbour for the top b/2 positions, so correction cannot be bucketed naively. The fix is two
-      passes with the key rotated, so every pair shares a bucket in at least one. Until then the
-      table is held whole and its size is reported
+- [x] **Bucketed correction** (2026-08-14). refine's table range-partitions itself past a byte
+      budget and correction follows it, in two passes with the key rotated -- a plain partition
+      splits a barcode from its neighbour for the top b/2 positions and would bound the memory
+      while silently not correcting them. Two things it needed that the counter version did not.
+      The table carries the **evidence**: a `BarcodeEvidence` indexed against `entries()` cannot
+      survive a partition, and dropping it leaves the bucketed run on the count ratio alone, which
+      reports nothing at 1-3 reads/UMI. And the two passes **scan** rather than merge, with one
+      global apply afterwards: a barcode can have a plausible parent on each side of the boundary,
+      and merging inside a pass takes the first rather than the best -- 2 barcodes in 6,591 landed
+      elsewhere than the resident run put them. With both, a partitioned run and a resident one
+      agree on every scalar and on every output file byte for byte
+      (`tests/synthetic/test_refine_bucketed.py`). It also folded the evidence pass into the table
+      pass, so refine now streams the reads twice rather than three times
 - [x] **Cell calling (OrdMag + knee)** and the QC tables. Molecules per cell, never reads; the
       knee reported next to the call and a warning when they disagree by more than 3x. On 500 real
       cells over 20,000 ambient barcodes it calls exactly the 500. `<sample>.cells.tsv`

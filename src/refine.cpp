@@ -53,22 +53,6 @@ uint64_t pack_key_snapped(uint64_t snapped_cell, int cell_length, std::string_vi
     return pack_barcode(joined);
 }
 
-// Surviving molecules per power-of-two bin of their CORRECTED count. A barcode's bin moves when
-// its children are folded in, so this cannot be read off the pre-correction histogram -- and it is
-// computed once rather than per bin, because a scan per bin is O(barcodes x bins) and the barcodes
-// are the thing that scales.
-std::vector<uint64_t> molecules_per_bin(const CorrectionResult& correction, size_t nbins) {
-    std::vector<uint64_t> out(nbins, 0);
-    for (uint32_t c : correction.corrected) {
-        if (!c) continue;
-        size_t idx = 0;
-        while ((c >> idx) > 1) ++idx;
-        if (idx >= nbins) idx = nbins - 1;
-        ++out[idx];
-    }
-    return out;
-}
-
 void bin(std::vector<uint64_t>& histogram, uint64_t n) {
     size_t b = 0;
     while ((n >> b) > 1) ++b;
@@ -287,12 +271,17 @@ RefineStats refine(const RefineRequest& request) {
 
     Stopwatch phase;
     // ---------------------------------------------------------------- pass 1: the barcode table
-    // Counts only. The entry array is not final until every read has been seen, and the evidence
-    // is indexed in parallel with it, so it cannot be filled in the same pass.
+    //
+    // Counts AND evidence, in one pass. The evidence used to be a side array indexed against
+    // `entries()`, which needed the entry array to be final first and so cost a second read of
+    // the input; carried with the counter it is keyed, so it is filled as the reads arrive and it
+    // survives the range partition.
     UmiCounts counts(0);
+    const int pw = request.use_payload ? request.payload_width : 0;
     {
         bool started = false;
         IntakeLimit limit = request.limit;
+        std::vector<float> pos_err;  // scratch, one read's barcode quality
         for_each_read(request, [&](const SourceRead& r) {
             ++stats.reads;
             const std::string_view umi = r.umi;
@@ -318,6 +307,20 @@ RefineStats refine(const RefineRequest& request) {
                         std::to_string(kMaxBarcodeLen) + ")");
                 }
                 counts = UmiCounts(stats.umi_length + stats.cell_length);
+                counts.carry_evidence(pw, request.use_quality);
+                // Never: the partitioned prefix has to fit into the barcode TWICE, because the
+                // second correction pass rotates the key past it and the two prefixes must be
+                // disjoint. A 9 nt barcode has room for 7 bits, not 8, so the request is clamped
+                // here rather than refused -- a short barcode is a reason to partition more
+                // coarsely, not a reason for the stage to fail.
+                const int L0 = stats.umi_length + stats.cell_length;
+                const int max_bits = 2 * (L0 / 2) - 1;
+                if (request.table_budget_bytes && max_bits >= 1) {
+                    counts.enable_spill((out_dir / ".refine_spill").string(),
+                                        request.table_budget_bytes,
+                                        std::min(request.table_bucket_bits, max_bits));
+                }
+                pos_err.assign(static_cast<size_t>(stats.umi_length + stats.cell_length), 0.0f);
                 started = true;
                 if (stats.sample_id.empty()) {
                     const std::string_view bc = tag_value(r.comment, "BC:Z:");
@@ -329,98 +332,44 @@ RefineStats refine(const RefineRequest& request) {
                                  "with " + std::to_string(stats.umi_length) +
                                  " -- these are two runs concatenated, not one sample");
             }
-            counts.add(cell.empty()
-                           ? pack_barcode(umi)
-                           : pack_key_snapped(snap(pack_barcode(cell)), stats.cell_length, umi));
+            const uint64_t key =
+                cell.empty() ? pack_barcode(umi)
+                             : pack_key_snapped(snap(pack_barcode(cell)), stats.cell_length, umi);
+            if (request.use_quality) {
+                // The whole key's quality, cell part first, to line up with the packed key. No QX
+                // means the instrument's quality was not carried; zero is read downstream as
+                // "unknown" and the posterior falls back to the library's global rate.
+                const int L = stats.umi_length + stats.cell_length;
+                for (int j = 0; j < L; ++j) {
+                    const size_t at = static_cast<size_t>(j);
+                    const std::string_view src = at < r.cy.size() ? r.cy : r.qx;
+                    const size_t off = at < r.cy.size() ? at : at - r.cy.size();
+                    pos_err[at] = off < src.size()
+                                      ? static_cast<float>(phred_error(phred_from_char(src[off])))
+                                      : 0.0f;
+                }
+            }
+            counts.add(key, 1, request.use_quality ? pos_err.data() : nullptr,
+                       pw > 0 ? r.seq.substr(0, std::min<size_t>(r.seq.size(),
+                                                                 static_cast<size_t>(pw)))
+                              : std::string_view());
             return true;
         });
     }
     if (!stats.umi_length) throw MigecError("refine: no read carried an RX:Z: tag");
 
-    const std::vector<UmiCounts::Entry>& entries = counts.entries();
-    stats.barcodes = entries.size();
+    stats.barcodes = counts.distinct();
+    stats.table_spilled = counts.spilled();
+    stats.table_bytes = counts.memory_bytes();
     // The whole barcode: cell then UMI. Correction walks its 3L neighbourhood, so a substitution
     // in either part is found and neither is corrected across the other.
     const int L = stats.umi_length + stats.cell_length;
-
-    // Index of `key`, or entries.size() when it is absent. Returning the lower bound unchecked
-    // would be a silent misattribution: a key past the end indexes one element off the evidence
-    // arrays, and a key that merely sorts next to a real one writes another barcode's reads into
-    // its slot. Pass 1 inserts every key the later passes look up, so a miss should be
-    // unreachable -- this is what makes "should be" checkable instead of assumed.
-    auto slot = [&entries](uint64_t key) -> size_t {
-        auto it = std::lower_bound(entries.begin(), entries.end(), key,
-                                   [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
-        if (it == entries.end() || it->key != key) return entries.size();
-        return static_cast<size_t>(it - entries.begin());
-    };
-
-    // ---------------------------------------------------------------- pass 2: the evidence
-    BarcodeEvidence evidence;
-    const int pw = request.use_payload ? request.payload_width : 0;
-    if (request.use_quality) {
-        evidence.position_error.assign(entries.size() * static_cast<size_t>(L), 0.0f);
-    }
-    if (pw > 0) {
-        evidence.payload_width = pw;
-        evidence.payload.assign(entries.size() * static_cast<size_t>(pw), 0);
-    }
-    if (request.use_quality || pw > 0) {
-        for_each_read(request, [&](const SourceRead& r) {
-            const std::string_view umi = r.umi;
-            if (umi.empty()) return true;
-            const std::string_view cell = r.cell;
-            const size_t i = slot(cell.empty()
-                                     ? pack_barcode(umi)
-                                     : pack_key_snapped(snap(pack_barcode(cell)),
-                                                        stats.cell_length, umi));
-            if (i >= entries.size()) return true;
-            if (request.use_quality) {
-                // The whole key's quality, cell part first, to line up with the packed key.
-                std::string qx(r.cy);
-                qx.append(r.qx);
-                for (int j = 0; j < L; ++j) {
-                    // No QX means the instrument's quality was not carried; fall back to the
-                    // global rate by leaving the accumulator at zero, which `correct_umis` reads
-                    // as "unknown" only if the whole barcode is zero.
-                    const double e = j < static_cast<int>(qx.size())
-                                         ? phred_error(phred_from_char(qx[static_cast<size_t>(j)]))
-                                         : 0.0;
-                    evidence.position_error[i * static_cast<size_t>(L) +
-                                            static_cast<size_t>(j)] += static_cast<float>(e);
-                }
-            }
-            if (pw > 0 && evidence.payload[i * static_cast<size_t>(pw)] == 0) {
-                // The first read of a barcode is the draft. A modal base per column would need a
-                // counter per barcode per column, and the draft is only ever compared to another
-                // draft -- it is telling two molecules apart, not calling variants.
-                const size_t n = std::min<size_t>(static_cast<size_t>(pw), r.seq.size());
-                std::copy_n(r.seq.begin(), n,
-                            evidence.payload.begin() +
-                                static_cast<std::ptrdiff_t>(i * static_cast<size_t>(pw)));
-            }
-            return true;
-        });
-        if (request.use_quality) {
-            for (size_t i = 0; i < entries.size(); ++i) {
-                for (int j = 0; j < L; ++j) {
-                    evidence.position_error[i * static_cast<size_t>(L) + static_cast<size_t>(j)] /=
-                        static_cast<float>(entries[i].count);
-                }
-            }
-        }
-    }
-    stats.table_bytes = static_cast<uint64_t>(entries.size()) *
-                        (sizeof(UmiCounts::Entry) +
-                         (request.use_quality ? sizeof(float) * static_cast<size_t>(L) : 0) +
-                         static_cast<size_t>(pw));
-
     stats.table_seconds = phase.seconds();
 
     // ---------------------------------------------------------------- correct
     phase = Stopwatch();
-    stats.threads = worker_count(request.correction.threads, counts.entries().size());
-    const CorrectionResult correction = correct_umis(counts, request.correction, evidence);
+    stats.threads = worker_count(request.correction.threads, stats.barcodes);
+    const CorrectionResult correction = correct_umis(counts, request.correction);
     stats.correct_seconds = phase.seconds();
     phase = Stopwatch();
     stats.merged = correction.merged;
@@ -431,9 +380,30 @@ RefineStats refine(const RefineRequest& request) {
     stats.estimated_error = correction.estimated_error;
     stats.payload_clonality = correction.payload_clonality;
     stats.saturated = correction.saturated;
-    for (uint32_t c : correction.corrected) {
-        if (c > 0) bin(stats.size_histogram, c);
+
+    // Correction answers by KEY, because that is the only answer a range partition can give: the
+    // per-entry `root`/`corrected` arrays are indexed against `entries()`, which a spilled table
+    // does not have. Two resident maps carry it, both O(barcodes actually corrected) -- the error
+    // rate rather than the count.
+    std::unordered_map<uint64_t, uint64_t> to_root;   // child -> the molecule it belongs to
+    std::unordered_map<uint64_t, uint32_t> gained;    // root -> reads its children brought
+    std::unordered_map<uint64_t, uint32_t> children;  // root -> how many children
+    to_root.reserve(correction.merges.size() * 2);
+    for (const CorrectionResult::Merge& mg : correction.merges) {
+        to_root[mg.child] = mg.root;
+        gained[mg.root] += mg.reads;
+        ++children[mg.root];
     }
+    // Reads after correction, for a barcode the table hands over. Zero when it was merged away.
+    auto corrected_of = [&to_root, &gained](uint64_t key, uint32_t own) -> uint32_t {
+        if (to_root.find(key) != to_root.end()) return 0;
+        auto it = gained.find(key);
+        return it == gained.end() ? own : own + it->second;
+    };
+    auto lookup = [&to_root](uint64_t key) {
+        auto it = to_root.find(key);
+        return it == to_root.end() ? key : it->second;
+    };
 
     // ---------------------------------------------------------------- pass 3: rewrite
     //
@@ -476,12 +446,12 @@ RefineStats refine(const RefineRequest& request) {
                 std::string umi = unpack_barcode(rec.umi, h.umi_len);
                 std::string cell = h.cell_len ? unpack_barcode(rec.cell, h.cell_len) : std::string();
                 const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));
-                const size_t i = slot(cell.empty()
-                                          ? pack_barcode(umi)
-                                          : pack_key_snapped(snapped, stats.cell_length, umi));
                 MigRecord out = rec;
-                if (i < entries.size()) {
-                    whole = unpack_barcode(entries[correction.root[i]].key, L);
+                {
+                    whole = unpack_barcode(
+                        lookup(cell.empty() ? pack_barcode(umi)
+                                            : pack_key_snapped(snapped, stats.cell_length, umi)),
+                        L);
                     const std::string new_cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
                     const std::string new_umi = whole.substr(static_cast<size_t>(stats.cell_length));
                     if (new_umi != umi) {
@@ -552,17 +522,9 @@ RefineStats refine(const RefineRequest& request) {
             if (umi.empty()) return;
             const std::string_view cell = tag_value(r.comment, "CB:Z:");
             const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));
-            const size_t i = slot(cell.empty()
-                                     ? pack_barcode(umi)
-                                     : pack_key_snapped(snapped, stats.cell_length, umi));
-            if (i >= entries.size()) {
-                // Unreachable unless pass 1 and pass 3 disagree about the key. Pass the read
-                // through untouched rather than dropping it: emitting a read whose barcode was
-                // not corrected is recoverable, losing it silently is not.
-                append_fastq(dst, r.name, r.comment, r.seq, r.qual);
-                return;
-            }
-            const uint32_t root = correction.root[i];
+            const uint64_t root = lookup(cell.empty()
+                                             ? pack_barcode(umi)
+                                             : pack_key_snapped(snapped, stats.cell_length, umi));
             comment.assign(r.comment);
             // The final barcode is the root's, which already carries the whitelist snap because
             // the snap happened before the table was built. Compare against what the READ said,
@@ -573,7 +535,7 @@ RefineStats refine(const RefineRequest& request) {
             // `comment` and `whole` are the worker's own scratch, reused read after read, and the
             // two halves are views into `whole`: a fresh string plus two substr is four
             // allocations per read on a path every read takes.
-            whole = unpack_barcode(entries[root].key, L);
+            whole = unpack_barcode(root, L);
             const std::string_view new_cell =
                 std::string_view(whole).substr(0, static_cast<size_t>(stats.cell_length));
             const std::string_view new_umi =
@@ -639,54 +601,124 @@ RefineStats refine(const RefineRequest& request) {
     stats.rewrite_seconds = phase.seconds();
 
     // ---------------------------------------------------------------- tables
+    //
+    // One streamed walk of the barcode table, bucket by bucket, in key order, and every table
+    // below is drawn from it. Nothing here is indexed by barcode: what stays resident is the merge
+    // map (the error rate, not the count), the MIG size spectrum (one row per distinct depth), the
+    // per-cell molecule counts (one per cell) and the bin counters. Plots are never made in here:
+    // a figure has to be redrawable from a committed TSV.
+    std::map<uint32_t, std::pair<uint64_t, uint64_t>> spectrum;  // corrected size -> (molecules, reads)
+    std::vector<std::pair<uint64_t, uint32_t>> per_cell;         // (cell key, molecules)
+    struct DepthRow { uint64_t parents = 0, children = 0, child_reads = 0; };
+    std::map<uint32_t, DepthRow> by_depth;  // the PARENT's own reads -> what its children came to
+    std::vector<uint64_t> bin_barcodes, bin_reads, bin_merged, bin_molecules;
+    std::vector<std::vector<std::array<uint32_t, 4>>> bin_comp;
+    uint64_t molecules_total = 0, reads_in_molecules = 0;
+
+    auto grow_bins = [&](size_t b) {
+        if (bin_barcodes.size() > b) return;
+        bin_barcodes.resize(b + 1, 0);
+        bin_reads.resize(b + 1, 0);
+        bin_merged.resize(b + 1, 0);
+        bin_molecules.resize(b + 1, 0);
+        bin_comp.resize(b + 1);
+    };
+
     {
         std::FILE* fh =
             std::fopen((out_dir / (stats.sample_id + ".barcodes.tsv")).string().c_str(), "w");
         if (!fh) throw MigecError("refine: cannot write the barcode table");
         std::fprintf(fh, "cell\tumi\treads\tcorrected_reads\tparent\n");
-        for (size_t i = 0; i < entries.size(); ++i) {
-            const std::string whole = unpack_barcode(entries[i].key, L);
-            const std::string cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
-            const std::string umi = whole.substr(static_cast<size_t>(stats.cell_length));
-            const uint32_t root = correction.root[i];
-            std::fprintf(fh, "%s\t%s\t%u\t%u\t%s\n", cell.empty() ? "." : cell.c_str(),
-                         umi.c_str(), entries[i].count, correction.corrected[i],
-                         root == i ? "." : unpack_barcode(entries[root].key, L).c_str());
-        }
+
+        // A barcode packs MSB-first, so base 0 of the CELL is in the top bits and the whole key
+        // occupies bits 63 down to 64-2L. The cell is therefore the top 2*cell_length bits -- not
+        // "everything above the UMI", which is only the same thing when cell and UMI happen to
+        // fill all 32 bases. The buckets arrive in key order and the cell is the high bits, so a
+        // cell's molecules are contiguous across the whole walk: no grouping pass and no map.
+        const int cell_shift = 64 - 2 * std::max(1, stats.cell_length);
+        uint64_t cur_cell = 0;
+        uint32_t cell_n = 0;
+        bool cell_started = false;
+        std::string whole, parent;
+
+        counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                                   const BarcodeEvidence& ev) {
+            for (size_t i = 0; i < bucket.size(); ++i) {
+                const uint64_t key = bucket[i].key;
+                const uint32_t own = bucket[i].count;
+                const uint64_t root = lookup(key);
+                const uint32_t corr = corrected_of(key, own);
+
+                whole = unpack_barcode(key, L);
+                if (root != key) parent = unpack_barcode(root, L);
+                std::fprintf(fh, "%s\t%s\t%u\t%u\t%s\n",
+                             stats.cell_length
+                                 ? whole.substr(0, static_cast<size_t>(stats.cell_length)).c_str()
+                                 : ".",
+                             whole.c_str() + stats.cell_length, own, corr,
+                             root == key ? "." : parent.c_str());
+
+                if (corr > 0) {
+                    auto& s = spectrum[corr];
+                    ++s.first;
+                    s.second += corr;
+                    bin(stats.size_histogram, corr);
+                    ++molecules_total;
+                    reads_in_molecules += corr;
+                    if (stats.cell_length > 0) {
+                        const uint64_t cell_key = key >> cell_shift;
+                        if (!cell_started || cell_key != cur_cell) {
+                            if (cell_started) per_cell.emplace_back(cur_cell, cell_n);
+                            cur_cell = cell_key;
+                            cell_n = 0;
+                            cell_started = true;
+                        }
+                        ++cell_n;
+                    }
+                    size_t mb = 0;
+                    while ((corr >> mb) > 1) ++mb;
+                    grow_bins(mb);
+                    ++bin_molecules[mb];
+                }
+
+                // Per MIG-size bin, on the barcode's own count: error children pile up at low
+                // counts, and finding them at high counts means the correction is merging real
+                // molecules.
+                size_t b = 0;
+                while ((own >> b) > 1) ++b;
+                grow_bins(b);
+                ++bin_barcodes[b];
+                bin_reads[b] += own;
+                if (root != key) ++bin_merged[b];
+                if (pw > 0 && ev.has_payload()) {
+                    if (bin_comp[b].empty()) bin_comp[b].assign(static_cast<size_t>(pw), {});
+                    for (int j = 0; j < pw; ++j) {
+                        const uint8_t code = base_code(
+                            ev.payload[i * static_cast<size_t>(pw) + static_cast<size_t>(j)]);
+                        if (code != kInvalidBase) ++bin_comp[b][static_cast<size_t>(j)][code];
+                    }
+                }
+
+                // The barcode error rate against the PARENT's own depth. A parent carrying c reads
+                // had c*L barcode bases to be miscalled, and its children hold what was miscalled.
+                if (root == key) {
+                    DepthRow& row = by_depth[own];
+                    ++row.parents;
+                    const auto ch = children.find(key);
+                    if (ch != children.end()) {
+                        row.children += ch->second;
+                        row.child_reads += gained[key];
+                    }
+                }
+            }
+        });
+        if (cell_started) per_cell.emplace_back(cur_cell, cell_n);
         std::fclose(fh);
     }
 
     // ---------------------------------------------------------------- cell calling
     if (stats.cell_length > 0) {
-        // Molecules per cell, after correction. Molecules, never reads: a cell is a set of
-        // captured molecules, and read depth is amplification.
-        std::vector<std::pair<uint64_t, uint32_t>> per_cell;  // (cell key, molecules)
-        {
-            // A barcode packs MSB-first, so base 0 of the CELL is in the top bits and the whole
-            // key occupies bits 63 down to 64-2L. The cell is therefore the top 2*cell_length
-            // bits -- not "everything above the UMI", which is only the same thing when cell and
-            // UMI happen to fill all 32 bases.
-            const int shift = 64 - 2 * stats.cell_length;
-            uint64_t current = 0;
-            uint32_t n = 0;
-            bool started = false;
-            // entries are sorted by the packed key, and the cell occupies the HIGH bits, so a
-            // cell's molecules are already contiguous -- no grouping pass and no map.
-            for (size_t i = 0; i < entries.size(); ++i) {
-                if (correction.corrected[i] == 0) continue;
-                const uint64_t cell_key = entries[i].key >> shift;
-                if (!started || cell_key != current) {
-                    if (started) per_cell.emplace_back(current, n);
-                    current = cell_key;
-                    n = 0;
-                    started = true;
-                }
-                ++n;
-            }
-            if (started) per_cell.emplace_back(current, n);
-        }
         stats.cells_observed = per_cell.size();
-
         std::vector<uint32_t> sizes;
         sizes.reserve(per_cell.size());
         for (const auto& kv : per_cell) sizes.push_back(kv.second);
@@ -775,35 +807,31 @@ RefineStats refine(const RefineRequest& request) {
     }
 
     // ---------------------------------------------------------------- diagnostics
-    // Three tables, all drawn from what is already held. Plots are never made in here: a figure
-    // has to be redrawable from a committed TSV.
     {
-        // The barcode-rank curve, Cell Ranger's plot. Log-spaced ranks, because the full curve is
-        // one row per barcode and that is hundreds of millions of them for a figure that is read
-        // on a log axis anyway.
-        std::vector<uint32_t> sorted;
-        sorted.reserve(entries.size());
-        for (uint32_t c : correction.corrected) {
-            if (c > 0) sorted.push_back(c);
-        }
-        std::sort(sorted.begin(), sorted.end(), std::greater<uint32_t>());
-        uint64_t total_reads = 0;
-        for (uint32_t c : sorted) total_reads += c;
-
+        // The barcode-rank curve, Cell Ranger's plot, read off the size spectrum rather than off a
+        // sorted array of every molecule's count: the curve is a function of the spectrum, and the
+        // array was the one allocation left here that scaled with the library. Log-spaced ranks,
+        // because the full curve is one row per barcode and that is hundreds of millions of them
+        // for a figure that is read on a log axis anyway.
         std::FILE* fh =
             std::fopen((out_dir / (stats.sample_id + ".rank.tsv")).string().c_str(), "w");
         if (!fh) throw MigecError("refine: cannot write the rank table");
         std::fprintf(fh, "rank\treads\tcumulative_reads\tcumulative_fraction\n");
         uint64_t cum = 0;
-        size_t next = 0;
-        for (size_t i = 0; i < sorted.size(); ++i) {
-            cum += sorted[i];
-            if (i == next || i + 1 == sorted.size()) {
-                std::fprintf(fh, "%zu\t%u\t%llu\t%.6f\n", i + 1, sorted[i],
-                             static_cast<unsigned long long>(cum),
-                             total_reads ? static_cast<double>(cum) /
-                                               static_cast<double>(total_reads) : 0.0);
-                next = std::max(next + 1, static_cast<size_t>(static_cast<double>(next) * 1.05));
+        size_t rank = 0, next = 0;
+        for (auto it = spectrum.rbegin(); it != spectrum.rend(); ++it) {
+            for (uint64_t k = 0; k < it->second.first; ++k) {
+                cum += it->first;
+                if (rank == next || rank + 1 == molecules_total) {
+                    std::fprintf(fh, "%zu\t%u\t%llu\t%.6f\n", rank + 1, it->first,
+                                 static_cast<unsigned long long>(cum),
+                                 reads_in_molecules
+                                     ? static_cast<double>(cum) /
+                                           static_cast<double>(reads_in_molecules)
+                                     : 0.0);
+                    next = std::max(next + 1, static_cast<size_t>(static_cast<double>(next) * 1.05));
+                }
+                ++rank;
             }
         }
         std::fclose(fh);
@@ -820,22 +848,15 @@ RefineStats refine(const RefineRequest& request) {
         //
         // It costs one row per distinct depth, which is bounded by the deepest molecule and is a
         // few thousand rows on any real library -- not one row per molecule.
-        std::map<uint32_t, std::pair<uint64_t, uint64_t>> spectrum;  // size -> (molecules, reads)
-        for (uint32_t c : correction.corrected) {
-            if (c == 0) continue;
-            auto& e = spectrum[c];
-            ++e.first;
-            e.second += c;
-        }
         std::FILE* sf =
             std::fopen((out_dir / (stats.sample_id + ".sizes.tsv")).string().c_str(), "w");
         if (!sf) throw MigecError("refine: cannot write the size spectrum");
         std::fprintf(sf, "size\tlog1p_size\tmolecules\treads\n");
-        for (const auto& [size, counts] : spectrum) {
+        for (const auto& [size, counts_at] : spectrum) {
             std::fprintf(sf, "%u\t%.6f\t%llu\t%llu\n", size,
                          std::log1p(static_cast<double>(size)),
-                         static_cast<unsigned long long>(counts.first),
-                         static_cast<unsigned long long>(counts.second));
+                         static_cast<unsigned long long>(counts_at.first),
+                         static_cast<unsigned long long>(counts_at.second));
         }
         std::fclose(sf);
     }
@@ -878,19 +899,6 @@ RefineStats refine(const RefineRequest& request) {
         // unreachable in principle. That is why `error_at_depth` is read where correction is
         // near-complete instead of averaged over every molecule, and why the depth it was read at
         // travels with it.
-        struct Row { uint64_t parents = 0, children = 0, child_reads = 0; };
-        std::map<uint32_t, Row> by_depth;  // the PARENT's own reads -> what its children came to
-        for (size_t i = 0; i < entries.size(); ++i) {
-            const uint32_t root = correction.root[i];
-            if (root == i) {
-                ++by_depth[entries[i].count].parents;
-            } else {
-                Row& r = by_depth[entries[root].count];
-                ++r.children;
-                r.child_reads += entries[i].count;
-            }
-        }
-
         const double Lf = static_cast<double>(L);
         const double ceiling = 3.0 * Lf;  // distinct distance-1 neighbours a barcode can have
         // Deep enough that a child almost always has its parent in the table, so the count is not
@@ -957,30 +965,6 @@ RefineStats refine(const RefineRequest& request) {
         std::fclose(ef);
     }
     {
-        // Per MIG-size bin: how much of it was error, and how diverse the sequence is there.
-        // Error children pile up at low counts; finding them at high counts means the correction
-        // is merging real molecules, and the sequence entropy is what says whether a bin holds
-        // one artefact repeated or a real population.
-        const size_t nbins = stats.size_histogram.size() + 1;
-        std::vector<uint64_t> barcodes(nbins, 0), merged_in(nbins, 0), reads_in(nbins, 0);
-        std::vector<std::vector<std::array<uint32_t, 4>>> comp(nbins);
-        for (size_t i = 0; i < entries.size(); ++i) {
-            size_t b = 0;
-            while ((entries[i].count >> b) > 1) ++b;
-            if (b >= nbins) b = nbins - 1;
-            ++barcodes[b];
-            reads_in[b] += entries[i].count;
-            if (correction.root[i] != i) ++merged_in[b];
-            if (pw > 0) {
-                if (comp[b].empty()) comp[b].assign(static_cast<size_t>(pw), {});
-                for (int j = 0; j < pw; ++j) {
-                    const uint8_t code =
-                        base_code(evidence.payload[i * static_cast<size_t>(pw) +
-                                                   static_cast<size_t>(j)]);
-                    if (code != kInvalidBase) ++comp[b][static_cast<size_t>(j)][code];
-                }
-            }
-        }
         // What is left over: a surviving barcode that still looks like a child of a surviving
         // neighbour is one the posterior declined to merge. Counting those per bin gives a
         // residual false-molecule rate measured on this library rather than derived.
@@ -990,77 +974,130 @@ RefineStats refine(const RefineRequest& request) {
         // the residual is worst -- the same trap the correction posterior itself fell into. The
         // payload is what still separates them at one read: a neighbour whose reads agree on the
         // molecule is a child whatever the counts say.
+        //
+        // Never: the scan is PAIRWISE, so it is bucketed exactly as the correction is -- pass 1
+        // over the partition as it stands owns the positions the prefix does not touch, pass 2
+        // over a rotated copy owns the ones it hides. Scanning every position within a bucket
+        // instead would silently miss every pair that crosses a boundary, which on a 12 nt barcode
+        // partitioned 8 ways is a third of them.
+        grow_bins(0);
+        const size_t nbins = bin_barcodes.size();
         std::vector<uint64_t> suspected(nbins, 0);
-        {
-            const int width = L;
-            // Threaded, and it is the whole reason this is not the serial tail any more: the scan
-            // is 3L binary searches per surviving barcode, which measured 0.53 s of a 2.17 s run on
-            // 2 M reads -- a quarter of refine, on one core, after everything else had been
-            // parallelised. It reads the barcode table and the payload draft and writes nothing
-            // shared, so a per-worker bin counter merged afterwards is the whole change; the
-            // counters are integers, so the merge is order-independent and `-t` still changes
-            // nothing but the clock.
-            std::vector<std::vector<uint64_t>> per_worker(
-                static_cast<size_t>(stats.threads), std::vector<uint64_t>(nbins, 0));
-            parallel_for(entries.size(), stats.threads, [&](size_t i, int w) {
-                if (correction.corrected[i] == 0) return;
-                const uint32_t mine = correction.corrected[i];
-                bool looks_like_a_child = false;
-                for (int j = 0; j < width && !looks_like_a_child; ++j) {
-                    const int shift = 62 - 2 * j;
-                    const uint64_t cur = (entries[i].key >> shift) & 3u;
-                    for (uint64_t b = 0; b < 4; ++b) {
-                        if (b == cur) continue;
-                        const uint64_t want =
-                            (entries[i].key & ~(uint64_t{3} << shift)) | (b << shift);
-                        const size_t at = slot(want);
-                        if (at >= entries.size() || correction.corrected[at] == 0) continue;
-                        if (correction.corrected[at] >= 20u * mine) {
-                            looks_like_a_child = true;
-                            break;
-                        }
-                        // ...and payload agreement is only evidence when two unrelated barcodes
-                        // do NOT agree anyway. On a clonal library they do -- measured here at
-                        // 0.80 on an HIV amplicon -- and using it would call almost every
-                        // singleton a residual child. `correct_umis` already discounts payload
-                        // agreement by exactly this number; the residual estimate has to as well.
-                        if (pw > 0 && correction.payload_clonality < 0.5 &&
-                            correction.corrected[at] >= mine) {
-                            int mism = 0, cmp = 0;
-                            for (int k = 0; k < pw; ++k) {
-                                const char x = evidence.payload[i * static_cast<size_t>(pw) +
-                                                                static_cast<size_t>(k)];
-                                const char y = evidence.payload[at * static_cast<size_t>(pw) +
-                                                                static_cast<size_t>(k)];
-                                if (!x || !y || x == 'N' || y == 'N') continue;
-                                ++cmp;
-                                mism += x != y;
-                            }
-                            if (cmp >= 8 && mism * 20 <= cmp) {
+        const int rpb = counts.spilled() ? counts.spill_prefix_bases() : 0;
+
+        // Flagged in pass 1, so pass 2 does not count the same barcode twice. Sorted keys, the
+        // same shape and the same cost class as the merged-barcode list `correct_umis` keeps.
+        std::vector<uint64_t> flagged;
+
+        // One pass over one partition. `unrotate` turns a rotated key back into the one the merge
+        // map and the size bins are keyed on; the payload travels with the table either way.
+        auto scan = [&](const UmiCounts& table, int j_from, int j_to, int unrotate, bool collect) {
+            table.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
+                                      const BarcodeEvidence& ev) {
+                // Threaded, and it is the whole reason this is not the serial tail any more: the
+                // scan is 3L binary searches per surviving barcode, which measured 0.53 s of a
+                // 2.17 s run on 2 M reads -- a quarter of refine, on one core, after everything
+                // else had been parallelised. It reads the table and the payload draft and writes
+                // nothing shared, so a per-worker bin counter merged afterwards is the whole
+                // change; the counters are integers, so the merge is order-independent and `-t`
+                // still changes nothing but the clock.
+                std::vector<std::vector<uint64_t>> per_worker(
+                    static_cast<size_t>(stats.threads), std::vector<uint64_t>(nbins, 0));
+                std::vector<std::vector<uint64_t>> found(static_cast<size_t>(stats.threads));
+                // Corrected counts once per bucket, not once per probe. Each barcode probes 3L
+                // neighbours, so reading the merge map inside the loop would cost 3L hash lookups
+                // a barcode where two suffice.
+                std::vector<uint32_t> corr(bucket.size());
+                for (size_t i = 0; i < bucket.size(); ++i) {
+                    corr[i] = corrected_of(rotate_barcode(bucket[i].key, L, unrotate),
+                                           bucket[i].count);
+                }
+                auto present = [&bucket](uint64_t key) -> size_t {
+                    auto it = std::lower_bound(
+                        bucket.begin(), bucket.end(), key,
+                        [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
+                    if (it == bucket.end() || it->key != key) return bucket.size();
+                    return static_cast<size_t>(it - bucket.begin());
+                };
+                parallel_for(bucket.size(), stats.threads, [&](size_t i, int w) {
+                    const uint32_t mine = corr[i];
+                    if (mine == 0) return;
+                    const uint64_t plain = rotate_barcode(bucket[i].key, L, unrotate);
+                    if (!collect &&
+                        std::binary_search(flagged.begin(), flagged.end(), plain)) return;
+                    bool looks_like_a_child = false;
+                    for (int j = j_from; j < j_to && !looks_like_a_child; ++j) {
+                        const int shift = 62 - 2 * j;
+                        const uint64_t cur = (bucket[i].key >> shift) & 3u;
+                        for (uint64_t b = 0; b < 4; ++b) {
+                            if (b == cur) continue;
+                            const size_t at =
+                                present((bucket[i].key & ~(uint64_t{3} << shift)) | (b << shift));
+                            if (at >= bucket.size()) continue;
+                            const uint32_t theirs = corr[at];
+                            if (theirs == 0) continue;
+                            if (theirs >= 20u * mine) {
                                 looks_like_a_child = true;
                                 break;
                             }
+                            // ...and payload agreement is only evidence when two unrelated
+                            // barcodes do NOT agree anyway. On a clonal library they do --
+                            // measured at 0.80 on an HIV amplicon -- and using it would call
+                            // almost every singleton a residual child. `correct_umis` already
+                            // discounts payload agreement by exactly this number; the residual
+                            // estimate has to as well.
+                            if (pw > 0 && ev.has_payload() &&
+                                correction.payload_clonality < 0.5 && theirs >= mine) {
+                                int mism = 0, cmp = 0;
+                                for (int k = 0; k < pw; ++k) {
+                                    const char x = ev.payload[i * static_cast<size_t>(pw) +
+                                                              static_cast<size_t>(k)];
+                                    const char y = ev.payload[at * static_cast<size_t>(pw) +
+                                                              static_cast<size_t>(k)];
+                                    if (!x || !y || x == 'N' || y == 'N') continue;
+                                    ++cmp;
+                                    mism += x != y;
+                                }
+                                if (cmp >= 8 && mism * 20 <= cmp) {
+                                    looks_like_a_child = true;
+                                    break;
+                                }
+                            }
                         }
                     }
+                    if (!looks_like_a_child) return;
+                    size_t bidx = 0;
+                    while ((mine >> bidx) > 1) ++bidx;
+                    if (bidx >= nbins) bidx = nbins - 1;
+                    ++per_worker[static_cast<size_t>(w)][bidx];
+                    if (collect) found[static_cast<size_t>(w)].push_back(plain);
+                });
+                for (const std::vector<uint64_t>& mine : per_worker) {
+                    for (size_t b = 0; b < nbins; ++b) {
+                        suspected[b] += mine[b];
+                        stats.suspected_residual += mine[b];
+                    }
                 }
-                if (!looks_like_a_child) return;
-                size_t bidx = 0;
-                while ((mine >> bidx) > 1) ++bidx;
-                if (bidx >= nbins) bidx = nbins - 1;
-                ++per_worker[static_cast<size_t>(w)][bidx];
+                for (const std::vector<uint64_t>& mine : found) {
+                    flagged.insert(flagged.end(), mine.begin(), mine.end());
+                }
             });
-            for (const std::vector<uint64_t>& mine : per_worker) {
-                for (size_t b = 0; b < nbins; ++b) {
-                    suspected[b] += mine[b];
-                    stats.suspected_residual += mine[b];
-                }
-            }
+        };
+
+        scan(counts, rpb, L, 0, rpb > 0);
+        if (rpb > 0) {
+            std::sort(flagged.begin(), flagged.end());
+            const std::string rot_dir = (out_dir / ".refine_spill" / "residual").string();
+            const UmiCounts rotated = counts.rotated_copy(rpb, rot_dir);
+            scan(rotated, L - rpb, L, L - rpb, false);
+            std::error_code rm_ec;
+            std::filesystem::remove_all(rot_dir, rm_ec);
         }
-        const std::vector<uint64_t> surviving_in = molecules_per_bin(correction, nbins);
+
         // The smallest size at which the residual rate is acceptable. Reported, never applied.
         for (size_t b = 0; b < nbins; ++b) {
-            if (!barcodes[b]) continue;
-            const uint64_t surviving = surviving_in[b];
+            if (!bin_barcodes[b]) continue;
+            const uint64_t surviving = bin_molecules[b];
             const double fdr = surviving ? static_cast<double>(suspected[b]) /
                                                static_cast<double>(surviving) : 0.0;
             if (b == 0) stats.residual_fdr_at_one = fdr;
@@ -1075,10 +1112,10 @@ RefineStats refine(const RefineRequest& request) {
         std::fprintf(fh, "min_reads\tmax_reads\tbarcodes\treads\tmerged\tfraction_erroneous\t"
                          "molecules\tsuspected_residual\tresidual_fdr\tpayload_entropy_bits\n");
         for (size_t b = 0; b < nbins; ++b) {
-            if (!barcodes[b]) continue;
+            if (!bin_barcodes[b]) continue;
             double entropy = 0.0;
             int scored = 0;
-            for (const std::array<uint32_t, 4>& col : comp[b]) {
+            for (const std::array<uint32_t, 4>& col : bin_comp[b]) {
                 const double n_col = col[0] + col[1] + col[2] + col[3];
                 if (n_col < 2) continue;
                 double h = 0.0;
@@ -1090,13 +1127,14 @@ RefineStats refine(const RefineRequest& request) {
                 entropy += h;
                 ++scored;
             }
-            const uint64_t surviving = surviving_in[b];
+            const uint64_t surviving = bin_molecules[b];
             std::fprintf(fh, "%llu\t%llu\t%llu\t%llu\t%llu\t%.6f\t%llu\t%llu\t%.6f\t%.4f\n",
                          1ull << b, (1ull << (b + 1)) - 1,
-                         static_cast<unsigned long long>(barcodes[b]),
-                         static_cast<unsigned long long>(reads_in[b]),
-                         static_cast<unsigned long long>(merged_in[b]),
-                         static_cast<double>(merged_in[b]) / static_cast<double>(barcodes[b]),
+                         static_cast<unsigned long long>(bin_barcodes[b]),
+                         static_cast<unsigned long long>(bin_reads[b]),
+                         static_cast<unsigned long long>(bin_merged[b]),
+                         static_cast<double>(bin_merged[b]) /
+                             static_cast<double>(bin_barcodes[b]),
                          static_cast<unsigned long long>(surviving),
                          static_cast<unsigned long long>(suspected[b]),
                          surviving ? static_cast<double>(suspected[b]) /
@@ -1104,6 +1142,13 @@ RefineStats refine(const RefineRequest& request) {
                          scored ? entropy / scored : 0.0);
         }
         std::fclose(fh);
+    }
+
+    // The partition is a temporary of this run. Best effort: failing to remove it is not a reason
+    // to lose a result that is already written.
+    if (counts.spilled()) {
+        std::error_code rm_ec;
+        std::filesystem::remove_all(out_dir / ".refine_spill", rm_ec);
     }
 
     stats.wall_seconds = clock.seconds();

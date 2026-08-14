@@ -30,6 +30,7 @@ def run(
     threads: int = 0,
     limit_reads: int = 0,
     limit_umis: int = 0,
+    table_budget_bytes: int = 1 << 30,
 ) -> dict:
     """Correct the barcodes in a checkout-tagged FASTQ, writing into `out_dir`.
 
@@ -47,6 +48,7 @@ def run(
         "" if mig_inputs else str(reads), str(out), sample_id, use_quality, use_payload,
         payload_width, min_posterior, expect_cells, str(cell_whitelist), min_whitelist_posterior,
         target_fdr, gzip_level, threads, limit_reads, limit_umis, mig_inputs,
+        table_budget_bytes,
     )
     summary["input"] = str(reads)
     summary["mig_input"] = mig_inputs
@@ -136,7 +138,13 @@ def format_report(summary: dict) -> str:
         f"{_dur(s['correct_seconds'])} correction + {_dur(s['rewrite_seconds'])} rewrite, "
         f"on {s['threads']} threads",
         f"peak RSS {_bytes(s['peak_rss_bytes'])} of which the barcode table "
-        f"{_bytes(s['table_bytes'])}",
+        f"{_bytes(s['table_bytes'])}"
+        + (
+            " -- past its budget, so the table range-partitioned to disk and correction ran "
+            "in two passes with the key rotated"
+            if s.get("table_spilled")
+            else ""
+        ),
         "",
         f"{'MIG size':>12}{'molecules':>12}{'share':>9}",
     ]
