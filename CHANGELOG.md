@@ -4,6 +4,35 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+### `--pre-amp-error auto` fits the floor instead of naming it
+
+The cap on every emitted quality is the error that was already in the molecule before
+amplification, and until now it was a named bracket: `rt` 1e-4, `medium` 1e-5, `high` 1e-6. It can
+be measured on the dataset in front of you, and `auto` does it -- X2's estimator, run on migec's
+own consensuses rather than on a bespoke one:
+
+```bash
+migec assemble out/S1.fq.gz -o cons/ --pre-amp-error auto
+```
+
+Molecules at 20 reads or more have suppressed sequencing error to nothing, so what they still get
+wrong against the library's modal sequence is what was there before the first cycle. Injected
+1e-4 comes back as 1.20e-4 [7.94e-5, 1.75e-4] and injected 1e-5 as 1.58e-5 [8.14e-6, 2.76e-5]; with
+no injected error at all the answer is the interval's upper end, 9.56e-6, because a floor of zero
+is a quality of infinity.
+
+It refuses more often than it answers, and that is the point. A diverse library has no monomorphic
+position to score, so "disagrees with the modal base" means "is a different molecule" and the
+number that would come out is the library's diversity; a shallow library has no molecule deep
+enough for the curve to have flattened. Both refuse, fall back to the named `rt` class, and say
+why -- in the report and in the new `assemble.pre_amp_error.tsv`, which carries every input the
+fit rested on next to the fit.
+
+It costs a second assembly pass, so it is opt-in: the consensus sequences do not depend on the
+floor, only the emitted quality does, so a probe assembly runs, is read back and is deleted.
+
 ## 2.3.0 — 2026-08-14
 
 **The intermediate is a partition now, end to end**, and the `.mig` format is at v2 (a reader takes

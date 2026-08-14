@@ -40,8 +40,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 
 | # | item | milestone | why it is next |
 |---|---|---|---|
-| 1 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
-| 2 | `--rt-error auto` | M1 | falls straight out of (1). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
+| 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
 | 3 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
 | 4 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
 | 5 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
@@ -140,10 +139,17 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       deliverable is a molecule count. Refused with `--contig`
 - [x] **Coverage capped at 10,000 reads per barcode into the consensus** (10x's rule). Never: the cap
       is on the reads consensed, never on the reads counted
-- [ ] `--pre-amp-error auto`, fitted per dataset rather than taken from a named class. Note: the
-      flag was `--rt-error` and that name is kept as an alias, but only an RNA library has a
+- [x] **`--pre-amp-error auto`** (2026-08-14), fitted per dataset rather than taken from a named
+      class: X2's estimator run on migec's own consensuses. Molecules at >= 20 reads, the library's
+      modal sequence with one vote per molecule, real variation and divergent templates excluded,
+      and the residual is the floor. Injected 1e-4 -> 1.20e-4 [7.94e-5, 1.75e-4]; injected 1e-5 ->
+      1.58e-5 [8.14e-6, 2.76e-5]; injected 0 -> the bound 9.56e-6. Never: it REFUSES rather than
+      guessing -- a diverse library (every position polymorphic) and a shallow one (no molecule
+      deep enough) both fall back to the named class and say why, in the report and in
+      `assemble.pre_amp_error.tsv`. Costs a second assembly pass, which is why it is opt-in. Note:
+      the flag was `--rt-error` and that name is kept as an alias, but only an RNA library has a
       reverse transcription step -- on a DNA library the same floor is library-prep damage plus the
-      first PCR cycle, so `auto` has two chemistries to fit, not one
+      first PCR cycle. `auto` fits the floor, not what made it
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
 - Gate: per-base error ≤1e-5 at coverage ≥5 Done: (`tests/synthetic/test_assemble.py`, stratified by
   depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
@@ -264,9 +270,13 @@ model has to use the evidence that survives at one read:
       200-500 bases. It is spread evenly over all 23 anchor positions, none polymorphic, and
       matches the independently measured 0.55% one-base-short rate. Reported as a diagnostic of the
       primer and left out of `error()`
-- [ ] Three error-rate estimators, sequencing vs quality-independent separation *of the template*
-      (the pattern bases can only calibrate the primer, so the polymerase/RT split needs a
-      different standard)
+- [x] **Sequencing vs quality-independent separation *of the template*** (2026-08-14). The pattern
+      bases can only calibrate the primer, so the standard is the template itself: at 20+ reads a
+      consensus has suppressed sequencing error to nothing, and what it still gets wrong against
+      the library's modal sequence is what was in the molecule before amplification.
+      `--pre-amp-error auto` (M1) is that measurement. Still open, and it is data rather than an
+      estimator: splitting the floor into RT and first-cycle PCR needs the same template through
+      both chemistries
 - [ ] Correction posterior: birthday prior with Rényi-2 collision entropy, phred, and a
       polymerase mixture component for early-cycle PCR children. The distance-1 background comes
       from X3's column shuffle, not from `C(n,2)·P_coll·shell`

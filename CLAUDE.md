@@ -233,9 +233,8 @@ correction is written up in `project/review-algorithms.md`.
   V(D)J RT. Never: it is the ONE-MOLECULE floor and every record we emit is one molecule -- 10x's
   Q60 is for bases covered by >=2 UMIs, and combining molecules is arda's job. `--rt-error` names
   the class instead of guessing: `rt` 1e-4 (default, Q40), `medium` 1e-5, `high` 1e-6, or the rate
-  (TSO500 v2 is 7.37e-5). `--rt-error auto`
-  still fits per dataset (the floor is a property of the enzyme and cycle count), but the
-  **default is 1e-4**. Note: Still an upper bound — that library is 49.6% occupied on a 9 nt barcode
+  (TSO500 v2 is 7.37e-5). `--pre-amp-error auto` fits it per dataset (the floor is a property of
+  the enzyme and cycle count), but the **default is 1e-4**. Note: Still an upper bound — that library is 49.6% occupied on a 9 nt barcode
   and `checkout` calls it saturated, so collisions inflate it. `docs/quality_floor.rst`.
 - **`migec suggest` is implemented** (2026-08-13), ahead of its M4 slot, because X2 needed it: it
   segments the per-cycle base composition into UMI (all four bases near 1/4), constant and payload
@@ -509,21 +508,30 @@ correction is written up in `project/review-algorithms.md`.
 - **Never: `containsKey`, not `?:`, for a nextflow boolean.** Groovy's elvis treats `false` as
   absent, so a per-sample `contig: false` against `params.migec_contig = true` silently meant its
   opposite -- the one direction a per-sample override exists to make possible.
+- **`--pre-amp-error auto` fits the floor (2026-08-14).** X2's estimator run on assemble's own
+  consensuses: molecules at >= 20 reads, the library's modal sequence with one vote per molecule,
+  polymorphic positions and divergent templates excluded, and the residual IS the floor. 1e-4 ->
+  1.20e-4 [7.94e-5, 1.75e-4]; 1e-5 -> 1.58e-5; 0 -> the bound 9.56e-6. Never: **zero observed
+  mismatches is a BOUND, not a rate** -- take the interval's upper end, because a floor of zero is
+  a Q-infinity. Never: **it refuses rather than guessing.** A diverse library has no monomorphic
+  position, so "disagrees with the modal base" means "is a different molecule" and the answer would
+  be the library's diversity; a shallow one never reaches the plateau. Both fall back to the named
+  `rt` class and say why, in the report and in `assemble.pre_amp_error.tsv`. Note: it costs a
+  SECOND assembly -- the consensus sequences do not depend on the floor, only the emitted quality
+  does, so a probe assembly runs and is deleted. Rewriting the qualities of the gzipped output in
+  place would have saved the pass and bought a new way to write a broken file.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
   1. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
      `correct_umis` does it for a spilled counter. Note: refine also holds the reads for the
-     rewrite, so bounding it is not only the table. Note: refine cannot read `.mig` buckets yet
-     either, so `checkout --mig` goes straight to `assemble` and skips correction -- that is the
-     gap to close next.
-  2. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
-     the polymerase, so the RT/PCR separation needs a different standard.
-  3. **`--rt-error auto`**, which falls out of 2 and not before it.
-  4. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
+     rewrite, so bounding it is not only the table.
+  2. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
-  5. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
+  3. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
      built -- only the call sets are missing.
-  6. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
-  7. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+  4. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
+  5. **Splitting the fitted floor into RT and first-cycle PCR** — not an estimator problem. The
+     same template through both chemistries is what it needs, which is data.
+  6. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
   reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
   `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline

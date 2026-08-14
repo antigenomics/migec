@@ -23,10 +23,11 @@ the one kept current as work lands.
      - done bar ``.mig`` bucket output, i7xi5 and the bit-parallel matcher
    * - M1
      - ``assemble``: consensus, sub-clustering, quality model, ``--contig``, ``--fast``
-     - done bar ``--rt-error auto`` and R1/R2 overlap merge
+     - done bar R1/R2 overlap merge
    * - M3
      - ``refine``: error model, barcode correction, cell calling, QC
-     - done bar the template's own error split
+     - done bar splitting the fitted floor into RT and first-cycle PCR, which needs two
+       chemistries rather than a better estimator
    * - M4
      - end-to-end, ``suggest``, ``subsample``, ``plot``, notebooks
      - done, downstream contract measured

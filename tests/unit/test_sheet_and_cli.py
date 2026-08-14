@@ -467,6 +467,7 @@ def test_rt_error_classes_and_custom_values():
     assert parse_rt_error("medium") == 1e-5  # Taq-class, no RT
     assert parse_rt_error("HIGH") == 1e-6    # proofreading, no RT
     assert parse_rt_error("7.37e-5") == 7.37e-5  # TruSight Oncology 500 v2, as published
+    assert parse_rt_error("AUTO") == "auto"  # fitted from the data, not named -- assemble does it
     assert set(RT_FLOORS) == {"rt", "medium", "high"}
 
 

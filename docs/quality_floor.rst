@@ -169,12 +169,82 @@ class is a bracket and not the enzyme's datasheet figure. A protocol that publis
 passed as a rate: TSO500 v2 is 7.37·10⁻⁵. Every one of these is in ``SOURCES.md`` with its
 provenance.
 
+.. _pre-amp-auto:
+
+Fitting it per dataset: ``--pre-amp-error auto``
+------------------------------------------------
+
+The floor is a property of the enzyme, the cycle count and the chemistry — not a constant — so
+``assemble`` will fit it from the dataset in front of it:
+
+.. code-block:: bash
+
+   migec assemble out/S1.fq.gz -o cons/ --pre-amp-error auto
+
+It is the measurement above, run on migec's own consensuses instead of on a bespoke one: keep the
+molecules with at least 20 reads, take the library's modal sequence with one vote per molecule,
+drop the positions that carry real variation and the consensuses that are a different template
+altogether, and the residual is the floor. The fit and every input it rested on are written to
+``assemble.pre_amp_error.tsv``, so a floor that looks wrong can be argued with.
+
+Injecting a known floor with ``tests/synthetic/_sim.py`` and reading it back
+(``tests/synthetic/test_pre_amp_auto.py``, which is what keeps this table true):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 14 24 14 14 12
+
+   * - injected
+     - fitted
+     - 95% interval
+     - molecules
+     - bases
+     - mismatches
+   * - 1·10⁻⁴
+     - 1.20·10⁻⁴
+     - [7.94·10⁻⁵, 1.75·10⁻⁴]
+     - 1868
+     - 224160
+     - 27
+   * - 1·10⁻⁵
+     - 1.58·10⁻⁵
+     - [8.14·10⁻⁶, 2.76·10⁻⁵]
+     - 6340
+     - 760800
+     - 12
+   * - 0
+     - 0
+     - [0, 9.56·10⁻⁶]
+     - 3197
+     - 383640
+     - 0
+
+The point estimate sits a little above the injected RT rate because the simulator also puts
+early-PCR errors into the molecule — which are pre-amplification error too. What the floor is
+is *what survives a consensus*, whatever made it.
+
+.. warning::
+
+   **``auto`` refuses more often than it answers, and that is the feature.** It needs a clonal
+   template: on a diverse library every position is polymorphic, "disagrees with the modal base"
+   means "is a different molecule", and the number that comes out is the library's diversity
+   rather than its chemistry. It also needs molecules deep enough that the consensus curve has
+   flattened. Both refusals name the class they fell back to (``rt``, 10⁻⁴) and say why, in the
+   report and in the TSV:
+
+   * 400 clones at 40 reads per molecule — refused, 120 of 120 positions polymorphic.
+   * 1.2 reads per UMI — refused, no molecule reaches 20 reads.
+
+   With no observed mismatch at all the answer is the interval's **upper** end, not zero: a floor
+   of zero is a quality of infinity.
+
+``auto`` costs a second assembly. The consensus sequences do not depend on the floor — only the
+emitted quality does — so the probe assembly runs, is read back and is deleted, and the real run
+emits with the fitted cap. Name the chemistry instead when you know it.
+
 Consequences for M1
 -------------------
 
-* ``--rt-error auto`` fits the floor per dataset, from that dataset. The floor is a property of the
-  RT enzyme, the cycle count and the chemistry, not a universal constant, and this measurement is
-  one amplicon protocol on one instrument.
 * The **default** is 10\ :sup:`-4`, not 10\ :sup:`-6`. A wrong default here does not degrade
   gracefully: it inflates every quality above Q40 in the output, and downstream variant callers
   believe them.

@@ -100,7 +100,9 @@ at 1.54·10\ :sup:`-4` on an HIV-1 Primer ID control, which caps every emitted q
 **Q40**, which is also 10x's stated figure for the V(D)J RT. A blanket 1e-6 is excluded for an
 RT protocol by two orders of magnitude -- but it is the right floor for a DNA workflow with a
 proofreading polymerase, which is why ``--rt-error`` names the chemistry: ``rt`` (1e-4, the
-default), ``medium`` (1e-5), ``high`` (1e-6), or the rate itself.
+default), ``medium`` (1e-5), ``high`` (1e-6), or the rate itself. ``--pre-amp-error auto``
+:ref:`fits it from the dataset <pre-amp-auto>` when the library is clonal and deep enough to carry
+the measurement, and says which class it fell back to when it is not.
 
 A tie is resolved by base order rather than by an ``N``: the posterior is then 0.5 and the emitted
 quality says so at about Q3. An ``N`` would discard the information that it is one of two.
