@@ -128,16 +128,29 @@ def test_peak_memory_tracks_barcodes_not_reads(tmp_path):
 
 
 def test_the_payload_draft_is_a_real_allocation(tmp_path):
-    """`table_bytes` has to describe the allocation it claims to, not an arithmetic guess."""
+    """`table_bytes` has to describe the allocation it claims to, not an arithmetic guess.
+
+    Never: the lever has to clear the PROCESS FLOOR. At a 64-base draft over 300,000 barcodes the
+    difference is 18 MB against a ~246 MB floor of readers and chunks, and on a CI runner both runs
+    reported the same peak to the byte -- the assertion was then measuring the allocator's rounding,
+    not the table. A 256-base draft is 73 MB, which no rounding hides.
+    """
     path = _corpus(tmp_path / "s.fq.gz", 1, 4, n_barcodes=300_000)
-    wide = _peak_in_a_fresh_process(path, tmp_path / "w", 64)
+    wide = _peak_in_a_fresh_process(path, tmp_path / "w", 256)
     narrow = _peak_in_a_fresh_process(path, tmp_path / "n", 0)
-    print(f"\n  payload 64: table {wide['table'] / 2**20:5.0f} MB, RSS {wide['rss'] / 2**20:5.0f} MB"
+    claimed = wide["table"] - narrow["table"]
+    measured = wide["rss"] - narrow["rss"]
+    print(f"\n  payload 256: table {wide['table'] / 2**20:5.0f} MB, RSS {wide['rss'] / 2**20:5.0f} MB"
           f"\n  payload off: table {narrow['table'] / 2**20:5.0f} MB, "
-          f"RSS {narrow['rss'] / 2**20:5.0f} MB")
+          f"RSS {narrow['rss'] / 2**20:5.0f} MB"
+          f"\n  claimed {claimed / 2**20:.0f} MB, measured {measured / 2**20:.0f} MB")
     assert narrow["table"] < wide["table"]
-    assert narrow["rss"] < wide["rss"]
-    assert wide["table"] - narrow["table"] == 64 * wide["barcodes"]
+    assert claimed == 256 * wide["barcodes"]
+    # Half, not all: the peak is a high-water mark over the whole run, and the draft is not
+    # necessarily live at the moment the rest of the process is at its widest.
+    assert measured > claimed / 2, (
+        f"the table claims {claimed / 2**20:.0f} MB more and the process only shows "
+        f"{measured / 2**20:.0f} MB -- table_bytes is arithmetic, not an allocation")
 
 
 def test_the_evidence_costs_what_it_costs(deep):
