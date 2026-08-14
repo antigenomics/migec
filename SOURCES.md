@@ -20,6 +20,8 @@ are never conflated in a table row.
 | `assets/ctdna_panel.bed` | inferred from coverage, 3 deepest `PRJNA788522` runs aligned to GRCh38 | **derived** | `sbatch scripts/ctdna_infer_panel.sbatch`: minimap2 -> `bedtools genomecov` above a depth floor -> `merge -d 50` -> named against Ensembl 110 |
 | `assets/ctdna_per_target.tsv` | per-TARGET molecule counts, 72 runs | **derived** | `sbatch scripts/ctdna_per_site.sbatch` then `python scripts/ctdna_persite.py --molecules m.tsv --variants v.tsv --design d.tsv --out out/` |
 | `assets/ctdna_minreads.tsv` | calls at `--min-reads` 1/3/5, 12 runs x 4 certified arms | **derived** | `sbatch scripts/ctdna_minreads.sbatch` |
+| `assets/ctdna_callers.tsv` | one row per (pipeline, caller, MAPQ floor, min-reads, arm) over the same 12 runs | **derived** | `sbatch scripts/ctdna_{callers,trimming,umierrorcorrect,umivarcal,rawreads}.sbatch`, then `python scripts/compare_callers.py --variants migec=callers_variants.tsv --variants migec-trimmed+lofreq=trimming_variants.tsv --variants umierrorcorrect=uec_variants.tsv --out assets/ctdna_callers.tsv` |
+| `assets/mageri.tsv`, `assets/mageri_variants.tsv` | MAGERI 1.1.1 against migec 2, consensus and variants | **derived** | `python scripts/compare_mageri.py` (consensus, one machine) and `sbatch scripts/compare_mageri.sbatch` (variants, needs LoFreq) |
 
 Note: the three `scripts/ctdna_*.sbatch` are the cluster half of the ctDNA work and are committed
 because a `Regenerate` cell that names a file nobody has is not provenance. They run on aldan3
@@ -483,8 +485,26 @@ Read 2026-08-13. Not a data source: a **comparator and a design reference** for 
 | Depth reported | **3.3 and 10 reads per UMI** on SiMSen-Seq ctDNA — independent corroboration that 1–3 reads/UMI is the ordinary regime, not the exotic one |
 | Consensus cutoff | group size ≥ 3 by default; we default `--min-reads 1` and report the cutoff sweep instead |
 | Variant caller | beta-binomial background per position, Q ≥ 20 cutoff. **Not implemented here** — it needs a reference and an alignment, which is a variant caller and not one of migec's five commands |
+| Run against us | `sbatch scripts/ctdna_umierrorcorrect.sbatch` (2026-08-14), pipeline against pipeline on the certified arms. Never: it is on **PyPI, not bioconda** — micromamba answers "does not exist (perhaps a typo or a missing channel)" and the job dies in the solver. It maps with plain `bwa` and this cluster had no plain bwa index of GRCh38 (only bwameth and bwa-mem2), so the job builds one. Note: it crashed on 1 of the 12 runs with `KeyError: "sequence '10' not present"` |
 | Public data cited by it | PRJNA788522, PRJNA507366 (SiMSen-Seq); PRJNA577992 (Roche Avenio, QiaSeq); PRJEB31811 (Archer) |
 | Provenance | reference (published method), not data |
+
+### UMI-VarCal — Sater et al. (Bioinformatics 2020, doi:10.1093/bioinformatics/btaa053)
+
+Read and run 2026-08-14. A comparator, not a data source: the third pipeline on the certified arms,
+and the one whose input convention is the UMI in the **read name**.
+
+| Item | Value |
+|---|---|
+| What it is | `extract` moves the first `-u` bases of each read into the read name; `call` builds its own UMI-aware pileup over a BED and calls with a Poisson background |
+| Order | aligns first and groups on *(position, UMI)* — like UMIErrorCorrect, it **replaces** `assemble` rather than following it |
+| Get it | `git clone --recursive https://gitlab.com/vincent-sater/umi-varcal.git`, then `cd functions && python setup.py build_ext --inplace`. The Python 2 repo (`umi-varcal-master`) is the one search engines find and is discontinued |
+| Run against us | `sbatch scripts/ctdna_umivarcal.sbatch` |
+| Never: undocumented deps | `psutil` and `tqdm` are not in its README's requirements and it does not start without them; the imports are inside the compiled `functions.pyx`, so they surface as a `ModuleNotFoundError` from a `.pyx` line |
+| Never: **patched** | it calls `msgpack.pack(..., encoding="utf-8")` and `msgpack.unpack(..., encoding="utf-8", max_buffer_size=<huge>)` in eleven places. msgpack 1.x rejects `encoding`, 0.6.2 rejects `max_buffer_size`, and the last release accepting both is 0.5.6, which conda-forge builds only for Python ≤ 3.6 — so it runs on **no** msgpack a solver will give you. Both kwargs are deleted, which is msgpack's own documented migration (`raw=False` and `use_bin_type=True` are the 1.x defaults, and the 10¹² buffer limit does not apply to a bytes input). Note: that equivalence holds **only on 1.x**; on 0.6.2 `raw` still defaults to `True` and the same edit silently hands the tool bytes keys |
+| Never: `extract` needs `-f` | `Extract.py` reads `config['fasta']`. Without it the tool prints "The parameter --fasta \| -f is required but missing" into its own log and produces nothing, so a driver that checks only for output aligns an empty FASTQ |
+| Never: the FASTA index | `ParseFASTA` caches a msgpack index of the reference as `<ref>.dic` **beside the reference**, and `if not os.path.isfile(dictPath)` accepts a 0-byte file as valid. Point it at a symlink in your own directory, or one killed run poisons a shared reference tree for every later run of every user |
+| Provenance | reference (published method), not data; the call sets it produces are derived |
 
 ### UMI RNA-seq — Fennell et al. / NCGR (Sci Rep 2018, doi:10.1038/s41598-018-31064-7)
 
