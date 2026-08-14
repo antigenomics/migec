@@ -186,6 +186,17 @@ correction is written up in `project/review-algorithms.md`.
   wall than the gzip reader. `correct_umis` in particular is O(n · 3L · log n) and arguably belongs
   in `refine` (M3) rather than in checkout at all — decide that when `refine` lands, and until then
   it is why `match_seconds` is reported next to `wall_seconds`.
+- **`checkout --mig` writes the partition `assemble` was building (2026-08-14).** Same key, same
+  range partition, `<sample>.<bbb>.mig`, one writer per (sample, bucket) owned by one thread for
+  the whole run so `-t` still changes nothing but the clock. 500 k reads, four samples, `-t 4`:
+  **1.16 s -> 0.98 s** end to end, identical 124,878 molecules, consensus FASTQ byte-identical
+  after decompression. Note: the open-file budget is for the RUN -- 256 buckets on one sample, 64
+  each on four, two each on a 96-plex, because that sample also holds a 96th of the reads. Never:
+  **only buckets assemble WROTE are deleted after use** -- pass 2 removes each bucket as it
+  finishes, which ate three of four samples' partitions the first time `--mig` was run end to end.
+  Never: two samples' buckets in one `assemble` are refused by name, and `--limit-*` on a
+  partitioned input is refused -- a limit is a prefix and a partition has none. Opt-in; FASTQ
+  stays the default because a `.mig` file is a migec intermediate nothing else reads.
 - Grouping accuracy vs Calib is wired up (`scripts/compare_calib.py`, `docs/grouping.rst`) and the
   migec column is asserted in CI. Running the Calib column needs Calib built locally.
 - **X1 is done (2026-08-13) and it answered yes: fragmented mode is mandatory.** Reads sharing a
@@ -467,22 +478,21 @@ correction is written up in `project/review-algorithms.md`.
   absent, so a per-sample `contig: false` against `params.migec_contig = true` silently meant its
   opposite -- the one direction a per-sample override exists to make possible.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
-  1. **`.mig` bucket output from `checkout`** — the other half of the partition the counters
-     already use. Writing reads into the same buckets is what lets `assemble` skip its own
-     partition pass.
-  2. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
+  1. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
      `correct_umis` does it for a spilled counter. Note: refine also holds the reads for the
-     rewrite, so bounding it is not only the table.
-  3. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
+     rewrite, so bounding it is not only the table. Note: refine cannot read `.mig` buckets yet
+     either, so `checkout --mig` goes straight to `assemble` and skips correction -- that is the
+     gap to close next.
+  2. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
      the polymerase, so the RT/PCR separation needs a different standard.
-  4. **`--rt-error auto`**, which falls out of 3 and not before it.
-  5. **i7xi5 contingency table** — needs nothing that is not already in the headers.
-  6. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
+  3. **`--rt-error auto`**, which falls out of 2 and not before it.
+  4. **i7xi5 contingency table** — needs nothing that is not already in the headers.
+  5. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
-  7. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
+  6. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
      built -- only the call sets are missing.
-  8. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
-  9. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+  7. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
+  8. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
   reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
   `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline

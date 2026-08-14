@@ -26,6 +26,7 @@ def run(
     max_offset: int | None = None,
     limit_reads: int = 0,
     umi_budget_bytes: int = 1 << 30,
+    mig: bool = False,
 ) -> dict:
     """Demultiplex `reads` (and `reads2`, if paired) using `barcodes`, writing into `out_dir`.
 
@@ -40,6 +41,11 @@ def run(
     GB is the point past which a counter is a problem on any machine, and the stage below it costs
     nothing. 0 keeps everything resident, which is what the counters did before they could
     partition.
+
+    `mig=True` writes `<sample>.<bbb>.mig` buckets instead of one FASTQ per sample. They come out
+    range-partitioned on the key `assemble` groups by, so `assemble` reads them directly and skips
+    its own partition pass. FASTQ is the default and stays it: it is what every aligner and every
+    existing pipeline speaks, and a `.mig` file is an intermediate only migec reads.
     """
     rows: list[SampleRow] = read_barcodes(barcodes)
     out = Path(out_dir)
@@ -63,6 +69,7 @@ def run(
         max_offset,
         limit_reads,
         umi_budget_bytes,
+        mig,
     )
     summary["input"] = str(reads)
     summary["input2"] = "" if reads2 is None else str(reads2)

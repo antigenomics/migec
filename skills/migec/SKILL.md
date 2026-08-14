@@ -136,7 +136,10 @@ migec checkout ... --write-unmatched
 migec refine out/S1.fq.gz -o ref/                      # correct barcode errors, rewrite RX
 migec refine out/S1.fq.gz -o ref/ --min-posterior 0.99 # correct less
 migec refine out/S1.fq.gz -o ref/ --no-payload         # what the count ratio alone would do
+migec checkout ... --mig                                # .mig buckets, not FASTQ: assemble skips
+                                                       # its partition pass over them
 migec assemble ref/S1.fq.gz -o cons/                   # one consensus per molecule
+migec assemble out/S1.000.mig -o cons/                 # ...or the buckets --mig wrote
 migec assemble out/S1.fq.gz -o cons/ --contig          # random-primed reads tiling a molecule
 migec assemble out/S1.fq.gz -o cons/ --rt-error medium # the floor by chemistry: rt|medium|high
 migec assemble out/S1.fq.gz -o cons/ --fast            # counting mode: modal sequence, max quality
@@ -460,6 +463,15 @@ single cost in the pipeline was `parallel_for` handing out one item per atomic `
 all CPU samples across every thread, on one instruction, because sixteen cores were serialising on
 one cache line. Items are claimed in batches now. Anything that spreads per-read work should be
 checked against the same trap.
+
+**Note: `checkout --mig` writes the partition `assemble` builds.** `<sample>.<bbb>.mig` buckets
+instead of per-sample FASTQ, on the same key and the same range partition, so
+`migec assemble out/S1.000.mig -o asm` skips its first pass -- 1.16 s -> 0.98 s end to end on 500 k
+reads over four samples, identical molecules. One bucket file names the whole partition. Opt-in:
+FASTQ is the default because a `.mig` file is a migec intermediate nothing else reads. Never: a
+directory of two samples' buckets is refused (a UMI repeats across samples), and `--limit-*` on a
+partitioned input is refused (a limit is a prefix; a partition has none). `refine` cannot read
+buckets yet, so `--mig` goes checkout -> assemble.
 
 **Note: The UMI counters scale with the library, and bound themselves past a budget** — ~22 bytes
 per distinct UMI (a sorted `(key, count)` array; a hash map is ~48), which is ~8.8 GB at NovaSeq

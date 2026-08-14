@@ -6,6 +6,43 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### `checkout --mig` writes the partition `assemble` was building for itself
+
+`assemble`'s first pass range-partitions the reads on the barcode into `.mig` buckets, and that
+pass is most of its wall clock. `checkout --mig` writes those buckets directly -- same key, same
+range partition, `<sample>.<bbb>.mig` -- and `assemble` reads them instead of building them:
+
+```bash
+migec checkout reads.fq.gz -b barcodes.txt -o out --mig
+migec assemble out/S1.000.mig -o asm      # one bucket names the whole partition
+```
+
+Measured on 500,000 reads over four samples at `-t 4`: **1.16 s to 0.98 s** end to end for the
+identical 124,878 molecules, and the consensus FASTQ is byte-identical after decompression (the
+gzip framing differs, because bucket boundaries are member boundaries and there are a different
+number of buckets). `checkout` pays 0.06 s of that and `assemble` saves 0.25 s.
+
+Opt-in, and FASTQ stays the default: a `.mig` file is a migec intermediate that nothing else
+reads, while every aligner and every pipeline in `docs/downstream.rst` speaks FASTQ.
+
+Never: **`-t` still changes nothing but the clock.** One writer per (sample, bucket), owned by one
+thread for the whole run, and every worker walks the chunks in input order -- so ownership decides
+who writes a record and never which file it lands in or where.
+
+Note: the open-file budget is for the RUN, not per sample. 256 buckets each on a 96-plex sheet
+would be 24,576 open writers; each sample of such a sheet also holds a 96th of the reads, so a
+couple of buckets each is proportionate rather than a compromise.
+
+Two things are refused rather than guessed at: buckets from two samples in one `assemble` (a UMI
+repeats across samples by design, so grouping them together invents molecules), and
+`--limit-read`/`--limit-umi` on an already-partitioned input (a limit is a prefix of the input, and
+a partition has no prefix -- the first records of bucket 0 are one corner of the barcode space).
+
+Never: **only buckets `assemble` wrote are deleted after they are consumed.** Pass 2 removes each
+bucket as it finishes with it, which is right for its own temporaries and catastrophic for
+checkout's output -- the first run through `--mig` ate three of the four samples' partitions, and
+a second `assemble` over an eaten one would report a smaller library with nothing to say why.
+
 ### The UMI counters bound themselves, and correction follows them
 
 This is roadmap items 1 and 2, which turned out to be one item. `checkout`'s UMI counters were the

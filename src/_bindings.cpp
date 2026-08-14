@@ -90,7 +90,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
                           const std::vector<std::string>& slaves, const std::string& out_prefix,
                          const std::string& trim, int min_umi_quality, bool write_unmatched,
                          int threads, int max_offset, uint64_t limit_reads,
-                         uint64_t umi_budget_bytes) {
+                         uint64_t umi_budget_bytes, bool mig_output) {
     if (sample_ids.size() != patterns.size()) {
         throw MigecError("run_checkout: sample_ids and patterns have different lengths");
     }
@@ -118,6 +118,7 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     req.threads = threads;
     req.limit_reads = limit_reads;
     req.umi_budget_bytes = static_cast<size_t>(umi_budget_bytes);
+    req.mig_output = mig_output;
 
     // The clock covers the per-sample statistics below as well as the driver. They are serial,
     // single-threaded, and on a 12 nt UMI cost about 2 us per read -- four times the matching. A
@@ -189,6 +190,11 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     // above is then the budget rather than the library, which is the whole point -- and it is also
     // why the two numbers have to be read together.
     out["umi_spilled"] = stats.umi_spilled;
+    // `.mig` output: the buckets that were written, in sample-then-bucket order. This is what
+    // `assemble` is handed to skip its own partition pass, and an empty bucket is simply absent.
+    out["mig"] = stats.mig_output;
+    out["mig_bucket_bits"] = stats.mig_bucket_bits;
+    out["mig_paths"] = stats.mig_paths;
 
     const std::vector<UmiCounts>& umi_counts = stats.umi_counts;
     py::list per_sample;
@@ -395,7 +401,7 @@ PYBIND11_MODULE(_core, m) {
           py::arg("trim") = "pattern", py::arg("min_umi_quality") = 0,
           py::arg("write_unmatched") = false, py::arg("threads") = 0,
           py::arg("max_offset") = -1, py::arg("limit_reads") = uint64_t{0},
-          py::arg("umi_budget_bytes") = uint64_t{1} << 30,
+          py::arg("umi_budget_bytes") = uint64_t{1} << 30, py::arg("mig") = false,
           "Demultiplex a FASTQ (or an R1/R2 pair) by barcode pattern, extract and trim the UMI, "
           "and write one gzipped FASTQ per sample with RX/QX/BC tags in the header. Returns a "
           "summary dict including the per-sample coverage histogram, UMI composition, correction "
@@ -404,7 +410,9 @@ PYBIND11_MODULE(_core, m) {
           "the output is byte-identical whatever that is set to. `umi_budget_bytes` is the "
           "resident ceiling on the UMI counters for the whole run: past it they range-partition "
           "to disk and every statistic streams a bucket at a time, so memory is the budget rather "
-          "than the library. 0 keeps everything resident.");
+          "than the library. 0 keeps everything resident. `mig` writes `<sample>.<bbb>.mig` buckets "
+          "instead of one FASTQ per sample: the reads come out range-partitioned on the key "
+          "`assemble` groups by, so `assemble` reads them directly and skips its partition pass.");
 
     m.def(
         "correct_umis",
@@ -659,9 +667,10 @@ PYBIND11_MODULE(_core, m) {
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            double rt_floor, double linkage_threshold, bool contig, bool fast, uint32_t min_reads,
            int gzip_level, int bucket_bits, int threads, uint64_t limit_reads,
-           uint64_t limit_umis) {
+           uint64_t limit_umis, const std::vector<std::string>& mig_inputs) {
             AssembleRequest req;
             req.input = input;
+            req.mig_inputs = mig_inputs;
             req.output_dir = out_dir;
             req.sample_id = sample_id;
             req.consensus.rt_floor = rt_floor;
@@ -752,11 +761,14 @@ PYBIND11_MODULE(_core, m) {
         py::arg("min_reads") = 1u, py::arg("gzip_level") = AssembleRequest{}.gzip_level,
         py::arg("bucket_bits") = 0, py::arg("threads") = 0,
         py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
+        py::arg("mig_inputs") = std::vector<std::string>(),
         "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "
         "buckets and sorted one bucket at a time, so nothing scales with the library. Emitted "
         "quality is capped at -10 log10(rt_floor), the RT/first-cycle-PCR error that no consensus "
         "removes; a group is split into two molecules only when the co-segregation of its minor "
-        "alleles exceeds `linkage_threshold`, which is a measured false-positive point.");
+        "alleles exceeds `linkage_threshold`, which is a measured false-positive point. Given "
+        "`mig_inputs` -- the buckets `checkout --mig` wrote for one sample -- the partition pass "
+        "is skipped entirely and `input` is ignored.");
 
     m.def(
         "suggest",

@@ -75,6 +75,11 @@ inline constexpr size_t kQualityLevels = 61;
 
 struct AssembleRequest {
     std::string input;       // a per-sample FASTQ written by checkout
+    // ...or the `.mig` buckets `checkout --mig` wrote, in which case `input` is ignored and pass 1
+    // does not run at all: the reads are already range-partitioned on the grouping key, which is
+    // the only thing that pass builds. One sample's buckets, never two samples' -- the sample id
+    // is a property of the file and assemble is a per-sample stage.
+    std::vector<std::string> mig_inputs;
     std::string output_dir;
     std::string sample_id;   // taken from the BC tag when empty
     ConsensusParams consensus;

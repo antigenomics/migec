@@ -103,12 +103,62 @@ AssembleStats assemble(const AssembleRequest& request) {
 
     const int threads = worker_count(request.threads, 64);
     stats.threads = threads;
-    const int bits = request.bucket_bits > 0 ? request.bucket_bits
-                                             : choose_bucket_bits(request.input);
-    const size_t n_buckets = static_cast<size_t>(1) << bits;
+
+    // `checkout --mig` already partitioned the reads on the grouping key, which is the only thing
+    // pass 1 builds. Read the layout out of the files rather than choosing one: the buckets ARE
+    // the partition, and re-deriving `bits` from the input size would address them wrongly.
+    const bool premade = !request.mig_inputs.empty();
+    std::vector<std::string> bucket_paths;
+    int bits = 0;
+    if (premade) {
+        for (const std::string& path : request.mig_inputs) {
+            MigReader probe(path);
+            const MigHeader& h = probe.header();
+            if (bucket_paths.empty()) {
+                bits = h.bucket_bits;
+                bucket_paths.assign(static_cast<size_t>(1) << bits, std::string());
+                stats.umi_length = h.umi_len;
+                stats.cell_length = h.cell_len;
+                if (stats.sample_id.empty()) stats.sample_id = h.sample_id;
+            } else if (h.bucket_bits != bits) {
+                throw MigecError("assemble: '" + path + "' is cut into 2^" +
+                                 std::to_string(h.bucket_bits) + " buckets and the first file into 2^" +
+                                 std::to_string(bits) + " -- these are two partitions, not one");
+            } else if (h.sample_id != stats.sample_id) {
+                // Never: two samples in one run would be grouped as one. A UMI repeats across
+                // samples by design, so this merges molecules and nothing downstream can tell.
+                throw MigecError("assemble: '" + path + "' holds sample '" + h.sample_id +
+                                 "' but the run is assembling '" + stats.sample_id +
+                                 "' -- assemble is a per-sample stage");
+            }
+            if (!bucket_paths[h.bucket_index].empty()) {
+                throw MigecError("assemble: bucket " + std::to_string(h.bucket_index) +
+                                 " was given twice ('" + path + "')");
+            }
+            bucket_paths[h.bucket_index] = path;
+        }
+        if (request.limit.active()) {
+            // A limit is a prefix of the INPUT, and a partition has no prefix: the first N records
+            // of bucket 0 are one corner of the barcode space, not the head of the file. Limit
+            // where the reads are still in input order, which is `checkout --limit-read`.
+            throw MigecError("assemble: --limit-read/--limit-umi cannot be applied to `.mig` "
+                             "buckets, which are already partitioned by barcode and so have no "
+                             "input prefix left. Limit at checkout instead");
+        }
+    } else {
+        bits = request.bucket_bits > 0 ? request.bucket_bits : choose_bucket_bits(request.input);
+        bucket_paths.assign(static_cast<size_t>(1) << bits, std::string());
+        for (size_t b = 0; b < bucket_paths.size(); ++b) {
+            bucket_paths[b] = (temp_dir / ("bucket." + std::to_string(b) + ".mig")).string();
+        }
+    }
+    const size_t n_buckets = bucket_paths.size();
     stats.buckets = static_cast<int>(n_buckets);
 
     // ------------------------------------------------------------------ pass 1: partition
+    //
+    // Skipped entirely when the input is already `.mig` buckets -- that is the whole point of
+    // `checkout --mig`, and it is the pass this stage otherwise spends most of its wall clock in.
     //
     // Measured before it was threaded: 2.07 s of a 2.69 s run on 4 M reads, against a 0.23 s
     // `gzip -dc` floor for the same file. So five sixths of the partition is not the inflate --
@@ -121,7 +171,7 @@ AssembleStats assemble(const AssembleRequest& request) {
     // its chunk forwards, which is what keeps the bytes identical to the serial version -- and
     // identical at any `-t`, since ownership decides *who* writes a record and never *which* file
     // it lands in or *where* in that file.
-    {
+    if (!premade) {
         Stopwatch partition_clock;
         std::vector<Bucket> buckets(n_buckets);
         const size_t block_bytes = std::clamp(
@@ -249,7 +299,7 @@ AssembleStats assemble(const AssembleRequest& request) {
                 header.bucket_bits = static_cast<uint8_t>(bits);
                 header.paired = false;
                 header.sample_id = stats.sample_id;
-                buckets[b].path = (temp_dir / ("bucket." + std::to_string(b) + ".mig")).string();
+                buckets[b].path = bucket_paths[b];
                 buckets[b].writer =
                     std::make_unique<MigWriter>(buckets[b].path, header, block_bytes);
             }
@@ -290,6 +340,7 @@ AssembleStats assemble(const AssembleRequest& request) {
     // happened to finish in.
     struct BucketOut {
         std::string fastq_path, table_path;
+        uint64_t reads = 0;  // only counted for `.mig` input, where pass 1 did not count them
         uint64_t groups = 0, molecules = 0, groups_split = 0, groups_fragmented = 0, contigs = 0;
         uint64_t reads_dropped = 0, groups_capped = 0, reads_over_cap = 0;
         std::vector<uint64_t> size_histogram;
@@ -396,9 +447,8 @@ AssembleStats assemble(const AssembleRequest& request) {
         }
     };
 
-        const std::filesystem::path path =
-            temp_dir / ("bucket." + std::to_string(bucket) + ".mig");
-        if (!std::filesystem::exists(path)) return;
+        const std::filesystem::path path(bucket_paths[bucket]);
+        if (path.empty() || !std::filesystem::exists(path)) return;
         std::vector<Resident> records;
         {
             MigReader reader(path.string());
@@ -407,6 +457,7 @@ AssembleStats assemble(const AssembleRequest& request) {
                 records.push_back({rec.cell, rec.umi, rec.src_index, std::string(rec.seq1),
                                    std::string(rec.qual1)});
             }
+            out.reads = records.size();
         }
         std::sort(records.begin(), records.end());
 
@@ -430,7 +481,11 @@ AssembleStats assemble(const AssembleRequest& request) {
         table = nullptr;
         writer->close();
         writer.reset();
-        std::filesystem::remove(path);
+        // Never: only a bucket this stage WROTE is removed. In `--mig` mode the buckets are
+        // checkout's output, not a temporary of this run, and deleting them consumed the input --
+        // a second `assemble` over the same sample then found three quarters of a library and
+        // reported it as a smaller one, with nothing in the summary to say so.
+        if (!premade) std::filesystem::remove(path);
     };
 
     parallel_for(n_buckets, threads, [&](size_t bucket, int) {
@@ -473,6 +528,7 @@ AssembleStats assemble(const AssembleRequest& request) {
                 std::fclose(in);
                 std::filesystem::remove(src);
             }
+            if (premade) stats.reads += o.reads;  // pass 1 counts them otherwise
             stats.groups += o.groups;
             stats.molecules += o.molecules;
             stats.groups_split += o.groups_split;

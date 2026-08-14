@@ -119,6 +119,15 @@ def checkout(
         "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
         "limit describes the library. Use `migec subsample` when you want a fixture.",
     ),
+    mig: bool = typer.Option(
+        False,
+        "--mig",
+        help="Write `<sample>.<bucket>.mig` buckets instead of one FASTQ per sample. The reads "
+        "come out already range-partitioned on the barcode, which is the pass `migec assemble` "
+        "otherwise spends most of its time in -- point assemble at the output directory and it "
+        "skips it. A `.mig` file is a migec intermediate: nothing else reads it, so keep the "
+        "default when the reads are going to an aligner.",
+    ),
 ) -> None:
     """Demultiplex by barcode pattern, extract and trim UMIs, write QC tables."""
     from migec.checkout import format_report, run
@@ -177,8 +186,16 @@ def checkout(
         threads=threads,
         max_offset=max_offset,
         limit_reads=limit_read,
+        mig=mig,
     )
     typer.echo(format_report(summary))
+    if mig:
+        typer.echo(
+            f"\nwrote {len(summary['mig_paths'])} .mig bucket(s) in {out_dir}"
+            f"\n      assemble a sample with `migec assemble {out_dir}/"
+            f"{summary['samples'][0]['sample_id']}.000.mig -o <out>` -- one bucket names the "
+            f"whole partition, and the partition pass is already done"
+        )
     typer.echo(
         f"\nwrote {out_dir}/checkout.{{summary,coverage,umi_composition,barcode_space,"
         f"umi_quality,quality_calibration,pattern_positions,trimming}}.tsv"
@@ -347,7 +364,12 @@ def refine(
 
 @app.command()
 def assemble(
-    reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
+    reads: Path = typer.Argument(
+        ...,
+        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        "`checkout --mig` wrote, given as a directory or as one bucket file, in which case the "
+        "partition pass is skipped because it has already been done.",
+    ),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
     sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
     rt_error: str = typer.Option(

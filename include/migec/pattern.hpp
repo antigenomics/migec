@@ -146,6 +146,9 @@ public:
     int umi_length(size_t i) const {
         return patterns_[i].umi_length() + (has_slave(i) ? slave(i).umi_length() : 0);
     }
+    // ...and the cell barcode, which is the master's alone: a slave pattern extends the UMI, on
+    // the other mate, and never the cell.
+    int cell_length(size_t i) const { return patterns_[i].cell_length(); }
 
 private:
     std::vector<std::string> samples_;

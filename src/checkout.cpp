@@ -11,6 +11,8 @@
 #include <utility>
 
 #include "migec/fastq.hpp"
+#include "migec/mig_record.hpp"
+#include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
 
@@ -410,12 +412,28 @@ size_t read_chunk(FastqReader& r1, FastqReader* r2, size_t n, Chunk& c, uint64_t
     return c.a.size();
 }
 
+// One assigned read, staged for `.mig` output. The payload is copied into the worker's own arena
+// rather than pointed at: `CheckoutPair`'s sequence views live in the scratch buffer that the very
+// next read overwrites, and trimming means they are not the input bytes either.
+struct MigStaged {
+    uint64_t cell = 0, umi = 0, src_index = 0;
+    uint32_t writer = 0;  // sample * n_buckets + bucket; also who owns writing it
+    uint32_t off[4] = {0, 0, 0, 0};
+    uint32_t len[4] = {0, 0, 0, 0};
+    uint16_t flags = 0;
+    uint8_t umi_minq = 0, cell_minq = 0;
+};
+
 struct Worker {
     std::unique_ptr<Checkout> co;
     CheckoutScratch scratch;
     std::vector<std::string> out1, out2;  // formatted FASTQ, one buffer per sample
     std::vector<std::string> z1, z2;      // ...and the same, compressed on this thread
     std::string un1, un2, zun1, zun2;
+    // `.mig` mode only, and empty otherwise: the staged records of the chunk this worker matched,
+    // in input order, and the arena their sequence and quality live in.
+    std::vector<MigStaged> staged;
+    std::string mig_arena;
     // (sample, packed UMI) per assigned read. Folded into the shared counters by the serial
     // stage, so there is one UMI counter per sample rather than one per thread per sample --
     // which at eight threads would be eight times the largest allocation in the process.
@@ -434,14 +452,41 @@ void gzip_member_or_nothing(std::string_view in, std::string& out, int level) {
     gzip_member(in, out, level);
 }
 
+// How `.mig` output partitions this run. `on` false is the ordinary FASTQ path and everything else
+// here is ignored.
+struct MigLayout {
+    bool on = false;
+    int bits = 0;
+    size_t n_buckets = 1;
+};
+
+// `<sample>.007.mig`: zero-padded so the buckets sort in key order in a directory listing, which
+// is the order every stage reads them in.
+std::string bucket_suffix(size_t b) {
+    std::string s = std::to_string(b);
+    return std::string(s.size() < 3 ? 3 - s.size() : 0, '0') + s;
+}
+
+// Min Phred over a barcode's quality string, capped at 60 -- the `.mig` record's own field, and
+// the evidence `refine` uses when the count ratio has nothing to say.
+uint8_t min_phred(std::string_view qual) {
+    int lo = 60;
+    for (char ch : qual) lo = std::min(lo, static_cast<int>(ch) - 33);
+    return static_cast<uint8_t>(std::clamp(lo, 0, 60));
+}
+
 void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_level,
                    const std::vector<std::string>& ids, const std::vector<uint32_t>& file_of,
-                   Worker& w) {
+                   Worker& w, const MigLayout& mig = {}, uint64_t base_index = 0) {
     for (auto& s : w.out1) s.clear();
     for (auto& s : w.out2) s.clear();
     w.un1.clear();
     w.un2.clear();
     w.umis.clear();
+    w.staged.clear();
+    // Assigned into, never freed: the arena is reused chunk after chunk, so the payload copy costs
+    // a memcpy and not an allocation.
+    w.mig_arena.clear();
 
     std::string tags;
     for (size_t i = 0; i < c.a.size(); ++i) {
@@ -466,17 +511,50 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
 
         // Rows sharing a sample id share one output file and one UMI counter.
         const size_t s = file_of[static_cast<size_t>(r.sample)];
-        tags = Checkout::header_tags(r.umi, r.umi_qual, ids[static_cast<size_t>(r.sample)],
-                                     r.cell, r.cell_qual);
-        // When the mates were swapped the names travel with them.
-        std::string_view name1 = n1, name2 = n2;
-        if (r.normalised && paired) std::swap(name1, name2);
-        append_fastq(w.out1[s], name1, tags, r.seq1, r.qual1);
-        if (paired) append_fastq(w.out2[s], name2, tags, r.seq2, r.qual2);
-        w.umis.emplace_back(static_cast<uint32_t>(s), pack_barcode(r.umi));
+        bool umi_has_n = false, cell_has_n = false;
+        const uint64_t umi_key = pack_barcode(r.umi, &umi_has_n);
+        if (mig.on) {
+            const uint64_t cell_key = r.cell.empty() ? 0 : pack_barcode(r.cell, &cell_has_n);
+            MigStaged st;
+            st.cell = cell_key;
+            st.umi = umi_key;
+            st.src_index = base_index + i;
+            // Partition on the cell when there is one, exactly as `assemble` does: every read of a
+            // cell then lands in one bucket, which is what makes a per-cell scope local.
+            st.writer = static_cast<uint32_t>(
+                s * mig.n_buckets +
+                bucket_of(r.cell.empty() ? umi_key : cell_key, mig.bits));
+            // What has ALREADY been applied, never what remains: a swapped pair is stored swapped
+            // and a reverse-complemented single read is stored reverse-complemented, so `assemble`
+            // must not re-orient anything.
+            st.flags = static_cast<uint16_t>((paired ? 0 : kSingleEnd) |
+                                             (umi_has_n ? kUmiHasN : 0) |
+                                             (cell_has_n ? kCellHasN : 0) |
+                                             (r.normalised ? (paired ? kMatesSwapped : kRevComp1)
+                                                           : 0));
+            st.umi_minq = min_phred(r.umi_qual);
+            st.cell_minq = r.cell_qual.empty() ? 60 : min_phred(r.cell_qual);
+            const std::string_view payload[4] = {r.seq1, r.qual1, r.seq2, r.qual2};
+            for (int f = 0; f < 4; ++f) {
+                st.off[f] = static_cast<uint32_t>(w.mig_arena.size());
+                st.len[f] = static_cast<uint32_t>(payload[f].size());
+                w.mig_arena.append(payload[f]);
+            }
+            w.staged.push_back(st);
+        } else {
+            tags = Checkout::header_tags(r.umi, r.umi_qual, ids[static_cast<size_t>(r.sample)],
+                                         r.cell, r.cell_qual);
+            // When the mates were swapped the names travel with them.
+            std::string_view name1 = n1, name2 = n2;
+            if (r.normalised && paired) std::swap(name1, name2);
+            append_fastq(w.out1[s], name1, tags, r.seq1, r.qual1);
+            if (paired) append_fastq(w.out2[s], name2, tags, r.seq2, r.qual2);
+        }
+        w.umis.emplace_back(static_cast<uint32_t>(s), umi_key);
     }
-
-    for (size_t s = 0; s < w.out1.size(); ++s) {
+    // The per-sample buffers are empty in `.mig` mode -- nothing was formatted -- but unmatched
+    // reads are FASTQ either way: they have no barcode, so there is no bucket to put them in.
+    for (size_t s = 0; !mig.on && s < w.out1.size(); ++s) {
         gzip_member_or_nothing(w.out1[s], w.z1[s], gzip_level);
         if (paired) gzip_member_or_nothing(w.out2[s], w.z2[s], gzip_level);
     }
@@ -508,11 +586,15 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     // which does not even produce a valid gzip stream, and the summary would report success.
     CheckoutStats stats;
     std::vector<uint32_t> file_of(n_samples);
+    // The first row that declared each sample. A sample with two tags has two rows and one file,
+    // and the barcode lengths a `.mig` header needs are a property of the sample.
+    std::vector<size_t> row_of_file;
     for (size_t i = 0; i < n_samples; ++i) {
         auto it = std::find(stats.sample_ids.begin(), stats.sample_ids.end(), ids[i]);
         if (it == stats.sample_ids.end()) {
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
+            row_of_file.push_back(i);
             stats.umi_counts.emplace_back(patterns.umi_length(i));
         } else {
             file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
@@ -555,14 +637,43 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         }
     }
 
+    // `.mig` output: one range partition of the reads, per sample, written straight from the
+    // workers -- which is the partition `assemble` would otherwise build for itself.
+    //
+    // Note: the open-file budget is for the RUN, not per sample. 256 writers is already more than
+    // polite, and a 96-plex sheet holding 256 buckets each would be 24,576 of them; each sample of
+    // such a sheet also holds a 96th of the reads, so a couple of buckets is the proportionate
+    // answer rather than a compromise.
+    MigLayout mig;
+    mig.on = request.mig_output;
+    if (mig.on) {
+        int bits = request.mig_bucket_bits;
+        if (bits <= 0) {
+            bits = kMaxMigBucketBits;
+            while (bits > 0 && (n_files << bits) > kMaxMigWriters) --bits;
+        }
+        mig.bits = bits;
+        mig.n_buckets = size_t{1} << bits;
+        stats.mig_output = true;
+        stats.mig_bucket_bits = bits;
+    }
+
     const std::string suffix1 = paired ? "_R1.fq.gz" : ".fq.gz";
     const std::string suffix2 = "_R2.fq.gz";
 
     std::vector<std::unique_ptr<BlockFile>> w1, w2;
     for (const std::string& id : stats.sample_ids) {
+        if (mig.on) break;
         w1.push_back(std::make_unique<BlockFile>(request.out_prefix + id + suffix1));
         if (paired) w2.push_back(std::make_unique<BlockFile>(request.out_prefix + id + suffix2));
     }
+    // One writer per (sample, bucket), opened lazily: a bucket that never receives a read is a
+    // file that is never created, which on a fine partition of a small sample is most of them.
+    std::vector<std::unique_ptr<MigWriter>> migw(mig.on ? n_files * mig.n_buckets : 0);
+    std::vector<std::string> mig_path(migw.size());
+    const size_t mig_block_bytes =
+        migw.empty() ? 0
+                     : std::clamp<size_t>(kMigWriterBudgetBytes / migw.size(), 256u << 10, 4u << 20);
     std::unique_ptr<BlockFile> u1, u2;
     if (request.write_unmatched) {
         u1 = std::make_unique<BlockFile>(request.out_prefix + "unmatched" + suffix1);
@@ -592,7 +703,11 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
 
     for (;;) {
         size_t filled = 0;
+        // Where each chunk starts in the input. `src_index` is a read's position in the file and
+        // is the sort tiebreak `.mig` depends on, so it cannot be handed out by a worker.
+        std::vector<uint64_t> chunk_base(chunks.size(), 0);
         for (; filled < chunks.size(); ++filled) {
+            chunk_base[filled] = seen;
             if (read_chunk(r1, r2.get(), chunk, chunks[filled], request.limit_reads, seen) == 0) {
                 break;
             }
@@ -607,7 +722,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         auto guarded = [&](size_t t) {
             try {
                 process_chunk(chunks[t], paired, request.write_unmatched, request.gzip_level, ids,
-                              file_of, workers[t]);
+                              file_of, workers[t], mig, chunk_base[t]);
             } catch (...) {
                 std::lock_guard<std::mutex> lock(err_mutex);
                 if (!err) err = std::current_exception();
@@ -625,13 +740,72 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         // Serial, in chunk order: this is what makes the output independent of the thread count.
         for (size_t t = 0; t < filled; ++t) {
             Worker& w = workers[t];
-            for (size_t s = 0; s < n_files; ++s) {
+            for (size_t s = 0; !mig.on && s < n_files; ++s) {
                 w1[s]->append(w.z1[s]);
                 if (paired) w2[s]->append(w.z2[s]);
             }
             if (u1) u1->append(w.zun1);
             if (u2) u2->append(w.zun2);
             for (const auto& kv : w.umis) stats.umi_counts[kv.first].add(kv.second);
+        }
+
+        if (mig.on) {
+            // Open the writers a record has just asked for. On the driver, because a `.mig` header
+            // carries the barcode lengths and the sample id, and because two workers must never
+            // race to create the same file.
+            for (size_t t = 0; t < filled; ++t) {
+                for (const MigStaged& st : workers[t].staged) {
+                    if (migw[st.writer]) continue;
+                    const size_t s = st.writer / mig.n_buckets;
+                    const size_t b = st.writer % mig.n_buckets;
+                    MigHeader header;
+                    header.umi_len = static_cast<uint8_t>(stats.umi_counts[s].length());
+                    header.cell_len = static_cast<uint8_t>(patterns.cell_length(row_of_file[s]));
+                    header.bucket_index = static_cast<uint8_t>(b);
+                    header.bucket_bits = static_cast<uint8_t>(mig.bits);
+                    header.paired = paired;
+                    header.sample_id = stats.sample_ids[s];
+                    // Note: no quality calibration in the header. It is fitted from the whole run,
+                    // and this file is opened while the run is still going -- `checkout.json`
+                    // carries the fit, and a wrong table here would be worse than an absent one.
+                    mig_path[st.writer] = request.out_prefix + stats.sample_ids[s] + "." +
+                                          bucket_suffix(b) + ".mig";
+                    migw[st.writer] =
+                        std::make_unique<MigWriter>(mig_path[st.writer], header, mig_block_bytes);
+                }
+            }
+            // Ownership, not locking: writer w is written by exactly one thread for the whole run,
+            // so no writer state is ever shared. Every worker walks the chunks in input order and
+            // each chunk forwards, so a record's position in its bucket is decided by the input and
+            // never by who got there first -- which is what keeps `-t` out of the bytes.
+            std::exception_ptr werr;
+            std::mutex wmutex;
+            parallel_for(static_cast<size_t>(nthreads), nthreads, [&](size_t owner, int) {
+                try {
+                    for (size_t t = 0; t < filled; ++t) {
+                        const Worker& w = workers[t];
+                        for (const MigStaged& st : w.staged) {
+                            if (st.writer % static_cast<uint32_t>(nthreads) != owner) continue;
+                            MigRecord rec;
+                            rec.cell = st.cell;
+                            rec.umi = st.umi;
+                            rec.src_index = st.src_index;
+                            rec.flags = st.flags;
+                            rec.umi_minq = st.umi_minq;
+                            rec.cell_minq = st.cell_minq;
+                            rec.seq1 = std::string_view(w.mig_arena).substr(st.off[0], st.len[0]);
+                            rec.qual1 = std::string_view(w.mig_arena).substr(st.off[1], st.len[1]);
+                            rec.seq2 = std::string_view(w.mig_arena).substr(st.off[2], st.len[2]);
+                            rec.qual2 = std::string_view(w.mig_arena).substr(st.off[3], st.len[3]);
+                            migw[st.writer]->write(rec);
+                        }
+                    }
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(wmutex);
+                    if (!werr) werr = std::current_exception();
+                }
+            });
+            if (werr) std::rethrow_exception(werr);
         }
         if (filled < chunks.size()) break;  // hit EOF part-way through the round
     }
@@ -654,6 +828,17 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     for (auto& w : w2) finish(*w);
     if (u1) finish(*u1);
     if (u2) finish(*u2);
+
+    // Note: a `.mig` bucket that received no read is not created at all, rather than created empty.
+    // A bucket is addressed by the header inside it and by nothing else -- `assemble` reads the
+    // files it is given, in bucket order -- so an absent bucket is an absent range of the key
+    // space, which is exactly what it means. This is the opposite of the FASTQ case above, where
+    // an empty file has to exist because the next tool globs for it.
+    for (size_t i = 0; i < migw.size(); ++i) {
+        if (!migw[i]) continue;
+        migw[i]->close();
+        stats.mig_paths.push_back(mig_path[i]);
+    }
 
     for (const Worker& w : workers) stats.counters.merge(w.co->counters());
     stats.counters.per_sample.resize(n_samples, 0);

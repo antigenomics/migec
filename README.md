@@ -696,6 +696,12 @@ error landed in that prefix can still meet its parent. Bounding the memory witho
 would have silently stopped correcting a third of the errors. See
 [`docs/performance.rst`](docs/performance.rst).
 
+`checkout --mig` writes the reads into that same range partition — `<sample>.<bbb>.mig` — which is
+the pass `assemble` otherwise spends most of its wall clock building for itself, so pointing
+`assemble` at a bucket skips it: **1.16 s → 0.98 s** end to end on 500,000 reads over four samples,
+for the identical 124,878 molecules. Opt-in, because a `.mig` file is a migec intermediate and
+everything downstream speaks FASTQ.
+
 ### Grouping accuracy is measured against Calib
 
 `scripts/compare_calib.py` scores both tools' read partitions against a known truth with the

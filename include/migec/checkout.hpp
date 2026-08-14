@@ -192,6 +192,15 @@ private:
 // ---------------------------------------------------------------------------------------------
 // The whole-file driver.
 
+// `.mig` output sizing. The writer count is a RUN budget: 256 open files is already more than
+// polite, and it is the number of buckets across every sample rather than within one.
+inline constexpr int kMaxMigBucketBits = 8;
+inline constexpr size_t kMaxMigWriters = 256;
+// Bytes shared across every open bucket writer. Split, not per writer: each writer accumulates a
+// block before compressing it, so a fixed per-writer block would make a finer partition cost more
+// memory, which is backwards. The same rule, and the same number, as `assemble`'s partition pass.
+inline constexpr size_t kMigWriterBudgetBytes = 32u << 20;
+
 struct CheckoutRequest {
     // Stop after this many input reads; 0 reads all of them. A smoke test, never a sample: the
     // first N reads of a FASTQ are one corner of one flowcell. `subsample` is the sampler.
@@ -227,6 +236,22 @@ struct CheckoutRequest {
     // Where the partition goes. Empty puts it next to the output, in `<out_prefix>.umi_spill`, and
     // it is removed when the statistics that read it are done with it.
     std::string umi_spill_dir;
+
+    // Write `.mig` buckets -- `<prefix><sample>.<bbb>.mig` -- instead of one FASTQ per sample.
+    //
+    // The reads are range-partitioned on the same key `assemble` groups by, so `assemble` reads
+    // them as its own buckets and skips its partition pass entirely. Opt-in: FASTQ stays the
+    // default, because it is what every aligner, every existing pipeline and `docs/downstream.rst`
+    // speak, and a `.mig` file is an intermediate that only migec reads.
+    //
+    // Never: RANGE, on the whole barcode. A hash would split a barcode from its 1-substitution
+    // neighbours across buckets and correction could never be applied locally; and the partition
+    // key is the cell when there is one, exactly as in `assemble`, because a molecule is
+    // sample + cell + UMI and grouping on the UMI alone merges two molecules.
+    bool mig_output = false;
+    // 0 chooses from the number of samples: the open-file budget is for the RUN, not per sample,
+    // so a 96-plex sheet gets a couple of buckets each rather than 96 x 256 open writers.
+    int mig_bucket_bits = 0;
 };
 
 // Owns a directory of spilled UMI buckets for as long as anything can still read it.
@@ -258,6 +283,11 @@ struct CheckoutStats {
     bool umi_spilled = false;     // at least one counter went past the budget and partitioned
     std::shared_ptr<UmiSpillDir> umi_spill;  // keeps the partition readable; see UmiSpillDir
     int threads = 1;
+    // `.mig` output only: how the reads were partitioned, and the files that came out. The paths
+    // are what `assemble` is handed to skip its own partition pass.
+    bool mig_output = false;
+    int mig_bucket_bits = 0;
+    std::vector<std::string> mig_paths;  // sample-major, then bucket; empty buckets are omitted
 };
 
 // Demultiplex, extract, trim and write. Throws MigecError on malformed input or an unwritable

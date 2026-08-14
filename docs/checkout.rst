@@ -161,6 +161,49 @@ See :doc:`umi_statistics` for what the last two contain and how to read them, an
 :doc:`performance` for ``--threads`` and what the run costs in time and memory.
 
 
+Writing the partition instead: ``--mig``
+----------------------------------------
+
+``--mig`` writes ``<sample>.<bbb>.mig`` buckets in place of the per-sample FASTQ. The reads come
+out **range-partitioned on the barcode** — the same partition, on the same key, that
+:doc:`assemble` otherwise builds for itself in its first pass — so ``assemble`` reads them
+directly and skips that pass:
+
+.. code-block:: bash
+
+   migec checkout reads.fq.gz -b barcodes.txt -o out --mig
+   migec assemble out/S1.000.mig -o asm      # one bucket names the whole partition
+
+Measured on the 500,000-read benchmark corpus, four samples, four threads: **1.16 s → 0.98 s** end
+to end for the identical 124,878 molecules. ``checkout`` pays 0.06 s of it and ``assemble`` saves
+0.25 s, which is its whole partition pass.
+
+FASTQ stays the default, and should. A ``.mig`` file is a migec intermediate that nothing else
+reads: every aligner, every pipeline in :doc:`downstream`, and every example here speak FASTQ.
+Reach for ``--mig`` when the reads are going straight to ``assemble`` and nowhere else.
+
+Note: one bucket file names the whole partition — ``assemble`` collects that sample's siblings
+beside it. A directory holding more than one sample's buckets is **refused by name** rather than
+assembled together, because a UMI repeats across samples by design and merging two samples' reads
+would create molecules that never existed.
+
+Note: the open-file budget is for the run rather than for each sample, so the bucket count falls
+as the sheet grows — 256 buckets for one sample, 64 each for four, two each for a 96-plex. A
+sample of a 96-plex sheet also holds a 96th of the reads, so this is proportionate rather than a
+compromise.
+
+Note: the ``.mig`` header carries no quality calibration. It is fitted from the whole run and the
+buckets are opened while the run is still going; ``checkout.json`` carries the fit, and a table
+written before it was measured would be worse than an absent one.
+
+Note: paired input puts **both mates in one bucket file** rather than in two files, since the
+record holds them together. ``assemble`` consenses mate 1, which is what it does from FASTQ as
+well — there the second mate is simply a file you did not hand it.
+
+Note: unmatched reads stay FASTQ (``--write-unmatched``). They carry no barcode, so there is no
+bucket to put them in.
+
+
 What the reported Phred is actually worth
 -----------------------------------------
 

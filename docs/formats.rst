@@ -9,8 +9,10 @@ and ``tests/cpp/test_mig_record.cpp`` fails if any of it changes by accident.
 The ``.mig`` intermediate
 -------------------------
 
-One format between all stages. ``checkout`` writes it, ``refine`` rewrites it, ``assemble`` reads
-it.
+One format between all stages. ``checkout --mig`` writes it, ``assemble`` reads it, and
+``assemble`` also writes it as the temporaries of its own partition pass when the input was FASTQ.
+The file name is ``<sample>.<bbb>.mig``: one file per sample per range-partition bucket, with the
+bucket index zero-padded so that a directory listing is in key order.
 
 Layout::
 

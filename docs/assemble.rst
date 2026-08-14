@@ -55,6 +55,25 @@ finer, which exists to use less memory, would use more.
 and does not change the output. Each configuration is measured in its own process, because
 ``peak_rss_bytes`` is a process high-water mark and two runs in one interpreter cannot be compared.
 
+...or the partition arrives already built. ``migec checkout --mig`` writes its reads into exactly
+these buckets, on exactly this key, so pointing ``assemble`` at them skips the pass above
+entirely:
+
+.. code-block:: bash
+
+   migec assemble out/S1.000.mig -o asm     # one bucket names the whole partition
+
+The layout is read out of the file headers rather than chosen — the buckets *are* the partition,
+and re-deriving the bucket count from the input size would address them wrongly. Two things are
+refused rather than guessed at: buckets from **two samples** (assemble is a per-sample stage, and
+a UMI repeats across samples by design), and ``--limit-read``/``--limit-umi``, because a limit is
+a prefix of the input and a partition has no prefix left — the first records of bucket 0 are one
+corner of the barcode space. Limit at ``checkout`` instead.
+
+Never: only buckets this stage wrote are deleted after they are consumed. In ``--mig`` mode they
+are checkout's output, and a second ``assemble`` over an eaten partition finds a fraction of the
+library and reports it as a smaller one.
+
 The consensus and its quality
 -----------------------------
 
