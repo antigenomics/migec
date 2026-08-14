@@ -85,14 +85,9 @@ Where to go
        barcode rank plot and the MIG size spectrum
    * - run a cohort
      - :doc:`Pipelines <nextflow>` -- the Nextflow modules and the SLURM array templates
-   * - align or quantify the consensus
-     - :doc:`Downstream <downstream>`, where every tool in the table was actually run
-   * - call rare variants (ctDNA, tumour)
-     - :doc:`Variant calling <variants>` -- which caller, and the molecule count that decides
-       whether any of them can see it
-   * - know the limit of detection
-     - :doc:`Detection limits <detection>` -- exome, ctDNA and MRD, and which of the two regimes
-       your assay is in
+   * - align, quantify or call variants on the consensus
+     - :doc:`Post-processing <postprocessing>` -- the headline benchmark against certified cfDNA,
+       then :doc:`downstream`, :doc:`variants` and :doc:`detection`
    * - know why a default is what it is
      - :doc:`Method <method>`
    * - look up a column or a tag
@@ -108,8 +103,6 @@ Where to go
    Bring your own UMI <byo_umi>
    Assays <assays>
    commands
-   Downstream <downstream>
-   Variant calling <variants>
-   Detection limits <detection>
+   Post-processing <postprocessing>
    method
    reference

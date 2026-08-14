@@ -160,6 +160,33 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
 > **Never** run alevin, bustools or STARsolo on a consensus FASTQ. They read the barcode out of a
 > *raw* barcode read and deduplicate themselves; migec already did, and that read no longer exists.
 
+## What it is worth: rare variants, measured
+
+Commercial cfDNA reference material with **certified** allele frequencies, including a 0%-certified
+arm that is a true negative by construction. Three replicates per arm, one panel, one aligner,
+matched molecule-support thresholds, substitutions only — migec emits no indels by design and 56%
+of UMIErrorCorrect's calls are deletions ([post-processing](https://antigenomics.github.io/migec/postprocessing.html), `assets/ctdna_callers.tsv`).
+
+| pipeline | false calls / sample, 0% arm | 0.125% | 0.25% | 1% | VAF at 1% |
+|---|---|---|---|---|---|
+| **migec + Mutect2** | **0.67** | 0/3 | 1/3 | **3/3** | 0.0103 |
+| **migec + LoFreq** | **2.00** | **1/3** | **3/3** | **3/3** | **0.0102** |
+| UMIErrorCorrect (its own consensus **and** caller) | 7.67 | 1/3 | 3/3 | 2/2 | 0.0094 |
+
+**migec + LoFreq matches the best sensitivity at every arm and reports 3.8× fewer false positives on
+the true negative**; migec + Mutect2 reports the fewest of anything measured and pays for it at
+0.25%. Against **MAGERI**, the other descendant of MIGEC 1, on a simulated shallow library where
+both tools emit the *same* consensuses at the same accuracy: MAGERI reports 142 variants of which
+**137 are at positions nothing was injected at**, migec + LoFreq reports 5 and is right about all
+five ([validation](https://antigenomics.github.io/migec/validation.html)).
+
+Two flags decide more than the choice of caller, and both are measured rather than argued:
+
+```bash
+gatk Mutect2 --max-reads-per-alignment-start 0 ...   # or it sees 1.5% of your molecules
+migec assemble ... --min-reads 3                     # 0% arm: 10.0 -> 2.0 calls per sample
+```
+
 ## What makes it different
 
 - Barcode correction uses the evidence that survives at **one read per UMI** — the barcode's own
@@ -176,6 +203,8 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
   disagree with the report ([plots](https://antigenomics.github.io/migec/plots.html)).
 - For rare variants the **molecule count decides, not the caller**, and it is fixed before any
   software runs ([variants](https://antigenomics.github.io/migec/variants.html), [detection](https://antigenomics.github.io/migec/detection.html)).
+- BAM, SAM and CRAM are inputs, so a capture, exome or ctDNA kit that puts the UMI in the **index
+  read** never needs `checkout` at all ([bring your own UMI](https://antigenomics.github.io/migec/byo_umi.html)).
 
 ## Documentation
 
@@ -186,8 +215,7 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
 | [Installation](https://antigenomics.github.io/migec/installation.html), [Examples](https://antigenomics.github.io/migec/examples.html) | a copy-paste run per platform, and six marimo notebooks |
 | [Layouts](https://antigenomics.github.io/migec/layouts.html), [Assays](https://antigenomics.github.io/migec/assays.html) | where the barcode is, and what a consensus is worth once it is found |
 | [Commands](https://antigenomics.github.io/migec/commands.html) | all eight, with the number each one decides |
-| [Downstream](https://antigenomics.github.io/migec/downstream.html) | what consumes the consensus, measured tool by tool |
-| [Variant calling](https://antigenomics.github.io/migec/variants.html), [Detection limits](https://antigenomics.github.io/migec/detection.html) | which caller, and the molecules that decide whether any can see it |
+| [Post-processing](https://antigenomics.github.io/migec/postprocessing.html) | the certified-cfDNA benchmark, then [downstream](https://antigenomics.github.io/migec/downstream.html) tool by tool, [variant calling](https://antigenomics.github.io/migec/variants.html) and [detection limits](https://antigenomics.github.io/migec/detection.html) |
 | [Method](https://antigenomics.github.io/migec/method.html) | why every default is what it is: barcode space, nulls, the quality floor |
 | [Reference](https://antigenomics.github.io/migec/reference.html) | file formats, speed and memory, pipelines, roadmap |
 | [`SOURCES.md`](https://github.com/antigenomics/migec/blob/master/SOURCES.md) | every dataset, where it came from, and the command that re-fetches it |

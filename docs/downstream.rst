@@ -66,6 +66,36 @@ synthetic 10x-shaped library (20 cells x 30 molecules x 3 reads), plus the 10x V
      - ``salmon quant -l U -r``
      - sequence only
      - ``NumReads`` are molecule counts
+   * - FastQC 0.12.1
+     - ``fastqc S1.consensus.fq.gz``
+     - sequence + quality
+     - every module completes; encoding read as **Sanger / Illumina 1.9**; see below
+
+QC with FastQC
+--------------
+
+FastQC runs on every stage's output, and the one thing worth checking before trusting it does:
+
+* **Concatenated gzip members are read in full.** ``checkout``, ``refine`` and ``assemble``
+  compress on the workers, so their output is several gzip members in one file -- 14 of them for a
+  110,002-read run here. FastQC reported exactly 110,002 sequences, so it is joining the members
+  rather than stopping at the first. A reader that stopped would report a fraction of the library
+  and no error, which is the failure mode to rule out and it is ruled out.
+* **The quality encoding is read correctly at every stage**, Sanger / Illumina 1.9, and
+  ``assemble``'s consensus passes both quality modules. Its profile is flat and high because the
+  emitted quality is capped at the pre-amplification floor (:doc:`quality_floor`), not because
+  anything was rescaled.
+* Never: **"Per tile sequence quality" does not run on migec output**, and that is not a defect.
+  Tile coordinates live in the FASTQ *comment*, and ``checkout`` replaces the comment with the SAM
+  tags -- it has to, because ``bwa mem -C`` and ``minimap2 -y`` append that comment verbatim into
+  the SAM record and a free-form comment there is an invalid record. Run FastQC on the **raw**
+  reads for per-tile QC and on migec's output for everything else. migec reads the flowcell
+  coordinates and the i7xi5 pair off the header itself while it still has them
+  (:doc:`umi_statistics`).
+* Expect ``Sequence Duplication Levels``, ``Per base sequence content`` and ``Per sequence GC
+  content`` to warn or fail on a targeted library at any stage. Those are properties of an
+  amplicon panel, not of the pipeline; a UMI library is *supposed* to hold many reads of one
+  molecule before ``assemble`` and many molecules of a few templates after it.
 
 The comment flag is per-tool and there is no majority convention:
 
