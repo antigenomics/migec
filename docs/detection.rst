@@ -161,13 +161,14 @@ Two things a total molecule count hides, both measured on that panel by aligning
        - effect
      * - ``-q 20`` MAPQ filter
        - alignment
-       - removes essentially all of it -- MAPQ 4-16 against 60
+       - removes the mismapped *alignments* -- MAPQ 4-16 against 60 -- and **does not reduce the
+         call burden**. Measured below: it raises it
      * - adapter trimming
        - before ``checkout``
-       - removes the cause
+       - removes the cause. Diagnosed, still not measured
      * - ``--min-reads 3``
        - ``assemble``
-       - a *different* artifact class; see below
+       - a *different* artifact class, and the one that works; see below
 
   Note: the G-rich locus is a red herring worth naming, because it is the sort of thing that
   invites a poly-G explanation. The barcodes of those molecules have ordinary G content (mode 3 of
@@ -563,6 +564,105 @@ Note: retention across the arm was 63% at ``--min-reads 3`` and 54% at 5. Going 
 9% of molecules and removed nothing further here, so 3 is where the curve flattens on this
 chemistry. On a library with more reads per molecule the same threshold costs less; on a shallower
 one it costs more, which is why it is a recommendation per assay rather than a new default.
+
+The intermediate arms, and what the artifact was adding
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The two arms between the extremes are where the artifact's *additivity* shows, because there the
+true frequency and the artifact floor are the same order of magnitude. Three replicates per arm,
+LoFreq on the same consensus BAM, ``assets/ctdna_callers.tsv``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 14 18 18 18 16
+
+   * - arm
+     - certified
+     - ``--min-reads 1``
+     - ``--min-reads 3``
+     - ``--min-reads 5``
+     - H1047R seen
+   * - 0.125%
+     - 0.00125
+     - 0.0052
+     - **0.0014**
+     - 0.0012
+     - 1 of 3
+   * - 0.25%
+     - 0.0025
+     - 0.0079
+     - **0.0022**
+     - 0.0023
+     - 3 of 3
+   * - 1%
+     - 0.01
+     - 0.0101
+     - **0.0102**
+     - 0.0104
+     - 3 of 3
+
+At ``--min-reads 1`` the measured frequency is the certified one **plus** a floor of 0.4-0.6%: the
+0.125% arm reads 4.2x its truth and the 0.25% arm 3.2x, while the 1% arm -- where the floor is a
+twentieth of the signal -- reads correctly. At ``--min-reads 3`` all three track the certified
+value to within 12%. That is the same additivity the 0%-certified arm shows directly, seen from the
+other side.
+
+Never: **the 0.125% arm is detected in 1 replicate of 3 at every threshold.** That is a molecule
+limit, not a filter effect, and no threshold moves it -- see the plasma-DNA table above.
+
+The MAPQ floor is not the fix
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The adapter read-through above is real and a ``-q 20`` filter does remove those *alignments*. It
+does not remove the calls. Applied to the same consensus BAMs before calling, three replicates per
+arm:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 20 20 20 18
+
+   * - arm
+     - ``--min-reads``
+     - calls/sample, MAPQ 0
+     - calls/sample, MAPQ >= 20
+     - change
+   * - **0%, truth: absent**
+     - 1
+     - 10.0
+     - **25.7**
+     - **2.6x worse**
+   * - 0%
+     - 3
+     - 2.0
+     - 2.0
+     - none
+   * - 0%
+     - 5
+     - 1.0
+     - 1.0
+     - none
+   * - 0.25%
+     - 1
+     - 10.3
+     - 26.3
+     - 2.5x worse
+   * - 1%
+     - 1
+     - 9.0
+     - 10.0
+     - +1
+
+The call set at MAPQ >= 20 is a strict **superset** of the one at MAPQ 0 on the 0% arm at
+``--min-reads 1``: 13 positions shared, 18 added, none removed. The 18 additions sit at 0.22-0.38%
+VAF and **16 of the 18 are** ``-> G`` -- the same dark-G artifact, previously just under the
+threshold. Depth at those loci barely moved (6,434 against 6,473), so the filter did not take
+evidence away; it moved where the caller's threshold fell.
+
+Never: **a filter that removes the diagnosed cause is not the same thing as a filter that removes
+the calls.** The mismapping is real, the MAPQ floor removes it, and the false-positive burden goes
+*up*. At ``--min-reads 3`` and 5 the MAPQ floor changes nothing at all, because the artifact it
+would have to remove is already gone. Adapter trimming -- removing the cause before ``checkout``
+rather than its symptom after alignment -- is still diagnosed and still unmeasured.
 
 What you can do blind
 ---------------------
