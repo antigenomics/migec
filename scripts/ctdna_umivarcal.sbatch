@@ -51,11 +51,18 @@ export MAMBA_ROOT_PREFIX=$ROOT/mamba
 MICROMAMBA=$HOME/bin/micromamba
 if [ ! -x "$UVDIR/bin/python" ]; then
     echo "=== creating the UMI-VarCal environment ==="
+    # Never: `psutil` is NOT in its README's requirements list and the tool does not start without
+    # it -- the import is inside the compiled `functions.pyx`, so it surfaces as a
+    # ModuleNotFoundError from a .pyx line and not as a missing dependency. Same for `tqdm`.
     "$MICROMAMBA" create -y -p "$UVDIR" -c conda-forge -c bioconda \
-        python=3.9 cython msgpack-python scipy statsmodels pysam numpy pip samtools minimap2
+        python=3.9 cython msgpack-python scipy statsmodels pysam numpy pip samtools minimap2 \
+        psutil tqdm
     "$UVDIR/bin/pip" install --quiet pyfasta || echo "pyfasta from pip failed"
 fi
 export PATH="$UVDIR/bin:$PATH"
+# Idempotent, and cheaper than rebuilding the prefix when one undocumented dependency turns up.
+"$UVDIR/bin/python" -c "import psutil, tqdm" 2>/dev/null || \
+    "$MICROMAMBA" install -y -p "$UVDIR" -c conda-forge psutil tqdm
 
 # It is a git checkout with a Cython extension to build, not a package.
 if [ ! -d "$SRC/.git" ]; then
