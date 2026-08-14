@@ -195,6 +195,49 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
     // above is then the budget rather than the library, which is the whole point -- and it is also
     // why the two numbers have to be read together.
     out["umi_spilled"] = stats.umi_spilled;
+
+    // The i7 x i5 contingency table, and what it says about index hopping. Read off the
+    // instrument's own header, so it costs nothing and is available on any run whose headers
+    // survived -- and it is the only way hopping is estimable at all: a hopped read lands in
+    // another real sample and looks like one of its reads.
+    {
+        const IndexHopping h = estimate_index_hopping(c.index_pairs);
+        py::list rows;
+        for (const auto& kv : c.index_pairs) {
+            py::dict d;
+            d["i7"] = kv.first.first;
+            d["i5"] = kv.first.second;
+            d["reads"] = kv.second;
+            rows.append(d);
+        }
+        py::dict ix;
+        ix["pairs"] = rows;
+        ix["estimable"] = h.estimable;
+        ix["i7_indices"] = h.i7_indices;
+        ix["i5_indices"] = h.i5_indices;
+        ix["declared_pairs"] = h.declared_pairs;
+        ix["hopped_pairs"] = h.hopped_pairs;
+        ix["reads_declared"] = h.reads_declared;
+        ix["reads_hopped"] = h.reads_hopped;
+        ix["rate"] = h.rate;
+        ix["min_share"] = h.min_share;
+        out["index_hopping"] = ix;
+
+        // The run's spatial yield. One row per (lane, tile): a bubble, a dead tile and an
+        // underloaded lane are all invisible in a read count and obvious here.
+        py::list tiles;
+        uint64_t tile_reads = 0;
+        for (const auto& kv : c.tiles) {
+            py::dict d;
+            d["lane"] = kv.first.first;
+            d["tile"] = kv.first.second;
+            d["reads"] = kv.second;
+            tiles.append(d);
+            tile_reads += kv.second;
+        }
+        out["tiles"] = tiles;
+        out["reads_with_coordinates"] = tile_reads;
+    }
     // `.mig` output: the buckets that were written, in sample-then-bucket order. This is what
     // `assemble` is handed to skip its own partition pass, and an empty bucket is simply absent.
     out["mig"] = stats.mig_output;
@@ -566,6 +609,7 @@ PYBIND11_MODULE(_core, m) {
             }
             d["examples"] = examples;
             d["wall_seconds"] = st.wall_seconds;
+            d["peak_rss_bytes"] = st.peak_rss_bytes;
             return d;
         },
         py::arg("input"), py::arg("output"), py::arg("per_10k") = 100u,

@@ -154,6 +154,8 @@ file                                 content
 ``checkout.summary.tsv``             one row per sample: yields, UMI statistics, correction
 ``checkout.coverage.tsv``            reads and distinct UMIs per power-of-two MIG size
 ``checkout.umi_composition.tsv``     per-position base usage, entropy, information, collision
+``checkout.index_pairs.tsv``         reads per observed i7 x i5 combination, and which were ordered
+``checkout.tiles.tsv``               reads per lane and tile: the run's yield map
 ``checkout.json``                    everything above, machine-readable
 ===================================  =========================================================
 
@@ -202,6 +204,63 @@ well — there the second mate is simply a file you did not hand it.
 
 Note: unmatched reads stay FASTQ (``--write-unmatched``). They carry no barcode, so there is no
 bucket to put them in.
+
+
+Index hopping, from the header
+------------------------------
+
+On a patterned flowcell a free index primer can prime a neighbouring cluster, so a molecule from
+one sample is read carrying its own i7 and another sample's i5. The read then lands in that other
+sample and looks exactly like one of its reads: nothing in the sequence, the barcode or the count
+says otherwise, which is why a per-sample yield can never see it.
+
+The instrument already wrote the evidence. ``checkout`` reads the index pair out of the read
+header — the last field of ``1:N:0:ATCACG+CGTGAT`` — for **every** read, matched or not, and
+writes the contingency table:
+
+.. code-block:: text
+
+   i7      i5      reads   share_of_i7  share_of_i5  declared
+   ATCACG  CGTGAT  9803    0.980        0.980        1
+   CGATGT  ACATCG  9797    0.980        0.980        1
+   ATCACG  ACATCG  200     0.020        0.020        0
+   CGATGT  CGTGAT  200     0.020        0.020        0
+
+A combination counts as **declared** when it holds at least 5% of the reads of its own i7 *and* of
+its own i5. The sample sheet migec is given carries the in-line barcode, not the index pair, so the
+declared set is inferred — and the gap is wide enough to infer it from: hopping runs at 0.1–2%
+while a declared combination is the bulk of its own index. The raw counts are in the table so the
+inference can be disagreed with.
+
+Note: it matters most where it is smallest. At 0.1% hopping, a 1% variant in a deeply sequenced
+sample contaminates its neighbour at 1e-5 — which is exactly the level a rare-variant caller is
+asked to believe.
+
+Never: **a single-indexed run is not estimable, and that is not the same as zero.** With one index
+there are no combinations, so nothing can be off-diagonal; ``estimable`` is false and the rate is
+not reported as a finding.
+
+
+Where on the flowcell
+---------------------
+
+The same header carries the lane and the tile — ``instrument:run:flowcell:lane:tile:x:y`` — and
+``checkout.tiles.tsv`` is one row per (lane, tile) with its share of its lane. A tile is a physical
+patch of the flowcell, so a bubble, a dead tile, an edge effect and an underloaded lane all show
+here and in no other table migec writes: a run with one starved tile and a healthy run have the same
+read count, the same barcode statistics and the same molecule count.
+
+Note: the deeper spatial question is whether two reads of one molecule are the same **cluster** read
+twice. Optical duplicates on an unpatterned flowcell, and ExAmp pad-hopping duplicates on a
+patterned one, are not independent observations, and the consensus posterior adds one
+log-likelihood per read as though they were. That scan needs the reads of a molecule together *and*
+the pixel coordinates with them, which would cost 12 bytes a read in the one stage whose memory
+bound is the claim — so it lives in ``scripts/diagnose.py``, at Picard's own distances (100 px
+unpatterned, 2500 px patterned).
+
+Never: an SRA-normalised header has no coordinates at all (``@SRR1763769.1 1/2``), and a run whose
+headers did not survive reports **no map** rather than a map of one tile that reads as a
+single-tile flowcell.
 
 
 What the reported Phred is actually worth

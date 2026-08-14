@@ -146,6 +146,39 @@ def _write_tables(out: Path, summary: dict) -> None:
                 f"{e['neighbour_occupancy']:.6f}\t{int(e['estimate_unreliable'])}\n"
             )
 
+    # The i7 x i5 contingency table, straight off the instrument's own read header. One row per
+    # observed combination; `declared` is the inference, and the raw counts are here so it can be
+    # disagreed with.
+    ix = summary.get("index_hopping", {})
+    if ix.get("pairs"):
+        by_i7: dict[str, int] = {}
+        by_i5: dict[str, int] = {}
+        for row in ix["pairs"]:
+            by_i7[row["i7"]] = by_i7.get(row["i7"], 0) + row["reads"]
+            by_i5[row["i5"]] = by_i5.get(row["i5"], 0) + row["reads"]
+        with open(out / "checkout.index_pairs.tsv", "w") as fh:
+            fh.write("i7\ti5\treads\tshare_of_i7\tshare_of_i5\tdeclared\n")
+            for row in sorted(ix["pairs"], key=lambda r: -r["reads"]):
+                s7 = row["reads"] / by_i7[row["i7"]]
+                s5 = row["reads"] / by_i5[row["i5"]] if by_i5[row["i5"]] else 0.0
+                declared = s7 >= ix["min_share"] and s5 >= ix["min_share"]
+                fh.write(
+                    f"{row['i7']}\t{row['i5'] or '.'}\t{row['reads']}\t{s7:.6f}\t{s5:.6f}\t"
+                    f"{int(declared)}\n"
+                )
+
+    # The run's yield map. A tile is a physical patch of the flowcell, so a bubble, a dead tile or
+    # an underloaded lane shows here and in no other table migec writes.
+    if summary.get("tiles"):
+        with open(out / "checkout.tiles.tsv", "w") as fh:
+            fh.write("lane\ttile\treads\tshare_of_lane\n")
+            per_lane: dict[int, int] = {}
+            for row in summary["tiles"]:
+                per_lane[row["lane"]] = per_lane.get(row["lane"], 0) + row["reads"]
+            for row in summary["tiles"]:
+                share = row["reads"] / per_lane[row["lane"]] if per_lane[row["lane"]] else 0.0
+                fh.write(f"{row['lane']}\t{row['tile']}\t{row['reads']}\t{share:.6f}\n")
+
     # What the reported Phred is worth, measured against the pattern's own constant bases.
     with open(out / "checkout.quality_calibration.tsv", "w") as fh:
         fh.write("phred\tbases\tmismatches\tobserved\tnominal\tcalibrated\n")
@@ -253,6 +286,15 @@ def format_report(summary: dict) -> str:
             f"{e['predicted']:>11.1e}{e['estimated']:>10.1e}"
         )
 
+    ix = c.get("index_hopping", {})
+    if ix.get("estimable"):
+        lines.append("")
+        lines.append(
+            f"index hopping {100 * ix['rate']:.3f}% of reads, in {ix['hopped_pairs']:,} "
+            f"undeclared i7xi5 combination(s) against {ix['declared_pairs']:,} declared "
+            f"({ix['i7_indices']} x {ix['i5_indices']} indices seen)"
+        )
+
     cal = c.get("quality_calibration", {})
     if cal.get("fitted"):
         lines.append("")
@@ -280,6 +322,17 @@ def format_report(summary: dict) -> str:
             f"UMI counters hold {_bytes(c['umi_memory_bytes'])} and did not partition. This grows "
             f"with the number of distinct UMIs, so a much larger input may not fit in memory -- "
             f"check that umi_budget_bytes is not 0 and that the barcode is long enough to split"
+        )
+    # Note: hopping is a property of the RUN, not of this sample, and it is the one contamination
+    # a per-sample count cannot see -- a hopped read lands in another real sample and looks like
+    # one of its reads. It matters most where it is smallest: at 0.1% a 1% variant in a deep
+    # sample contaminates its neighbour at a level a rare-variant caller reports as real.
+    if ix.get("estimable") and ix["rate"] > 0.01:
+        warnings.append(
+            f"{100 * ix['rate']:.2f}% of reads carry an i7xi5 combination nobody ordered "
+            f"({ix['hopped_pairs']:,} of {ix['hopped_pairs'] + ix['declared_pairs']:,} "
+            f"combinations). That is index hopping, and it puts one sample's molecules into "
+            f"another sample at that rate -- see checkout.index_pairs.tsv"
         )
     if cal.get("fitted") and cal["slope"] > 2.0:
         warnings.append(

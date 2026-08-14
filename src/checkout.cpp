@@ -122,6 +122,8 @@ void CheckoutCounters::merge(const CheckoutCounters& o) {
         for (size_t L = 0; L < kPayloadHistLen; ++L) payload_len[i][L] += o.payload_len[i][L];
     }
     trimmed_bases += o.trimmed_bases;
+    for (const auto& kv : o.index_pairs) index_pairs[kv.first] += kv.second;
+    for (const auto& kv : o.tiles) tiles[kv.first] += kv.second;
 }
 
 Checkout::Checkout(const PatternSet& patterns, CheckoutParams params)
@@ -472,6 +474,23 @@ struct MigLayout {
     size_t n_buckets = 1;
 };
 
+// The (i7, i5) index pair out of an Illumina read header, or two empty strings.
+//
+// The comment is `<read>:<is filtered>:<control>:<index>`, and the index is `i7+i5` on a
+// dual-indexed run, `i7` alone on a single-indexed one, and absent on anything that has been
+// through a tool that rewrote the header. Never guess past that: a header migec does not recognise
+// yields no pair and the table simply has nothing to say, which is the truth.
+std::pair<std::string_view, std::string_view> index_pair(std::string_view comment) {
+    const size_t last = comment.rfind(':');
+    if (last == std::string_view::npos || last + 1 >= comment.size()) return {};
+    std::string_view field = comment.substr(last + 1);
+    // A tag block, not an index: the comment was already rewritten by something.
+    if (field.find('\t') != std::string_view::npos) return {};
+    const size_t plus = field.find('+');
+    if (plus == std::string_view::npos) return {field, {}};
+    return {field.substr(0, plus), field.substr(plus + 1)};
+}
+
 // Min Phred over a barcode's quality string, capped at 60 -- the `.mig` record's own field, and
 // the evidence `refine` uses when the count ratio has nothing to say.
 uint8_t min_phred(std::string_view qual) {
@@ -503,6 +522,22 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
             m2 = c.field(c.b[i], 1);
             s2 = c.field(c.b[i], 2);
             q2 = c.field(c.b[i], 3);
+        }
+
+        // Before anything replaces the comment: the instrument's own index pair. Counted for
+        // EVERY read, matched or not -- a hopped read that matches no pattern is still evidence of
+        // hopping, and restricting the table to assigned reads would hide exactly the population
+        // it exists to measure.
+        {
+            uint32_t lane = 0, tile = 0;
+            if (parse_lane_tile(n1, &lane, &tile)) {
+                ++w.co->counters_mutable().tiles[{lane, tile}];
+            }
+            const auto ix = index_pair(m1);
+            if (!ix.first.empty()) {
+                ++w.co->counters_mutable().index_pairs[{std::string(ix.first),
+                                                        std::string(ix.second)}];
+            }
         }
 
         CheckoutPair r = w.co->process_pair(s1, q1, s2, q2, w.scratch);
@@ -892,6 +927,67 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         stats.umi_spilled = stats.umi_spilled || u.spilled();
     }
     return stats;
+}
+
+bool parse_lane_tile(std::string_view name, uint32_t* lane, uint32_t* tile) {
+    // Split on ':' and take the fields by position. Seven fields is Casava 1.8+ (lane 4, tile 5);
+    // five or more with a '#' in the last is the older form (lane 2, tile 3).
+    std::vector<std::string_view> f;
+    size_t pos = 0;
+    while (pos <= name.size() && f.size() < 12) {
+        const size_t end = std::min(name.find(':', pos), name.size());
+        f.push_back(name.substr(pos, end - pos));
+        pos = end + 1;
+    }
+    auto number = [](std::string_view v, uint32_t* out) {
+        if (v.empty() || v.size() > 9) return false;
+        uint32_t n = 0;
+        for (char c : v) {
+            if (c < '0' || c > '9') return false;
+            n = n * 10 + static_cast<uint32_t>(c - '0');
+        }
+        *out = n;
+        return true;
+    };
+    if (f.size() >= 7) return number(f[3], lane) && number(f[4], tile);
+    if (f.size() == 5) return number(f[1], lane) && number(f[2], tile);
+    return false;
+}
+
+IndexHopping estimate_index_hopping(
+    const std::map<std::pair<std::string, std::string>, uint64_t>& pairs, double min_share) {
+    IndexHopping h;
+    h.min_share = min_share;
+    if (pairs.empty()) return h;
+    std::map<std::string, uint64_t> by_i7, by_i5;
+    uint64_t total = 0;
+    bool dual = false;
+    for (const auto& kv : pairs) {
+        by_i7[kv.first.first] += kv.second;
+        by_i5[kv.first.second] += kv.second;
+        total += kv.second;
+        if (!kv.first.second.empty()) dual = true;
+    }
+    h.i7_indices = by_i7.size();
+    h.i5_indices = by_i5.size();
+    // One index, or one of each: there are no combinations, so nothing can be off-diagonal.
+    if (!dual || h.i7_indices < 2 || h.i5_indices < 2) return h;
+    h.estimable = true;
+    for (const auto& kv : pairs) {
+        const double share_i7 =
+            static_cast<double>(kv.second) / static_cast<double>(by_i7[kv.first.first]);
+        const double share_i5 =
+            static_cast<double>(kv.second) / static_cast<double>(by_i5[kv.first.second]);
+        if (share_i7 >= min_share && share_i5 >= min_share) {
+            ++h.declared_pairs;
+            h.reads_declared += kv.second;
+        } else {
+            ++h.hopped_pairs;
+            h.reads_hopped += kv.second;
+        }
+    }
+    h.rate = total ? static_cast<double>(h.reads_hopped) / static_cast<double>(total) : 0.0;
+    return h;
 }
 
 UmiSpillDir::~UmiSpillDir() {

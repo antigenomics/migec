@@ -147,12 +147,16 @@ correction is written up in `project/review-algorithms.md`.
 - **Note: Do not reproduce MIGEC v1's bugs.** Quality must be indexed at the *match offset*, not the
   read start; low-quality mismatches must actually be counted (v1's dangling `else` meant they
   never were).
-- Done: The version string is duplicated in `pyproject.toml`, `include/migec/version.hpp` and
-  `python/migec/__init__.py`. `__init__.py` asserts the last two agree and CI prints all three.
+- Done: The version string is in FOUR places -- `pyproject.toml`, `include/migec/version.hpp`,
+  `python/migec/__init__.py` and `docs/conf.py`. `__init__.py` asserts the middle two agree and CI
+  prints all three; nothing checks `docs/conf.py`, which is how it sat at `2.0.0.dev0` for three
+  releases while every published page showed it.
 
 ## Release process
 
-1. Bump the version in all three places above; add a `CHANGELOG.md` section.
+1. Bump the version in all FOUR places above; add a `CHANGELOG.md` section. Then check the README:
+   it is the PyPI long description, so a repo-relative image or link is broken from the moment the
+   wheel lands.
 2. Branch `release/<version>` → PR → CI and docs green.
 3. `gh release create v<version>`.
 4. `publish.yml` builds wheels and publishes via OIDC to the `pypi` environment. Never: Do not rename
@@ -163,8 +167,8 @@ correction is written up in `project/review-algorithms.md`.
 - M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
   correction, **paired input with strand normalisation**, and **multi-core with byte-identical
   output at any `-t`** (1.06 M reads/s end to end, 1.68 M matching, at 16 threads;
-  `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists and
-  dual-end barcodes are done; `.mig` bucket output from checkout is still open.
+  `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists,
+  dual-end barcodes and `.mig` bucket output are all done.
 - **The UMI counters bound themselves and correction follows them (2026-08-14).** Past
   `umi_budget_bytes` (1 GB per run, divided by the samples; a `checkout.run()` kwarg, never a CLI
   flag) each counter range-partitions into `<out>/.umi_spill`, removed when the summary is written,
@@ -355,6 +359,13 @@ correction is written up in `project/review-algorithms.md`.
   moves the UMI into the FASTQ header and SRA rewrites headers. Confirmed on three runs by the
   missing template-switch `GGG`. `suggest` reports it correctly. The `smarter-umi` preset is
   sourced from the pipeline, not fitted to the data. In `SOURCES.md`.
+- **The i7xi5 contingency table is in (2026-08-14, 2.3.0).** Read off the instrument's header for
+  EVERY read, matched or not -- restricting it to assigned reads would hide the population it
+  exists to measure. A combination is "declared" when it holds >= 5% of the reads of its own i7 AND
+  its own i5; the sheet carries the in-line barcode rather than the index pair, so the declared set
+  is inferred, and the gap is wide (hopping 0.1-2% against a declared combination being the bulk of
+  its index). Never: a SINGLE-indexed run is `estimable = false`, not a rate of zero -- nothing can
+  be off-diagonal when there are no combinations.
 - **The four familiar QC figures are in (2.1.0)**: Cell Ranger's barcode rank plot
   (`<sample>.cell_rank.tsv`), the MIG size spectrum on log1p with molecules AND reads, the
   rank/Zipf curve, and unique UMIs per sample barcode. Never: the knee plot's y axis is **unique
@@ -486,13 +497,12 @@ correction is written up in `project/review-algorithms.md`.
   2. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
      the polymerase, so the RT/PCR separation needs a different standard.
   3. **`--rt-error auto`**, which falls out of 2 and not before it.
-  4. **i7xi5 contingency table** — needs nothing that is not already in the headers.
-  5. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
+  4. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
-  6. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
+  5. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
      built -- only the call sets are missing.
-  7. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
-  8. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+  6. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
+  7. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
   reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
   `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline

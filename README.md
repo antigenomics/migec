@@ -18,9 +18,9 @@ Computational Biology* 2017).
 > **Version 2 is under construction.** All three stages work today, with cell barcodes, whitelists,
 > dual-end and positional (10x) layouts, cell calling, QC figures, and `suggest`/`subsample`/`plot`.
 > Index hopping and the published benchmark comparisons are what remain; see
-> [`ROADMAP.md`](ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on branch
-> [`legacy-v1`](../../tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
-> [1.2.9 release](../../releases/tag/1.2.9).
+> [`ROADMAP.md`](https://github.com/antigenomics/migec/blob/master/ROADMAP.md). The Groovy MIGEC 1.2.9 is archived on branch
+> [`legacy-v1`](https://github.com/antigenomics/migec/tree/legacy-v1) and at tag `v1-final` — Java users want the jars on the
+> [1.2.9 release](https://github.com/antigenomics/migec/releases/tag/1.2.9).
 
 ## Why
 
@@ -49,7 +49,7 @@ uv venv --python 3.12 ~/envs/migec && source ~/envs/migec/bin/activate && uv pip
 ```
 
 From source, for development: `git clone https://github.com/antigenomics/migec && cd migec && bash
-setup.sh`. See [docs/installation.rst](docs/installation.rst).
+setup.sh`. See [installation](https://antigenomics.github.io/migec/installation.html).
 
 ## Where the barcode is
 
@@ -76,7 +76,7 @@ source each layout is written down in:
 | `duplex` | `^NNNNNNNNNNNN.....` on both mates | duplex sequencing |
 | `10x` | `^XXXXXXXXXXXXXXXXNNNNNNNNNNNN` | 10x Chromium 3' v3 |
 | `10x-v2` | `^XXXXXXXXXXXXXXXXNNNNNNNNNN` | 10x Chromium 3' v2 and 5' |
-| `tso500` | `^NNNNN.....` on R1 | Illumina TSO500 ctDNA — read the warning in [docs/layouts.rst](docs/layouts.rst) |
+| `tso500` | `^NNNNN.....` on R1 | Illumina TSO500 ctDNA — read the warning in [layouts](https://antigenomics.github.io/migec/layouts.html) |
 | `smarter-umi` | `^NNNNNNNNNN...` | SMARTer template-switching RNA-seq |
 
 ```bash
@@ -90,7 +90,7 @@ A preset says where the barcode is. It does not say what a consensus is worth, a
 more: the same 12 nt UMI serves a repertoire census and an MRD assay, and the right settings are
 opposite. `migec sheet --assay ctdna` prints the second half — the `--min-reads` and the
 pre-amplification floor the experiment implies, for eight profiles from `airr` to `mrd`
-([docs/assays.rst](docs/assays.rst), [docs/layouts.rst](docs/layouts.rst)).
+([assays](https://antigenomics.github.io/migec/assays.html), [layouts](https://antigenomics.github.io/migec/layouts.html)).
 
 ## The pipeline
 
@@ -102,7 +102,7 @@ migec subsample out/S1.fq.gz -o small.fq.gz --keep 1  # a fixture that is still 
 ```
 
 Those four and `suggest` are the pipeline; `plot`, `sheet` and `info` read no reads at all
-([docs/commands.rst](docs/commands.rst)).
+([commands](https://antigenomics.github.io/migec/commands.html)).
 
 Every stage takes `-t/--threads` (one per core by default) and `--limit-read N` / `--limit-umi N`,
 which stop the intake early — for getting an answer out of a 400 GB run in a minute, never as a
@@ -147,7 +147,7 @@ migec plot cons/          # twenty QC panels with gnuplot, straight off those TS
 
 <p align="center"><img alt="barcode rank plot" src="assets/cell_rank.svg" width="60%"></p>
 
-Each of these was run against real output ([docs/downstream.rst](docs/downstream.rst)):
+Each of these was run against real output ([downstream](https://antigenomics.github.io/migec/downstream.html)):
 
 ```bash
 minimap2 -ax sr -y ref.fa cons/S1.consensus.fq.gz | samtools sort -o S1.bam   # RX, CB, MI in the BAM
@@ -164,17 +164,17 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
 
 - Barcode correction uses the evidence that survives at **one read per UMI** — the barcode's own
   base quality and payload agreement, not only the count ratio, which reports zero there
-  ([docs/refine.rst](docs/refine.rst)).
+  ([refine](https://antigenomics.github.io/migec/refine.html)).
 - Emitted quality is capped at the **measured** RT/first-cycle floor, Q40 by default, never at the
-  instrument's ([docs/quality_floor.rst](docs/quality_floor.rst)).
+  instrument's ([quality floor](https://antigenomics.github.io/migec/quality_floor.html)).
 - Every model-derived number has something model-free beside it: collisions, the barcode error rate,
-  the split threshold ([docs/nulls.rst](docs/nulls.rst), [docs/barcode_space.rst](docs/barcode_space.rst)).
+  the split threshold ([nulls](https://antigenomics.github.io/migec/nulls.html), [barcode space](https://antigenomics.github.io/migec/barcode_space.html)).
 - Nothing scales with the library — a range partition into buckets and a sorted counter array, 22 B
-  per distinct UMI against a hash map's 48 ([docs/performance.rst](docs/performance.rst)).
+  per distinct UMI against a hash map's 48 ([performance](https://antigenomics.github.io/migec/performance.html)).
 - Twenty QC panels, each a gnuplot script over a TSV a stage already wrote, so a figure can never
-  disagree with the report ([docs/plots.rst](docs/plots.rst)).
+  disagree with the report ([plots](https://antigenomics.github.io/migec/plots.html)).
 - For rare variants the **molecule count decides, not the caller**, and it is fixed before any
-  software runs ([docs/variants.rst](docs/variants.rst), [docs/detection.rst](docs/detection.rst)).
+  software runs ([variants](https://antigenomics.github.io/migec/variants.html), [detection](https://antigenomics.github.io/migec/detection.html)).
 
 ## Documentation
 
@@ -182,14 +182,14 @@ salmon quant -i tx.idx -l A -r cons/S1.consensus.fq.gz -o quant/   # NumReads ar
 
 | | |
 |---|---|
-| [Installation](docs/installation.rst), [Examples](docs/examples.rst) | a copy-paste run per platform, and six marimo notebooks |
-| [Layouts](docs/layouts.rst), [Assays](docs/assays.rst) | where the barcode is, and what a consensus is worth once it is found |
-| [Commands](docs/commands.rst) | all eight, with the number each one decides |
-| [Downstream](docs/downstream.rst) | what consumes the consensus, measured tool by tool |
-| [Variant calling](docs/variants.rst), [Detection limits](docs/detection.rst) | which caller, and the molecules that decide whether any can see it |
-| [Method](docs/method.rst) | why every default is what it is: barcode space, nulls, the quality floor |
-| [Reference](docs/reference.rst) | file formats, speed and memory, pipelines, roadmap |
-| [`SOURCES.md`](SOURCES.md) | every dataset, where it came from, and the command that re-fetches it |
+| [Installation](https://antigenomics.github.io/migec/installation.html), [Examples](https://antigenomics.github.io/migec/examples.html) | a copy-paste run per platform, and six marimo notebooks |
+| [Layouts](https://antigenomics.github.io/migec/layouts.html), [Assays](https://antigenomics.github.io/migec/assays.html) | where the barcode is, and what a consensus is worth once it is found |
+| [Commands](https://antigenomics.github.io/migec/commands.html) | all eight, with the number each one decides |
+| [Downstream](https://antigenomics.github.io/migec/downstream.html) | what consumes the consensus, measured tool by tool |
+| [Variant calling](https://antigenomics.github.io/migec/variants.html), [Detection limits](https://antigenomics.github.io/migec/detection.html) | which caller, and the molecules that decide whether any can see it |
+| [Method](https://antigenomics.github.io/migec/method.html) | why every default is what it is: barcode space, nulls, the quality floor |
+| [Reference](https://antigenomics.github.io/migec/reference.html) | file formats, speed and memory, pipelines, roadmap |
+| [`SOURCES.md`](https://github.com/antigenomics/migec/blob/master/SOURCES.md) | every dataset, where it came from, and the command that re-fetches it |
 
 ## Citing
 

@@ -274,3 +274,44 @@ def test_premade_buckets_skip_the_partition_pass(tmp_path):
     # ...and the point of all of it: the same molecules either way.
     assert b["molecules"] == a["molecules"]
     assert b["groups"] == a["groups"]
+
+
+# --- subsample: the fourth stage, which had no benchmark at all until now -----------------------
+
+def test_subsample_speed_and_memory(tmp_path):
+    """`subsample` is the one stage whose cost was never asserted.
+
+    It holds a hash set of the KEPT barcodes and one chunk of reads, so its peak RSS should be a
+    fraction of the library and far below the other three stages -- and the only way to know that
+    stays true is to measure it. The speed floor is the same shape as the others: an order of
+    magnitude below what the machine does, so it catches a structural regression and not a noisy
+    runner.
+    """
+    import gzip
+
+    from migec.subsample import run
+
+    path = tmp_path / "reads.fq.gz"
+    rng = random.Random(0)
+    with gzip.open(path, "wt", compresslevel=1) as fh:
+        i = 0
+        while i < N_READS:
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(PAYLOAD))
+            for _ in range(READS_PER_UMI):
+                fh.write(
+                    f"@r{i} RX:Z:{umi}\tQX:Z:{'I' * 12}\tBC:Z:S1\n"
+                    f"{payload}\n+\n{'I' * PAYLOAD}\n"
+                )
+                i += 1
+
+    s = run(path, tmp_path / "sub.fq.gz", keep_percent=1.0)
+    rate = s["reads"] / max(s["wall_seconds"], 1e-9)
+    print(f"\n  subsample: {rate:,.0f} reads/s, peak RSS "
+          f"{s['peak_rss_bytes'] / 2**20:.0f} MB, kept {s['reads_kept']:,} of {s['reads']:,}")
+    assert rate > 20_000, f"subsample collapsed to {rate:,.0f} reads/s"
+    # Never: a percentage of the BARCODES, so the kept share is only approximately the percentage
+    # asked for -- barcodes differ in depth. What must hold is that it kept a small slice and not
+    # the whole file.
+    assert 0 < s["reads_kept"] < s["reads"] // 10
+    assert s["peak_rss_bytes"] < 1 << 30, "subsample should not hold anything that large"

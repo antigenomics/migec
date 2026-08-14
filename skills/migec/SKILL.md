@@ -139,6 +139,7 @@ migec refine out/S1.fq.gz -o ref/ --no-payload         # what the count ratio al
 migec checkout ... --mig                                # .mig buckets, not FASTQ: assemble skips
                                                        # its partition pass over them
 migec assemble ref/S1.fq.gz -o cons/                   # one consensus per molecule
+migec refine   out/S1.000.mig -o ref/                   # buckets in, buckets out
 migec assemble out/S1.000.mig -o cons/                 # ...or the buckets --mig wrote
 migec assemble out/S1.fq.gz -o cons/ --contig          # random-primed reads tiling a molecule
 migec assemble out/S1.fq.gz -o cons/ --rt-error medium # the floor by chemistry: rt|medium|high
@@ -470,8 +471,10 @@ instead of per-sample FASTQ, on the same key and the same range partition, so
 reads over four samples, identical molecules. One bucket file names the whole partition. Opt-in:
 FASTQ is the default because a `.mig` file is a migec intermediate nothing else reads. Never: a
 directory of two samples' buckets is refused (a UMI repeats across samples), and `--limit-*` on a
-partitioned input is refused (a limit is a prefix; a partition has none). `refine` cannot read
-buckets yet, so `--mig` goes checkout -> assemble.
+partitioned input is refused (a limit is a prefix; a partition has none). `refine` reads and writes
+buckets too, so the whole chain runs on them: `checkout --mig` -> `refine out/S1.000.mig` ->
+`assemble ref/S1.000.mig`. refine's output is re-partitioned on the CORRECTED barcode, because a
+corrected barcode is a different key and a key decides its bucket.
 
 **Note: The UMI counters scale with the library, and bound themselves past a budget** — ~22 bytes
 per distinct UMI (a sorted `(key, count)` array; a hash map is ~48), which is ~8.8 GB at NovaSeq

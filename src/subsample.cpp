@@ -97,6 +97,7 @@ SubsampleStats subsample(const SubsampleRequest& request) {
         }
     }
     stats.wall_seconds = clock.seconds();
+    stats.peak_rss_bytes = peak_rss_bytes();
     return stats;
 }
 

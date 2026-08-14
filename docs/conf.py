@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath("../python"))
 project = "migec"
 copyright = "2026, Mikhail Shugay"
 author = "Mikhail Shugay"
-release = "2.0.0.dev0"
+release = "2.3.0"
 
 extensions = [
     "sphinx.ext.autodoc",

@@ -68,6 +68,11 @@ struct SubsampleStats {
     // else -- the same trap `subsample` exists to avoid, one level down.
     std::vector<std::pair<std::string, uint64_t>> examples;
     double wall_seconds = 0.0;
+    // Reported like every other stage's, so a pipeline's memory can be read off its four
+    // summaries. subsample holds a hash set of the KEPT barcodes -- a fraction of the library --
+    // and one chunk of reads, so this should be the smallest of the four, and the only way to know
+    // that it stays so is to print it.
+    size_t peak_rss_bytes = 0;
 };
 
 SubsampleStats subsample(const SubsampleRequest& request);

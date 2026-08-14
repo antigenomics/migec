@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
+#include <utility>
 #include <memory>
 #include <string>
 #include <vector>
@@ -117,6 +119,30 @@ struct CheckoutCounters {
     std::vector<std::array<uint64_t, kPayloadHistLen>> payload_len;
     uint64_t trimmed_bases = 0;
     QualityCalibration calibration;
+    // Reads per observed (i7, i5) index pair, from the instrument's own read header -- the last
+    // colon-separated field of the comment, `1:N:0:ATCACG+CGTGAT`.
+    //
+    // This is the ONLY way index hopping is estimable, and it needs nothing that is not already in
+    // the file. A dual-indexed run declares a set of i7 x i5 combinations; a read carrying a
+    // combination nobody ordered came from a molecule that swapped one of its indices on the
+    // patterned flowcell. Counting reads per sample cannot see it -- a hopped read lands in
+    // another real sample and looks like that sample's read.
+    //
+    // Bounded by the number of DISTINCT pairs, which is the plate size squared at worst (a 96-plex
+    // run is 9,216 rows of ~40 bytes) and in practice the declared pairs plus the hopped ones.
+    // Never a per-read allocation: the map is per worker and merged once.
+    std::map<std::pair<std::string, std::string>, uint64_t> index_pairs;
+    // Reads per (lane, tile), from the same header. A tile is a physical patch of the flowcell, so
+    // this is the run's yield MAP: a bubble, a dead tile, an edge effect and a lane that was
+    // underloaded all show here and nowhere else in a summary that counts reads. Bounded by the
+    // instrument -- a NovaSeq S4 is 4 lanes x 1,408 tiles -- and it costs one map lookup per read.
+    //
+    // Note: the deeper spatial question, whether two reads of one molecule are the same CLUSTER
+    // read twice, needs the reads of a molecule together and the pixel coordinates with them.
+    // `scripts/diagnose.py` does that scan at Picard's own distances (100 px unpatterned, 2500 px
+    // patterned) and it is deliberately not in the pipeline: it would cost 12 bytes a read in the
+    // one stage whose memory bound is the claim.
+    std::map<std::pair<uint32_t, uint32_t>, uint64_t> tiles;
 
     void merge(const CheckoutCounters& o);
 };
@@ -174,6 +200,9 @@ public:
                               CheckoutScratch& scratch);
 
     const CheckoutCounters& counters() const { return counters_; }
+    // For the one statistic that is read off the INPUT header rather than off the match: the
+    // instrument's index pair, which `process_pair` never sees because it is handed sequence.
+    CheckoutCounters& counters_mutable() { return counters_; }
 
     // The SAM-style comment to append to a FASTQ header. TAB-separated, because `bwa mem -C` and
     // `minimap2 -y` copy the comment verbatim into the SAM record and it has to be conformant
@@ -253,6 +282,42 @@ struct CheckoutRequest {
     // so a 96-plex sheet gets a couple of buckets each rather than 96 x 256 open writers.
     int mig_bucket_bits = 0;
 };
+
+// What the index pairs say about hopping.
+//
+// On a patterned flowcell a free index primer can prime a neighbouring cluster, so a molecule from
+// sample A is read with A's i7 and B's i5. The read then lands in B and looks exactly like one of
+// B's reads -- which is why a per-sample count can never see it and the index pair can. It matters
+// most where it is smallest: at 0.1% hopping a 1% variant in a deeply sequenced sample contaminates
+// its neighbour at a level a rare-variant caller reports as real.
+//
+// Never: this needs a DUAL index. With one index there are no combinations, so there is nothing to
+// be off-diagonal, and `estimable` is false rather than a rate of zero -- an unmeasurable quantity
+// reported as zero is worse than no answer.
+struct IndexHopping {
+    bool estimable = false;
+    size_t i7_indices = 0, i5_indices = 0;   // distinct, observed
+    size_t declared_pairs = 0, hopped_pairs = 0;
+    uint64_t reads_declared = 0, reads_hopped = 0;
+    double rate = 0.0;            // reads in undeclared combinations, over the reads with an index
+    double min_share = 0.05;      // what counts as a declared combination; see the .cpp
+};
+
+// Splits the observed combinations into the ones that were ordered and the ones that were not.
+//
+// The declared set is inferred, because the sample sheet migec is given carries the in-line
+// barcode and not the index pair: a combination counts as declared when it holds at least
+// `min_share` of the reads of its OWN i7 and of its OWN i5. A hopped combination pairs a real i7
+// with another sample's i5, so it is a small fraction of both -- and the gap is wide, since
+// hopping runs at 0.1-2% while a declared combination is the bulk of its own index.
+// Lane and tile from an Illumina read NAME, or false. Casava 1.8+ is
+// `instrument:run:flowcell:lane:tile:x:y`; the older form is `instrument:lane:tile:x:y#index/read`.
+// Never guess past those two: SRA rewrites headers to `@SRR1763769.1 1/2` and the coordinates are
+// gone for good, so a run whose headers did not survive reports no map rather than a made-up one.
+bool parse_lane_tile(std::string_view name, uint32_t* lane, uint32_t* tile);
+
+IndexHopping estimate_index_hopping(
+    const std::map<std::pair<std::string, std::string>, uint64_t>& pairs, double min_share = 0.05);
 
 // Owns a directory of spilled UMI buckets for as long as anything can still read it.
 //
