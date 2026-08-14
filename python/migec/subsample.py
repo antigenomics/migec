@@ -1,8 +1,14 @@
-"""The subsample stage: build a smaller library that is still a library.
+"""The subsample stage: a smaller library that is still a library.
+
+Sampling READS is trivial and every toolkit does it. Sampling MOLECULES is not, because a
+molecule's reads are scattered through the file and nothing in a raw FASTQ says which they are --
+which is why this exists. It is what equalises molecule counts across a cohort sequenced to
+different depths, what a saturation curve is computed over, and what makes a test fixture behave
+like the run it came from.
 
 Never: Never a fraction of the reads. At four reads per molecule, ten thousand random reads give ten
 thousand molecules seen once each -- the MIG size distribution is gone and every consensus is a
-single read, so the fixture tests nothing it was built to test.
+single read, so the smaller library is not a smaller version of the same library.
 """
 
 from __future__ import annotations

@@ -35,7 +35,7 @@ The pipeline
      - the sequence, and the quality it is allowed to claim
    * - :doc:`subsample <subsample>`
      - keeps every read of a fraction of the barcodes
-     - the size of a fixture that still behaves like the library
+     - how many molecules a smaller copy of the library holds
 
 ``suggest`` and ``subsample`` are outside the pipeline in different directions: one runs before it
 to tell you what to type, the other cuts a library down to something a laptop can iterate on.
