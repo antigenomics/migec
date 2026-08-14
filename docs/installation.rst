@@ -26,6 +26,10 @@ Python package — install it from your package manager (``brew install gnuplot`
 ``apt install gnuplot-nox``). Without it ``migec plot`` still writes the ``.gp`` scripts, so the
 figures can be drawn anywhere.
 
+**samtools** is the second external tool, and it is needed only to read a BAM, SAM or CRAM
+(:doc:`Bring your own UMI <byo_umi>`). ``conda install -c bioconda samtools`` or
+``brew install samtools``. A FASTQ run never calls it.
+
 ``seqtree`` is deliberately *not* a core dependency. Every hot path here searches a fixed-length
 barcode at at most one substitution, and enumerating the ``3L`` neighbours in a hash table beats a
 trie by orders of magnitude at that shape. seqtree earns its place only where enumeration cannot

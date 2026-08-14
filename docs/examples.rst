@@ -72,6 +72,32 @@ By platform
    * - Shallow bulk (1-3 reads/UMI)
      - any of the above
      - nothing changes; what the numbers can mean does
+   * - Capture, exome, ctDNA, MRD
+     - nothing -- the UMI is already in ``RX``
+     - the kit puts it in the index read, so there is no layout and no ``checkout``. See
+       :doc:`Bring your own UMI <byo_umi>`
+
+Starting from a BAM
+-------------------
+
+A hybrid-capture kit reads the UMI on the index, so what arrives is an fgbio, Picard or vendor BAM
+with the UMI in ``RX`` — never a FASTQ with a barcode inside the read. Two commands, no layout,
+no ``checkout``:
+
+.. code-block:: bash
+
+   migec refine   tagged.bam  -o ref/   # correct errors in the UMI
+   migec assemble ref/S1.fq.gz -o asm/  # one consensus per molecule
+
+BAM, SAM and CRAM are recognised from the file, not the name; ``samtools`` does the conversion and
+the temporary FASTQ is deleted when the stage returns. To see the round trip on data you already
+have:
+
+.. code-block:: bash
+
+   migec checkout reads.fq.gz --bc-pattern '^NNNNNNNNNNNN' -o co/
+   samtools import -T '*' -s co/S1.fq.gz -o S1.bam     # the tags become real BAM tags
+   migec refine   S1.bam -o from_bam/                  # identical to refining co/S1.fq.gz
 
 Runnable notebooks
 ------------------

@@ -72,6 +72,9 @@ Where to go
    * - say where your barcode is
      - :doc:`Layouts <layouts>` for the grammar and the presets; :doc:`suggest <suggest>` if you do
        not know
+   * - start from a BAM that already has the UMI
+     - :doc:`Bring your own UMI <byo_umi>` -- capture, exome and ctDNA kits put the UMI in the
+       index read, so it arrives in ``RX`` and never passes through ``checkout``
    * - know what to set for **your** experiment
      - :doc:`Assays <assays>` -- eight profiles, the ``--min-reads`` each one wants, and which
        pre-amplification floor your chemistry has
@@ -102,6 +105,7 @@ Where to go
    installation
    examples
    Layouts <layouts>
+   Bring your own UMI <byo_umi>
    Assays <assays>
    commands
    Downstream <downstream>

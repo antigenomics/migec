@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 from migec.sheet import SampleRow, is_positional, parse_layout, read_barcodes
 
 
@@ -46,10 +46,30 @@ def run(
     range-partitioned on the key `assemble` groups by, so `assemble` reads them directly and skips
     its own partition pass. FASTQ is the default and stays it: it is what every aligner and every
     existing pipeline speaks, and a `.mig` file is an intermediate only migec reads.
+
+    `reads` may be an unaligned BAM, SAM or CRAM -- what a sequencer or a `FastqToSam` step
+    produces before anything has been demultiplexed. No `RX` is wanted here: this is the stage that
+    extracts the barcode from the read. A paired file supplies both mates, so `reads2` must not
+    also be given.
     """
-    rows: list[SampleRow] = read_barcodes(barcodes)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, out, need_rx=False) as (mate1, from_bam):
+            if from_bam is not None and reads2 is not None:
+                raise ValueError(
+                    f"{Path(reads).name} is paired and already carries mate 2, but a second file "
+                    f"{reads2} was given as well. Give one or the other"
+                )
+            summary = run(
+                mate1, barcodes, out_dir, from_bam or reads2, trim, min_umi_quality,
+                write_unmatched, threads, max_offset, limit_reads, umi_budget_bytes, mig,
+            )
+        summary["input"] = str(reads)
+        summary["input2"] = ""
+        (out / "checkout.json").write_text(json.dumps(summary, indent=2, default=str))
+        return summary
+    rows: list[SampleRow] = read_barcodes(barcodes)
 
     # Never: a sheet row is a LAYOUT too. `^NNNNNNNN` and `0:8` work through --bc-pattern because
     # the CLI runs them through `parse_layout`, and a sheet row skipped it -- so the identical

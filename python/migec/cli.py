@@ -54,7 +54,11 @@ def info() -> None:
 
 @app.command()
 def checkout(
-    reads: Path = typer.Argument(..., help="Input FASTQ (R1), optionally gzipped."),
+    reads: Path = typer.Argument(
+        ...,
+        help="Input FASTQ (R1), optionally gzipped, or an unaligned BAM/SAM/CRAM -- a paired one "
+        "supplies both mates on its own.",
+    ),
     reads2: Optional[Path] = typer.Argument(
         None,
         help="Second mate. When given, the tag is looked for in either mate and the pair is "
@@ -275,7 +279,10 @@ def plot(
 
 @app.command()
 def suggest(
-    reads: Path = typer.Argument(..., help="FASTQ to profile. For paired data try both mates."),
+    reads: Path = typer.Argument(
+        ...,
+        help="FASTQ or BAM/SAM/CRAM to profile. For paired data try both mates.",
+    ),
     out_dir: Optional[Path] = typer.Option(
         None, "--out", "-o", help="Write suggest.cycles.tsv, suggest.segments.tsv, suggest.json."
     ),
@@ -301,7 +308,8 @@ def suggest(
 def refine(
     reads: Path = typer.Argument(
         ...,
-        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        help="A per-sample FASTQ or BAM/SAM/CRAM whose records carry RX -- `migec checkout` writes "
+        "one, and so does any fgbio/Picard UMI pipeline. Or the `.mig` buckets that "
         "`checkout --mig` wrote, given as a directory or as one bucket file, in which case refine "
         "writes buckets back and `migec assemble` takes them straight from here.",
     ),
@@ -386,7 +394,8 @@ def refine(
 def assemble(
     reads: Path = typer.Argument(
         ...,
-        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        help="A per-sample FASTQ or BAM/SAM/CRAM whose records carry RX -- `migec checkout` writes "
+        "one, and so does any fgbio/Picard UMI pipeline. Or the `.mig` buckets that "
         "`checkout --mig` wrote, given as a directory or as one bucket file, in which case the "
         "partition pass is skipped because it has already been done.",
     ),
@@ -491,7 +500,7 @@ def assemble(
 
 @app.command()
 def subsample(
-    reads: Path = typer.Argument(..., help="A FASTQ carrying RX (and CB) tags."),
+    reads: Path = typer.Argument(..., help="A FASTQ or BAM/SAM/CRAM carrying RX (and CB) tags."),
     output: Path = typer.Option(..., "--out", "-o", help="Output FASTQ; .gz is honoured."),
     keep: float = typer.Option(
         1.0,

@@ -10,7 +10,9 @@ Reads carrying the same barcode are reads of one molecule, so collapse them into
    migec assemble out/S1.fq.gz -o cons/ --rt-error 3e-5
 
 The input is a per-sample FASTQ written by :doc:`checkout`, with the barcode in the ``RX``/``CB``
-tags. The output is ordinary FASTQ, one record per molecule, plus a per-molecule table.
+tags -- or any FASTQ, BAM, SAM or CRAM carrying the same tags, whoever put them there
+(:doc:`Bring your own UMI <byo_umi>`). The output is ordinary FASTQ, one record per molecule, plus
+a per-molecule table.
 
 The barcode is the whole key
 ----------------------------

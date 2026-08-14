@@ -4,6 +4,56 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+### BAM, SAM and CRAM are inputs
+
+Every stage that took a FASTQ now takes an alignment file too, recognised from the file rather than
+from its name. There is no `--format` flag and no new dependency: a BAM is converted once with
+`samtools` into a temporary FASTQ inside the output directory, which is deleted when the stage
+returns.
+
+This exists because of a whole class of library the pipeline could not read. On a capture, exome,
+ctDNA or MRD kit the UMI is sequenced on the **index read**, so it is never inside R1 or R2 and
+`checkout` has nothing to find; what reaches the user is an fgbio, Picard or vendor BAM with the
+UMI already in `RX`. That was always a valid migec input — `refine`, `assemble` and `subsample`
+group on `RX` and do not care who wrote it — and migec simply could not open the file. `SRP578416`
+in `SOURCES.md` is the dataset that made the point: it has UMIs, its own methods say Picard called
+consensuses from them, and nothing public carries them any more.
+
+Never: **on an aligned file the conversion collates first.** `samtools fastq -1/-2` pairs by
+adjacency, so on a coordinate-sorted BAM it writes one molecule's mate 1 beside another's mate 2 —
+and `assemble` matches mates strictly by position, so the wrong pair is consensed and nothing
+downstream can tell. An unaligned BAM cannot be coordinate-sorted, so collate is skipped there and
+the record order survives; `@SQ` decides, and a header that cannot be read counts as aligned.
+
+Never: **a BAM with no `RX` is refused by name** in `refine`, `assemble` and `subsample`, rather
+than run to a report of zero molecules and no error. `checkout` is exempt, because extracting the
+barcode from the read is what that stage is.
+
+Costs, both documented: the temporary FASTQ is roughly 4x the BAM on disk, and `samtools` becomes
+an external tool alongside gnuplot — needed only when the input is an alignment.
+
+New page `docs/byo_umi.rst`: the input contract is `RX` in a tag or a comment, `checkout` is one
+way to produce it, and here is how fgbio and Picard produce the same thing. It also says why
+`umi_tools extract` output does not work as-is — it writes the UMI into the read *name*, and migec
+never parses names.
+
+### Two studies that cannot be used, and two that can
+
+`SOURCES.md` gains the read-structure screen of 2026-08-14. `SRP475624` (MAESTRO-Pool MRD, duplex
+UMI adapters) is dbGaP controlled; `SRP578416` (xGen AML capture) lost its UMIs in SRA
+normalisation. Screening for a public substitute found `SRP613942` and `SRP677910`, both TwinStrand
+Duplex Sequencing, both carrying an 8 nt inline tag then a fixed `T` on **both** mates. Note: those
+give a single-strand consensus — the two strands of a molecule carry the tag pair swapped, so they
+are two different UMIs here.
+
+### Provenance
+
+The three cluster jobs `SOURCES.md` named as the way to regenerate `assets/ctdna_panel.bed`,
+`assets/ctdna_per_target.tsv` and `assets/ctdna_minreads.tsv` were not in the repo. They are now,
+as `scripts/ctdna_*.sbatch`.
+
 ## 2.4.0 — 2026-08-14
 
 Note: the wheel smoke test lowercased the whole barcode-sheet line, sample id included, so

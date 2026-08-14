@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 from migec.checkout import _bytes, _dur, _pct
 
 
@@ -20,13 +20,22 @@ def run(
     by_cell: bool = True,
     gzip_level: int = _core.GZIP_LEVEL,
 ) -> dict:
-    """Keep all the reads of `keep_percent` of the barcodes."""
+    """Keep all the reads of `keep_percent` of the barcodes.
+
+    `reads` may be a BAM, SAM or CRAM carrying `RX` (see `migec.bam`); a paired one is sampled on
+    mate 1.
+    """
     per_10k = round(keep_percent * 100)
     if not 1 <= per_10k <= 10000:
         raise ValueError(
             f"--keep {keep_percent} is {per_10k} ten-thousandths; it must be in 0.01..100"
         )
     Path(output).parent.mkdir(parents=True, exist_ok=True)
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, Path(output).parent) as (mate1, mate2):
+            summary = run(mate1, output, keep_percent, by_cell, gzip_level)
+        summary["input"] = str(reads) + ("#R1" if mate2 is not None else "")
+        return summary
     summary = _core.subsample(str(reads), str(output), per_10k, by_cell, gzip_level)
     summary["input"] = str(reads)
     summary["output"] = str(output)
