@@ -1,0 +1,107 @@
+name: Benchmark
+
+# A separate file rather than a job in ci.yml: adding `schedule` to ci.yml's triggers would run
+# cpp, python and lint on the schedule too, and ci.yml's `cancel-in-progress: true` would let a
+# push cancel a benchmark mid-measurement. Keeping the PR path byte-identical is the point.
+#
+# Never on push or pull_request. These are wall-clock and peak-RSS assertions and the runner is a
+# shared VM whose neighbours we do not control, so on every PR they would be a noise generator
+# attached to the merge button.
+#
+# Note: `schedule` only ever fires on the DEFAULT branch. A regression is therefore caught the
+# night after it lands on master, never on the branch that wrote it -- run this by hand from the
+# Actions tab (workflow_dispatch) on any branch that touches a hot path.
+on:
+  schedule:
+    # 04:17 UTC. Off the hour on purpose: GitHub queues scheduled runs and the round hours are the
+    # congested ones.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Benchmark and realworld tiers
+    # One OS. The assertions are absolute -- reads/s and bytes per distinct UMI -- so a second
+    # runner class with a different core count and a different RSS accounting would need a second
+    # set of thresholds to mean anything.
+    runs-on: ubuntu-latest
+    # A stage that hangs should cost half an hour of runner time, not the six-hour default.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        run: |
+          uv pip install --system scikit-build-core "pybind11>=3.0.2,<4" ninja cmake
+          uv pip install --system -e ".[test]" --no-build-isolation
+
+      # -s because the tests print the measured numbers, and the number is the reason to read the
+      # log at all -- a green tick says only that nothing fell by 10x.
+      #
+      # The thresholds these assert are deliberately loose: >20,000 reads/s against a measured
+      # 1.5-2.5 M, >2x speedup on 4 threads, <48 bytes per distinct UMI. They exist to catch a 10x
+      # regression -- a transcendental back in the scoring loop, zlib level 6 back on the serial
+      # path, a hash map back in the UMI counters -- and not to police a 10% one, which on a shared
+      # runner is indistinguishable from a busy neighbour.
+      - name: Benchmark tier
+        env:
+          RUN_BENCHMARK: "1"
+        run: python -m pytest tests/benchmark -q -s
+
+      # `isalgo/umi_data` is public, so an anonymous GET on the resolve URL is the whole of it: no
+      # token, no huggingface_hub, no git-lfs client on the runner. Verified 2026-08-14 that the
+      # resolve URL 302s to the CDN for an unauthenticated client. The three files under ci/ are
+      # 1.9 MB together.
+      #
+      # Note: this and the two steps below run even when the benchmark tier above went red. A
+      # wall-clock threshold that flaked on a busy runner must not also cost the night's accuracy
+      # signal; `!cancelled()` rather than `always()` so a timeout or a cancel still stops here.
+      - name: Fetch the umi_data ci fixtures
+        id: fixtures
+        if: ${{ !cancelled() }}
+        run: |
+          base=https://huggingface.co/datasets/isalgo/umi_data/resolve/main/ci
+          mkdir -p "$RUNNER_TEMP/umi_data/ci"
+          ok=true
+          for f in SRR1763769_umi0.5pct.fq.gz SRR1763769_barcodes.txt \
+                   sc5p_v2_hs_PBMC_1k_t_cells1pct.fq.gz; do
+            curl -fsSL --retry 3 --retry-all-errors \
+              -o "$RUNNER_TEMP/umi_data/ci/$f" "$base/$f" || ok=false
+          done
+          # An LFS pointer served in place of the object, or a truncated body, both arrive with a
+          # 200 and surface four steps later as an unreadable FASTQ. `gzip -t` names it here.
+          for f in "$RUNNER_TEMP"/umi_data/ci/*.fq.gz; do gzip -t "$f" || ok=false; done
+          ls -l "$RUNNER_TEMP/umi_data/ci"
+          echo "fetched=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Realworld tier
+        if: ${{ !cancelled() && steps.fixtures.outputs.fetched == 'true' }}
+        env:
+          UMI_DATA: ${{ runner.temp }}/umi_data
+        run: |
+          set +e
+          python -m pytest tests/realworld -q
+          code=$?
+          set -e
+          # 5 is pytest's "collected nothing". tests/realworld is a tier under construction, and an
+          # empty directory has to read as an empty tier rather than as a broken job -- the day a
+          # test lands there it is guarded by this step with no change to this file.
+          if [ "$code" -eq 5 ]; then
+            echo "::warning::tests/realworld collected no tests -- the fixtures fetched and guard nothing yet"
+            exit 0
+          fi
+          exit $code
+
+      # Loudly, not silently: a realworld tier that quietly stopped running is exactly the failure
+      # this workflow exists to end. The job stays green because an HF outage is not a defect in
+      # this repo, but the annotation says on the run summary that the tier did not run.
+      - name: Report a failed fixture fetch
+        if: ${{ !cancelled() && steps.fixtures.outputs.fetched != 'true' }}
+        run: |
+          echo "::warning::could not fetch isalgo/umi_data ci/ over https -- the realworld tier did NOT run"

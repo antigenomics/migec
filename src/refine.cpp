@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 #include "migec/fastq.hpp"
+#include "migec/mig_record.hpp"
 #include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
@@ -75,6 +76,69 @@ void bin(std::vector<uint64_t>& histogram, uint64_t n) {
     ++histogram[b];
 }
 
+// One read, as refine's passes use it, from either input.
+//
+// The strings are views: into the FASTQ record on the FASTQ route, and into the walker's own
+// scratch on the `.mig` route -- valid until the next read either way. Keeping the passes on
+// STRINGS rather than on packed keys is deliberate: it is the same code for both routes, so a
+// `.mig` run cannot drift from a FASTQ run by packing the key a second, subtly different way.
+struct SourceRead {
+    std::string_view umi, cell;   // the barcodes
+    std::string_view qx, cy;      // ...and their own quality, empty when the input has none
+    std::string_view seq, qual;
+    std::string_view name, comment;  // FASTQ only; a `.mig` record carries no read name
+    uint64_t src_index = 0;
+    uint16_t flags = 0;
+};
+
+// Walks the input once, whichever it is. `fn` returning false stops the walk, which is how the
+// intake limit ends a pass.
+void for_each_read(const RefineRequest& request, const std::function<bool(const SourceRead&)>& fn) {
+    if (request.mig_inputs.empty()) {
+        FastqReader reader(request.input);
+        FastqRecord rec;
+        SourceRead sr;
+        while (reader.next(rec)) {
+            sr.umi = tag_value(rec.comment, "RX:Z:");
+            sr.cell = tag_value(rec.comment, "CB:Z:");
+            sr.qx = tag_value(rec.comment, "QX:Z:");
+            sr.cy = tag_value(rec.comment, "CY:Z:");
+            sr.seq = rec.seq;
+            sr.qual = rec.qual;
+            sr.name = rec.name;
+            sr.comment = rec.comment;
+            if (!fn(sr)) return;
+        }
+        return;
+    }
+    // Bucket order is key order, and the buckets were handed over sorted, so this walk is stable
+    // across passes -- which is what lets pass 3 line up with the table pass 1 built.
+    std::string umi, cell;  // scratch, assigned into rather than rebuilt
+    SourceRead sr;
+    for (const std::string& path : request.mig_inputs) {
+        MigReader reader(path);
+        const MigHeader& h = reader.header();
+        MigRecord rec;
+        while (reader.next(rec)) {
+            umi = unpack_barcode(rec.umi, h.umi_len);
+            cell = h.cell_len ? unpack_barcode(rec.cell, h.cell_len) : std::string();
+            sr.umi = umi;
+            sr.cell = cell;
+            // Empty on a v1 file, which is exactly how a FASTQ with no QX tag reads: the
+            // posterior falls back to the library's global rate rather than to a worse number.
+            sr.qx = rec.qual_umi;
+            sr.cy = rec.qual_cell;
+            sr.seq = rec.seq1;
+            sr.qual = rec.qual1;
+            sr.name = {};
+            sr.comment = {};
+            sr.src_index = rec.src_index;
+            sr.flags = rec.flags;
+            if (!fn(sr)) return;
+        }
+    }
+}
+
 }  // namespace
 
 RefineStats refine(const RefineRequest& request) {
@@ -84,6 +148,52 @@ RefineStats refine(const RefineRequest& request) {
 
     std::filesystem::path out_dir(request.output_dir);
     std::filesystem::create_directories(out_dir);
+
+    // `.mig` input: read the partition's shape off the files rather than choosing one. The
+    // buckets ARE the partition and the output keeps it, so `assemble` can take refine's output
+    // exactly as it takes checkout's.
+    int mig_bits = 0;
+    uint64_t written_reads = 0;
+    if (!request.mig_inputs.empty()) {
+        // Never: refine writes `<sample>.<bbb>.mig` and MigWriter opens with "wb", which
+        // TRUNCATES. Pointed at its own input directory it would destroy the reads it is halfway
+        // through reading -- 600,000 records in, then `file ends without a footer`, and the input
+        // gone. Refused before a single writer is opened; the check is on the resolved path, so a
+        // relative `-o .` and an absolute input are still caught.
+        std::error_code ec;
+        const std::filesystem::path out_real = std::filesystem::weakly_canonical(out_dir, ec);
+        for (const std::string& path : request.mig_inputs) {
+            const std::filesystem::path in_real =
+                std::filesystem::weakly_canonical(std::filesystem::path(path), ec);
+            if (!ec && in_real.parent_path() == out_real) {
+                throw MigecError(
+                    "refine: --out is the directory the input buckets are in ('" +
+                    out_real.string() + "'), and refine writes buckets under the same names -- "
+                    "that would truncate its own input. Give a different output directory");
+            }
+        }
+        bool first = true;
+        for (const std::string& path : request.mig_inputs) {
+            MigReader probe(path);
+            const MigHeader& h = probe.header();
+            if (first) {
+                mig_bits = h.bucket_bits;
+                if (stats.sample_id.empty()) stats.sample_id = h.sample_id;
+                validate_sample_id(stats.sample_id, "refine");
+                first = false;
+            } else if (h.bucket_bits != mig_bits) {
+                throw MigecError("refine: '" + path + "' is cut into 2^" +
+                                 std::to_string(h.bucket_bits) + " buckets and the first file into 2^" +
+                                 std::to_string(mig_bits) + " -- these are two partitions, not one");
+            } else if (h.sample_id != stats.sample_id) {
+                // Never: two samples in one table would correct one sample's barcode into the
+                // other's. A UMI repeats across samples by design.
+                throw MigecError("refine: '" + path + "' holds sample '" + h.sample_id +
+                                 "' but the run is refining '" + stats.sample_id +
+                                 "' -- refine is a per-sample stage");
+            }
+        }
+    }
 
     // ------------------------------------------------------- pass 0: snap cells to the whitelist
     // Before anything else, because every downstream key contains the cell barcode: correcting it
@@ -97,26 +207,20 @@ RefineStats refine(const RefineRequest& request) {
         std::unordered_map<uint64_t, uint32_t> seen;
         std::unordered_map<uint64_t, std::string> quals;
         uint64_t total_reads = 0;
-        {
-            FastqReader reader(request.input);
-            FastqRecord rec;
-            while (reader.next(rec)) {
-                const std::string_view cell = tag_value(rec.comment, "CB:Z:");
-                if (cell.empty()) continue;
-                if (static_cast<int>(cell.size()) != list.length()) {
-                    throw MigecError(
-                        "refine: the reads carry a " + std::to_string(cell.size()) +
-                        " nt cell barcode and the whitelist holds " +
-                        std::to_string(list.length()) + " nt entries");
-                }
-                const uint64_t key = pack_barcode(cell);
-                ++seen[key];
-                ++total_reads;
-                if (quals.find(key) == quals.end()) {
-                    quals.emplace(key, std::string(tag_value(rec.comment, "CY:Z:")));
-                }
+        for_each_read(request, [&](const SourceRead& r) {
+            if (r.cell.empty()) return true;
+            if (static_cast<int>(r.cell.size()) != list.length()) {
+                throw MigecError(
+                    "refine: the reads carry a " + std::to_string(r.cell.size()) +
+                    " nt cell barcode and the whitelist holds " +
+                    std::to_string(list.length()) + " nt entries");
             }
-        }
+            const uint64_t key = pack_barcode(r.cell);
+            ++seen[key];
+            ++total_reads;
+            if (quals.find(key) == quals.end()) quals.emplace(key, std::string(r.cy));
+            return true;
+        });
         stats.whitelist.barcodes = seen.size();
 
         std::vector<uint32_t> counts(list.size(), 0);
@@ -187,14 +291,12 @@ RefineStats refine(const RefineRequest& request) {
     // is indexed in parallel with it, so it cannot be filled in the same pass.
     UmiCounts counts(0);
     {
-        FastqReader reader(request.input);
-        FastqRecord rec;
         bool started = false;
         IntakeLimit limit = request.limit;
-        while (reader.next(rec)) {
+        for_each_read(request, [&](const SourceRead& r) {
             ++stats.reads;
-            const std::string_view umi = tag_value(rec.comment, "RX:Z:");
-            if (umi.empty()) { ++stats.reads_without_umi; continue; }
+            const std::string_view umi = r.umi;
+            if (umi.empty()) { ++stats.reads_without_umi; return true; }
             // After the barcode is known, so --limit-umi counts barcodes. Pass 3 stops at the same
             // read count, so the rewritten file is exactly the prefix the table was built from --
             // rewriting reads whose barcode was never in the table would emit uncorrected reads
@@ -202,9 +304,9 @@ RefineStats refine(const RefineRequest& request) {
             if (limit.active() && !limit.admit(stats.reads, pack_barcode(umi))) {
                 --stats.reads;
                 stats.limited = true;
-                break;
+                return false;
             }
-            const std::string_view cell = tag_value(rec.comment, "CB:Z:");
+            const std::string_view cell = r.cell;
             if (!started) {
                 stats.umi_length = static_cast<int>(umi.size());
                 stats.cell_length = static_cast<int>(cell.size());
@@ -218,11 +320,11 @@ RefineStats refine(const RefineRequest& request) {
                 counts = UmiCounts(stats.umi_length + stats.cell_length);
                 started = true;
                 if (stats.sample_id.empty()) {
-                    const std::string_view bc = tag_value(rec.comment, "BC:Z:");
+                    const std::string_view bc = tag_value(r.comment, "BC:Z:");
                     stats.sample_id = bc.empty() ? std::string("sample") : std::string(bc);
                 }
             } else if (static_cast<int>(umi.size()) != stats.umi_length) {
-                throw MigecError("refine: read '" + std::string(rec.name) + "' carries a " +
+                throw MigecError("refine: read '" + std::string(r.name) + "' carries a " +
                                  std::to_string(umi.size()) + " nt UMI where the file started "
                                  "with " + std::to_string(stats.umi_length) +
                                  " -- these are two runs concatenated, not one sample");
@@ -230,7 +332,8 @@ RefineStats refine(const RefineRequest& request) {
             counts.add(cell.empty()
                            ? pack_barcode(umi)
                            : pack_key_snapped(snap(pack_barcode(cell)), stats.cell_length, umi));
-        }
+            return true;
+        });
     }
     if (!stats.umi_length) throw MigecError("refine: no read carried an RX:Z: tag");
 
@@ -263,21 +366,19 @@ RefineStats refine(const RefineRequest& request) {
         evidence.payload.assign(entries.size() * static_cast<size_t>(pw), 0);
     }
     if (request.use_quality || pw > 0) {
-        FastqReader reader(request.input);
-        FastqRecord rec;
-        while (reader.next(rec)) {
-            const std::string_view umi = tag_value(rec.comment, "RX:Z:");
-            if (umi.empty()) continue;
-            const std::string_view cell = tag_value(rec.comment, "CB:Z:");
+        for_each_read(request, [&](const SourceRead& r) {
+            const std::string_view umi = r.umi;
+            if (umi.empty()) return true;
+            const std::string_view cell = r.cell;
             const size_t i = slot(cell.empty()
                                      ? pack_barcode(umi)
                                      : pack_key_snapped(snap(pack_barcode(cell)),
                                                         stats.cell_length, umi));
-            if (i >= entries.size()) continue;
+            if (i >= entries.size()) return true;
             if (request.use_quality) {
                 // The whole key's quality, cell part first, to line up with the packed key.
-                std::string qx(tag_value(rec.comment, "CY:Z:"));
-                qx.append(tag_value(rec.comment, "QX:Z:"));
+                std::string qx(r.cy);
+                qx.append(r.qx);
                 for (int j = 0; j < L; ++j) {
                     // No QX means the instrument's quality was not carried; fall back to the
                     // global rate by leaving the accumulator at zero, which `correct_umis` reads
@@ -293,12 +394,13 @@ RefineStats refine(const RefineRequest& request) {
                 // The first read of a barcode is the draft. A modal base per column would need a
                 // counter per barcode per column, and the draft is only ever compared to another
                 // draft -- it is telling two molecules apart, not calling variants.
-                const size_t n = std::min<size_t>(static_cast<size_t>(pw), rec.seq.size());
-                std::copy_n(rec.seq.begin(), n,
+                const size_t n = std::min<size_t>(static_cast<size_t>(pw), r.seq.size());
+                std::copy_n(r.seq.begin(), n,
                             evidence.payload.begin() +
                                 static_cast<std::ptrdiff_t>(i * static_cast<size_t>(pw)));
             }
-        }
+            return true;
+        });
         if (request.use_quality) {
             for (size_t i = 0; i < entries.size(); ++i) {
                 for (int j = 0; j < L; ++j) {
@@ -340,7 +442,85 @@ RefineStats refine(const RefineRequest& request) {
     // a constant, so the member boundaries -- and therefore the bytes -- do not depend on -t.
     const std::filesystem::path fastq_path =
         out_dir / (stats.sample_id + ".fq" + (request.gzip_level > 0 ? ".gz" : ""));
-    {
+    if (!request.mig_inputs.empty()) {
+        // `.mig` in, `.mig` out. The corrected barcode is a different key, and a key decides its
+        // bucket, so a corrected read can belong in a bucket other than the one it arrived in --
+        // the output is re-partitioned on the NEW key rather than copied bucket for bucket, or it
+        // would not be a partition any more and `assemble` would group across it.
+        //
+        // Note: the audit trail is `<sample>.barcodes.tsv`, which carries every barcode with its
+        // parent. A `.mig` record has no room for the pre-correction barcode the way a FASTQ
+        // comment has OX:Z:, and adding two u64 columns to every record to carry it would cost
+        // 16 bytes a READ for something that is one row a BARCODE in the table.
+        //
+        // Note: serial, and deliberately so for now. The rewrite is a decompress, a table lookup
+        // and a recompress per record; the FASTQ route threads it because it was measured at 83%
+        // of that run's wall clock. This one is measured in tests/benchmark/test_refine_speed.py
+        // and threads when a number says to, not before.
+        const size_t n_buckets = static_cast<size_t>(1) << mig_bits;
+        std::vector<std::unique_ptr<MigWriter>> writers(n_buckets);
+        std::vector<std::string> paths(n_buckets);
+        const size_t block_bytes = std::clamp<size_t>(32u << 20 >> mig_bits, 256u << 10, 4u << 20);
+        std::string whole;
+        for (const std::string& path : request.mig_inputs) {
+            MigReader reader(path);
+            const MigHeader& h = reader.header();
+            MigRecord rec;
+            while (reader.next(rec)) {
+                // Never: the limit stops the REWRITE too, exactly as it stops the FASTQ one. The
+                // table was built from the first N reads, so a rewrite that ran past them would
+                // emit reads whose barcode was never in the table -- uncorrected, through the
+                // pass-through branch below, beside corrected ones with nothing saying which was
+                // which. Measured before the check existed: 1,000 reads counted, 12,000 written.
+                if (stats.limited && written_reads >= stats.reads) break;
+                std::string umi = unpack_barcode(rec.umi, h.umi_len);
+                std::string cell = h.cell_len ? unpack_barcode(rec.cell, h.cell_len) : std::string();
+                const uint64_t snapped = cell.empty() ? 0 : snap(pack_barcode(cell));
+                const size_t i = slot(cell.empty()
+                                          ? pack_barcode(umi)
+                                          : pack_key_snapped(snapped, stats.cell_length, umi));
+                MigRecord out = rec;
+                if (i < entries.size()) {
+                    whole = unpack_barcode(entries[correction.root[i]].key, L);
+                    const std::string new_cell = whole.substr(0, static_cast<size_t>(stats.cell_length));
+                    const std::string new_umi = whole.substr(static_cast<size_t>(stats.cell_length));
+                    if (new_umi != umi) {
+                        out.umi = pack_barcode(new_umi);
+                        out.flags = static_cast<uint16_t>(out.flags | kUmiCorrected);
+                    }
+                    if (!cell.empty() && new_cell != cell) {
+                        out.cell = pack_barcode(new_cell);
+                        out.flags = static_cast<uint16_t>(out.flags | kCellCorrected);
+                    }
+                }
+                const uint32_t b =
+                    bucket_of(h.cell_len ? out.cell : out.umi, static_cast<int>(mig_bits));
+                if (!writers[b]) {
+                    MigHeader oh;
+                    oh.umi_len = static_cast<uint8_t>(stats.umi_length);
+                    oh.cell_len = static_cast<uint8_t>(stats.cell_length);
+                    oh.bucket_index = static_cast<uint8_t>(b);
+                    oh.bucket_bits = static_cast<uint8_t>(mig_bits);
+                    oh.paired = h.paired;
+                    // The quality stored is the READ's own, of the bases it actually carried --
+                    // not the parent's. kUmiCorrected says the barcode was replaced; the quality
+                    // describes what this read saw, which is the only thing it can describe.
+                    oh.barcode_quality = h.barcode_quality;
+                    oh.sample_id = stats.sample_id;
+                    paths[b] = (out_dir / (stats.sample_id + "." + bucket_suffix(b) + ".mig"))
+                                   .string();
+                    writers[b] = std::make_unique<MigWriter>(paths[b], oh, block_bytes);
+                }
+                writers[b]->write(out);
+                ++written_reads;
+            }
+        }
+        for (size_t b = 0; b < n_buckets; ++b) {
+            if (!writers[b]) continue;
+            writers[b]->close();
+            stats.mig_paths.push_back(paths[b]);
+        }
+    } else {
         // Reads per chunk. A CONSTANT, so the gzip member boundaries -- and therefore the bytes
         // -- do not depend on --threads. It is deliberately small: the rewrite holds one chunk of
         // records plus one output buffer PER WORKER, so this number is multiplied by the thread

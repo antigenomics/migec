@@ -288,7 +288,12 @@ def suggest(
 
 @app.command()
 def refine(
-    reads: Path = typer.Argument(..., help="A per-sample FASTQ written by `migec checkout`."),
+    reads: Path = typer.Argument(
+        ...,
+        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        "`checkout --mig` wrote, given as a directory or as one bucket file, in which case refine "
+        "writes buckets back and `migec assemble` takes them straight from here.",
+    ),
     out_dir: Path = typer.Option(..., "--out", "-o", help="Output directory."),
     sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
     min_posterior: float = typer.Option(
@@ -360,6 +365,13 @@ def refine(
         limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
+    if summary.get("mig_paths"):
+        typer.echo(
+            f"\nwrote {len(summary['mig_paths'])} .mig bucket(s), re-partitioned on the "
+            f"corrected barcode"
+            f"\n      assemble them with `migec assemble {out_dir}/{summary['sample_id']}.000.mig "
+            f"-o <out>`"
+        )
 
 
 @app.command()

@@ -151,6 +151,37 @@ inline uint64_t rotate_barcode(uint64_t key, int len, int r) {
     return (((field << (2 * r)) | (field >> (w - 2 * r))) & mask) << s;
 }
 
+// A sample id becomes a FILE NAME in every stage, so it is checked before any path is built.
+//
+// Never: an id is untrusted input. It comes from a barcode sheet the user wrote, and in `assemble`
+// and `refine` it comes from the DATA -- the `BC:Z:` tag of the first read. `../escape` then walks
+// out of the output directory, an absolute path ignores it entirely, and a leading `-` produces a
+// file name that the next tool in the pipeline reads as an option. Refused here, once, where the
+// id is still attributable to the row or the read it came from.
+inline void validate_sample_id(const std::string& id, const char* where) {
+    auto bad = [&](const std::string& why) {
+        throw MigecError(std::string(where) + ": sample id '" + id + "' " + why +
+                         ". A sample id becomes a file name, so it must be a plain name -- no "
+                         "path separators, no '..', no leading '-'");
+    };
+    if (id.empty()) bad("is empty");
+    if (id.find('/') != std::string::npos || id.find('\\') != std::string::npos) {
+        bad("contains a path separator");
+    }
+    if (id == "." || id == ".." || id.find("..") != std::string::npos) bad("contains '..'");
+    if (id.front() == '-') bad("starts with '-'");
+    for (unsigned char c : id) {
+        if (c < 0x20 || c == 0x7f) bad("contains a control character");
+    }
+}
+
+// `007` for bucket 7: the file-name suffix of a range-partition bucket, zero-padded so that a
+// directory listing is in key order, which is the order every stage reads them in.
+inline std::string bucket_suffix(size_t bucket) {
+    const std::string s = std::to_string(bucket);
+    return std::string(s.size() < 3 ? 3 - s.size() : 0, '0') + s;
+}
+
 // Bucket index for the range partition: the top `bits` bits of the key. Barcodes are close to
 // uniform over their alphabet, so this balances as well as a hash while preserving order.
 inline uint32_t bucket_of(uint64_t key, int bits) {

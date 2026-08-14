@@ -25,6 +25,11 @@ probability that two molecules coincide is :math:`\sum_a p_a^2`. Since :math:`H_
 Shannon overstates the usable space and *understates* collisions — the direction that silently
 merges distinct molecules. Both are reported; only the collision form feeds any decision.
 
+``eff len`` in the summary is :math:`L_\text{eff}`, and it is the number to look at rather than the
+nominal length. A 12 nt UMI with eight positions fixed and four mixed is worth :math:`L_\text{eff}`
+= 4 and a usable space of 256: it will collide constantly, and nothing about it looks wrong until
+the molecules have already been merged.
+
 On the HIV Primer ID library in :doc:`quality_floor`, a 9 nt barcode with C at 20.5% instead of 25%
 gives :math:`L_\text{eff}` = 8.97 and 250,902 usable sequences against 262,144 nominal — a 4% loss
 to the oligo mix. ``bias_loss`` is that number, and ``checkout`` warns past 25%.

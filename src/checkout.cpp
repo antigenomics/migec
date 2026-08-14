@@ -336,11 +336,17 @@ namespace {
 struct BlockFile {
     std::FILE* f = nullptr;
     bool wrote = false;
+    std::string path;   // for the error message: a path is what makes it actionable
 
-    explicit BlockFile(const std::string& path) : f(std::fopen(path.c_str(), "wb")) {
-        if (!f) throw MigecError("checkout: cannot open " + path);
+    explicit BlockFile(const std::string& p) : f(std::fopen(p.c_str(), "wb")), path(p) {
+        if (!f) throw MigecError("checkout: cannot open " + p);
     }
-    ~BlockFile() { close(); }
+    // The destructor cannot throw -- it runs during unwinding -- so it drops the handle silently
+    // and leaves the error to the explicit close() every success path makes.
+    ~BlockFile() {
+        if (f) std::fclose(f);
+        f = nullptr;
+    }
     BlockFile(const BlockFile&) = delete;
     BlockFile& operator=(const BlockFile&) = delete;
 
@@ -352,10 +358,13 @@ struct BlockFile {
         wrote = true;
     }
     void close() {
-        if (f) {
-            std::fclose(f);
-            f = nullptr;
-        }
+        if (!f) return;
+        // Never: fclose is where a full disk shows up. Every append above went into the C
+        // library's buffer, so ignoring the flush reports a successful run over a truncated
+        // FASTQ -- and a truncated gzip member is a file the next stage refuses to read.
+        const bool ok = std::fclose(f) == 0;
+        f = nullptr;
+        if (!ok) throw MigecError("checkout: could not flush " + path + " -- is the disk full?");
     }
 };
 
@@ -418,8 +427,11 @@ size_t read_chunk(FastqReader& r1, FastqReader* r2, size_t n, Chunk& c, uint64_t
 struct MigStaged {
     uint64_t cell = 0, umi = 0, src_index = 0;
     uint32_t writer = 0;  // sample * n_buckets + bucket; also who owns writing it
-    uint32_t off[4] = {0, 0, 0, 0};
-    uint32_t len[4] = {0, 0, 0, 0};
+    // seq1, qual1, seq2, qual2, then the BARCODE's own quality: the UMI's and the cell's. The
+    // last two are what `refine`'s posterior weighs at the position that differs, and a `.mig`
+    // that dropped them would hand refine a weaker model than the FASTQ route does.
+    uint32_t off[6] = {0, 0, 0, 0, 0, 0};
+    uint32_t len[6] = {0, 0, 0, 0, 0, 0};
     uint16_t flags = 0;
     uint8_t umi_minq = 0, cell_minq = 0;
 };
@@ -459,13 +471,6 @@ struct MigLayout {
     int bits = 0;
     size_t n_buckets = 1;
 };
-
-// `<sample>.007.mig`: zero-padded so the buckets sort in key order in a directory listing, which
-// is the order every stage reads them in.
-std::string bucket_suffix(size_t b) {
-    std::string s = std::to_string(b);
-    return std::string(s.size() < 3 ? 3 - s.size() : 0, '0') + s;
-}
 
 // Min Phred over a barcode's quality string, capped at 60 -- the `.mig` record's own field, and
 // the evidence `refine` uses when the count ratio has nothing to say.
@@ -534,8 +539,9 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
                                                            : 0));
             st.umi_minq = min_phred(r.umi_qual);
             st.cell_minq = r.cell_qual.empty() ? 60 : min_phred(r.cell_qual);
-            const std::string_view payload[4] = {r.seq1, r.qual1, r.seq2, r.qual2};
-            for (int f = 0; f < 4; ++f) {
+            const std::string_view payload[6] = {r.seq1,     r.qual1,  r.seq2,
+                                                 r.qual2,    r.umi_qual, r.cell_qual};
+            for (int f = 0; f < 6; ++f) {
                 st.off[f] = static_cast<uint32_t>(w.mig_arena.size());
                 st.len[f] = static_cast<uint32_t>(payload[f].size());
                 w.mig_arena.append(payload[f]);
@@ -592,6 +598,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     for (size_t i = 0; i < n_samples; ++i) {
         auto it = std::find(stats.sample_ids.begin(), stats.sample_ids.end(), ids[i]);
         if (it == stats.sample_ids.end()) {
+            validate_sample_id(ids[i], "checkout");
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
             row_of_file.push_back(i);
@@ -732,8 +739,22 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         // Chunk 0 stays on this thread; spawning a thread for it would only add a context switch.
         std::vector<std::thread> pool;
         pool.reserve(filled - 1);
-        for (size_t t = 1; t < filled; ++t) pool.emplace_back([&, t] { guarded(t); });
+        // Never: a failed spawn must not abort. std::system_error out of emplace_back would unwind
+        // over threads that are still joinable, and ~thread() on a joinable thread is
+        // std::terminate. Whatever could not be spawned is run on this thread instead: the chunks
+        // are independent and the output order is fixed by the append loop below, so the bytes do
+        // not move -- only the wall clock does.
+        size_t spawned = 1;  // chunk 0 always runs here
+        for (size_t t = 1; t < filled; ++t) {
+            try {
+                pool.emplace_back([&, t] { guarded(t); });
+                ++spawned;
+            } catch (...) {
+                break;
+            }
+        }
         guarded(0);
+        for (size_t t = spawned; t < filled; ++t) guarded(t);
         for (std::thread& th : pool) th.join();
         if (err) std::rethrow_exception(err);
 
@@ -764,6 +785,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
                     header.bucket_index = static_cast<uint8_t>(b);
                     header.bucket_bits = static_cast<uint8_t>(mig.bits);
                     header.paired = paired;
+                    header.barcode_quality = true;
                     header.sample_id = stats.sample_ids[s];
                     // Note: no quality calibration in the header. It is fitted from the whole run,
                     // and this file is opened while the run is still going -- `checkout.json`
@@ -797,6 +819,9 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
                             rec.qual1 = std::string_view(w.mig_arena).substr(st.off[1], st.len[1]);
                             rec.seq2 = std::string_view(w.mig_arena).substr(st.off[2], st.len[2]);
                             rec.qual2 = std::string_view(w.mig_arena).substr(st.off[3], st.len[3]);
+                            rec.qual_umi = std::string_view(w.mig_arena).substr(st.off[4], st.len[4]);
+                            rec.qual_cell =
+                                std::string_view(w.mig_arena).substr(st.off[5], st.len[5]);
                             migw[st.writer]->write(rec);
                         }
                     }

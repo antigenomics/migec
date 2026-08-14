@@ -9,6 +9,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
@@ -228,4 +231,47 @@ TEST_CASE("mismatched sequence and quality lengths are rejected on write") {
     r.seq1 = "ACGT";
     r.qual1 = "II";
     CHECK_THROWS_AS(w.write(r), MigecError);
+}
+
+// --- what a corrupt or hostile header can do (2026-08-14) --------------------------------------
+
+TEST_CASE("a header that lies about its partition is refused") {
+    // `bucket_bits` and `bucket_index` are one byte each and go straight into a shift and a vector
+    // index in every stage that reads a partition. `1 << 200` is undefined behaviour and
+    // `bucket_paths[200]` on a two-element vector is an out-of-bounds write -- both reachable from
+    // a file that merely got corrupted in the right byte.
+    TempFile tmp;
+    const std::string path = tmp.path;
+    {
+        MigHeader h;
+        h.umi_len = 8;
+        h.bucket_bits = 2;
+        h.bucket_index = 1;
+        h.sample_id = "S1";
+        MigWriter w(path, h);
+        MigRecord r;
+        r.umi = pack_barcode("ACGTACGT");
+        r.seq1 = "ACGT";
+        r.qual1 = "IIII";
+        w.write(r);
+        w.close();
+    }
+    // Byte 6 is bucket_index, byte 7 is bucket_bits: magic(4) + version(2) + umi_len + cell_len +
+    // bucket_index + bucket_bits.
+    auto poke = [&](size_t at, unsigned char value) {
+        std::string bytes;
+        {
+            std::ifstream in(path, std::ios::binary);
+            bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        bytes[at] = static_cast<char>(value);
+        static TempFile poked;
+        const std::string bad = poked.path;
+        std::ofstream out(bad, std::ios::binary);
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        out.close();
+        return bad;
+    };
+    CHECK_THROWS_AS(MigReader(poke(9, 200)), MigecError);  // 2^200 buckets
+    CHECK_THROWS_AS(MigReader(poke(8, 9)), MigecError);    // bucket 9 of 4
 }

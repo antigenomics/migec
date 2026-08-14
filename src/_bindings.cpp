@@ -36,6 +36,8 @@ struct PyMigRecord {
     uint16_t flags;
     uint8_t umi_minq, cell_minq;
     std::string seq1, qual1, seq2, qual2;
+    // The barcode's own quality, v2 and later; empty on a v1 file.
+    std::string qual_umi, qual_cell;
 };
 
 class PyMigFile {
@@ -51,6 +53,7 @@ public:
         d["bucket_index"] = h.bucket_index;
         d["bucket_bits"] = h.bucket_bits;
         d["paired"] = h.paired;
+        d["barcode_quality"] = h.barcode_quality;
         d["sample_id"] = h.sample_id;
         d["provenance"] = h.provenance;
         d["quality_calibration"] = h.quality_calibration;
@@ -73,6 +76,8 @@ public:
             p.qual1 = std::string(r.qual1);
             p.seq2 = std::string(r.seq2);
             p.qual2 = std::string(r.qual2);
+            p.qual_umi = std::string(r.qual_umi);
+            p.qual_cell = std::string(r.qual_cell);
             out.push_back(std::move(p));
         }
         return out;
@@ -339,6 +344,8 @@ PYBIND11_MODULE(_core, m) {
         .def_readonly("qual1", &PyMigRecord::qual1)
         .def_readonly("seq2", &PyMigRecord::seq2)
         .def_readonly("qual2", &PyMigRecord::qual2)
+        .def_readonly("qual_umi", &PyMigRecord::qual_umi)
+        .def_readonly("qual_cell", &PyMigRecord::qual_cell)
         .def("__repr__", [](const PyMigRecord& r) {
             return "<MigRecord cell=" + r.cell + " umi=" + r.umi + " len=" +
                    std::to_string(r.seq1.size()) + "/" + std::to_string(r.seq2.size()) + ">";
@@ -573,9 +580,11 @@ PYBIND11_MODULE(_core, m) {
            bool use_quality, bool use_payload, int payload_width, double min_posterior,
            int expect_cells, const std::string& cell_whitelist, double min_whitelist_posterior,
            double target_fdr, int gzip_level, int threads, uint64_t limit_reads,
-           uint64_t limit_umis) {
+           uint64_t limit_umis, const std::vector<std::string>& mig_inputs) {
             RefineRequest req;
             req.input = input;
+            req.mig_inputs = mig_inputs;
+            req.mig_output = !mig_inputs.empty();
             req.output_dir = out_dir;
             req.sample_id = sample_id;
             req.use_quality = use_quality;
@@ -597,6 +606,7 @@ PYBIND11_MODULE(_core, m) {
             }
             py::dict d;
             d["sample_id"] = st.sample_id;
+            d["mig_paths"] = st.mig_paths;
             d["reads"] = st.reads;
             d["reads_without_umi"] = st.reads_without_umi;
             d["barcodes"] = st.barcodes;
@@ -658,9 +668,13 @@ PYBIND11_MODULE(_core, m) {
         py::arg("min_whitelist_posterior") = 0.975, py::arg("target_fdr") = 0.05,
         py::arg("gzip_level") = RefineRequest{}.gzip_level, py::arg("threads") = 0,
         py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
+        py::arg("mig_inputs") = std::vector<std::string>(),
         "Correct barcode errors and rewrite the reads with the corrected barcode. Holds the "
         "barcode table, never the reads. A merged read keeps what it was in an OX:Z: tag, so the "
-        "correction can be audited.");
+        "correction can be audited. Given `mig_inputs` -- the buckets `checkout --mig` wrote for one "
+        "sample -- it reads those instead and writes `.mig` buckets back, re-partitioned on the "
+        "CORRECTED barcode so the output is still a partition; the audit trail is then "
+        "`<sample>.barcodes.tsv`, which carries every barcode with its parent.");
 
     m.def(
         "assemble",

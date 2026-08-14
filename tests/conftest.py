@@ -8,6 +8,7 @@ command that fixes it.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -28,4 +29,17 @@ requires_core = pytest.mark.skipif(
 requires_benchmark = pytest.mark.skipif(
     not os.getenv("RUN_BENCHMARK"),
     reason="set RUN_BENCHMARK=1 to run benchmarks",
+)
+
+# The real-data tier reads the `ci/` fixtures of `isalgo/umi_data`. They are not vendored here:
+# they are LFS objects, and the mirror is where they are written from anyway (SOURCES.md).
+UMI_DATA = Path(os.environ.get("UMI_DATA", "~/hf/umi_data")).expanduser()
+
+requires_umi_data = pytest.mark.skipif(
+    not (UMI_DATA / "ci").is_dir(),
+    reason=(
+        f"the CI fixtures are not at {UMI_DATA} -- `git clone "
+        f"https://huggingface.co/datasets/isalgo/umi_data {UMI_DATA}` (git-lfs required), or set "
+        f"UMI_DATA to a copy"
+    ),
 )

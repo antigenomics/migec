@@ -145,6 +145,13 @@ reads/s: ``refine`` and ``assemble`` on the same 500 k-read sample, ``checkout``
 corpus of the table above. ``assemble`` on 4 M reads, where its partition dominates, runs at
 2,324,403.
 
+The other corpus is the shallow one — one distinct barcode per read, which is the memory-hostile
+shape because distinct barcodes are what the sort, the bucket and the group loop all scale with.
+``assemble`` runs it at **1,179,549 reads/s at 1.02 reads/UMI** and holds **282 B resident per
+distinct barcode**, still bounded by the bucket rather than by the library.
+``tests/benchmark/test_assemble_speed.py`` asserts both, loosely: they are there to catch a hash
+map keyed by barcode reappearing, not to police bytes.
+
 **zlib at its default level 6 was 83% of refine's wall clock** -- 1.78 s of a 2.14 s run,
 compressing an intermediate the next stage decompresses immediately. Level 1 costs 21% more bytes
 (8.4 MB against 7.0) and gave 3x before a single thread was added. checkout had measured the same
@@ -369,3 +376,12 @@ than the thing being measured:
 The thresholds are deliberately loose — they exist to catch a 10× regression, such as a
 transcendental finding its way back into the scoring loop or compression migrating back onto the
 serial path, not to police a 10% one.
+
+``.github/workflows/benchmark.yml`` runs them nightly at 04:17 UTC and on ``workflow_dispatch``,
+never on a push or a pull request: on a shared runner the measurement varies by more than the
+regression it would be asked to gate, so putting it on the merge button buys noise. The same job
+then runs ``tests/realworld/`` against the ``ci/`` fixtures, fetched anonymously over https from
+`huggingface.co/datasets/isalgo/umi_data <https://huggingface.co/datasets/isalgo/umi_data>`_ into
+``UMI_DATA``; if that fetch fails the job warns on the run summary and stays green, because an
+upstream outage is not a defect here. Because ``schedule`` only fires on the default branch, a
+branch that touches a hot path has to be dispatched by hand from the Actions tab.

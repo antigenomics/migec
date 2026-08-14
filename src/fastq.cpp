@@ -161,6 +161,7 @@ struct FastqWriter::Impl {
     gzFile gz = nullptr;
     std::FILE* raw = nullptr;
     std::string buf;
+    std::string path;   // for the error message; a path is what makes it actionable
 
     void put(std::string_view s) { buf.append(s); }
     void flush(bool force) {
@@ -178,6 +179,7 @@ struct FastqWriter::Impl {
 };
 
 FastqWriter::FastqWriter(const std::string& path, int gzip_level) : impl_(new Impl) {
+    impl_->path = path;
     const bool gzipped = path.size() > 3 && path.compare(path.size() - 3, 3, ".gz") == 0;
     if (gzipped) {
         std::string mode = "wb" + std::to_string(gzip_level);
@@ -219,8 +221,19 @@ void FastqWriter::close() {
     Impl& im = *impl_;
     if (!im.gz && !im.raw) return;
     im.flush(true);
-    if (im.gz) { gzclose(im.gz); im.gz = nullptr; }
-    if (im.raw) { std::fclose(im.raw); im.raw = nullptr; }
+    // Never: the close is where a full disk shows up -- everything above went into zlib's buffer
+    // or the C library's. Reporting a successful run over a truncated FASTQ is worse than failing:
+    // the next stage reads what is there and calls it the library.
+    int rc = 0;
+    if (im.gz) { rc = gzclose(im.gz); im.gz = nullptr; }
+    bool closed = rc == Z_OK;
+    if (im.raw) {
+        closed = std::fclose(im.raw) == 0 && closed;
+        im.raw = nullptr;
+    }
+    if (!closed) {
+        throw MigecError("fastq_writer: could not finish " + im.path + " -- is the disk full?");
+    }
 }
 
 void append_fastq(std::string& dst, std::string_view name, std::string_view comment,

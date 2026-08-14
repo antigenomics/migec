@@ -295,6 +295,15 @@ void UmiCounts::for_each_bucket(const std::function<void(const std::vector<Entry
             const std::streamoff bytes = in.tellg();
             in.seekg(0, std::ios::beg);
             if (bytes > 0) {
+                // Never: a spill file is a whole number of entries. A run killed mid-write leaves
+                // a partial one, and reading `bytes` into a buffer sized `bytes / 16` overruns the
+                // heap by up to 15 bytes -- silently, since the read itself succeeds.
+                if (static_cast<size_t>(bytes) % sizeof(Entry) != 0) {
+                    throw MigecError("UmiCounts: spill file " + spill_paths_[b] + " holds " +
+                                     std::to_string(bytes) +
+                                     " bytes, which is not a whole number of entries -- it was "
+                                     "truncated, most likely by a run that was killed");
+                }
                 bucket.resize(static_cast<size_t>(bytes) / sizeof(Entry));
                 in.read(reinterpret_cast<char*>(bucket.data()), bytes);
                 if (!in) throw MigecError("UmiCounts: short read from " + spill_paths_[b]);
@@ -1020,7 +1029,10 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
         }
         accumulate(correct_entries(live, L, sub, BarcodeEvidence{}, &sizes));
     });
-    std::filesystem::remove_all(rot_dir);
+    // Best effort: the rotated copy is a temporary of this call, and failing to remove it is not
+    // a reason to lose a correction result that is already computed.
+    std::error_code rm_ec;
+    std::filesystem::remove_all(rot_dir, rm_ec);
 
     // The per-bucket molecule counts mean nothing on their own -- a bucket is a slice of the
     // barcode space, not of the molecules -- so they are recomputed here from the totals. Every

@@ -76,15 +76,18 @@ By platform
 Runnable notebooks
 ------------------
 
-`marimo <https://marimo.io>`_ notebooks, each self-contained. The fixtures they use come from
-`isalgo/umi_data <https://huggingface.co/datasets/isalgo/umi_data>`_ and download on first run --
-except ``ctdna_variants.py``, which fetches its own runs straight from SRA with
-``scripts/sra_fetch.py``, because anything with a public accession is regenerated rather than
-mirrored.
+Six `marimo <https://marimo.io>`_ notebooks, each a plain Python file with its own PEP 723
+dependency header, so ``uv`` builds the environment and nothing has to be installed first. Two of
+them need the network: ``platforms.py`` downloads its fixtures from
+`isalgo/umi_data <https://huggingface.co/datasets/isalgo/umi_data>`_ on first run, and
+``ctdna_variants.py`` fetches its runs straight from SRA with ``scripts/sra_fetch.py``, because
+anything with a public accession is regenerated rather than mirrored. The other four simulate a
+library whose true molecule and clone counts are known, so every number they print can be checked
+rather than admired.
 
 .. code-block:: bash
 
-   marimo edit notebooks/platforms.py
+   uv run marimo edit notebooks/platforms.py
 
 .. list-table::
    :header-rows: 1
@@ -97,6 +100,10 @@ mirrored.
      - is my barcode long enough? collisions, occupancy, the error budget
    * - ``notebooks/refine_diagnostics.py``
      - the coverage curve, the barcode-rank plot, and where the errors are
+   * - ``notebooks/exome_capture.py``
+     - duplicates or real molecules? why coordinate deduplication undercounts a capture panel
+   * - ``notebooks/airr_repertoire.py``
+     - how much of a repertoire is PCR? clonotype counts from reads against molecules
    * - ``notebooks/ctdna_variants.py``
      - how many molecules a variant caller actually gets, on cell-free DNA reference material at
        known allele frequency (:doc:`variants`)

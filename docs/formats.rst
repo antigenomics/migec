@@ -25,12 +25,13 @@ FileHeader
 field                   type       meaning
 ======================  =========  ======================================================
 magic                   char[4]    ``MIGB``
-format_version          u16        ``1``; a reader refuses a version it does not know
+format_version          u16        ``2``; a reader takes 1 and 2 and refuses what it cannot read
 umi_len                 u8         UMI length in bases, 0 if there is no UMI
 cell_len                u8         cell barcode length, 0 if there is none
 bucket_index            u8         which range partition this file is
 bucket_bits             u8         number of key bits used to partition; 0 = one bucket
 paired                  u8         1 if mate 2 is present
+barcode_quality         u8         v2: 1 if every record carries the barcode's own quality
 sample_id               str        length-prefixed (u32 + bytes)
 provenance              str        length-prefixed JSON: command line, version, pattern
 quality_calibration     f32[]      length-prefixed; measured error rate per reported Phred
@@ -58,6 +59,23 @@ payload. The payload is **column-major**:
 3. all of ``seq2``
 4. all of ``qual1``
 5. all of ``qual2``
+6. v2, and only when ``barcode_quality`` is set: all of the UMI's own quality, ``umi_len`` bytes
+   per record
+7. ...and all of the cell barcode's, ``cell_len`` bytes per record
+
+Both barcode quality columns are fixed width, because both lengths are file constants — so they
+cost no length field and the writer refuses a record that disagrees with the header rather than
+shifting every column after it.
+
+.. note::
+
+   **v2 exists because v1 dropped the evidence ``refine`` needs.** v1 stored ``umi_minq`` and
+   ``cell_minq``, the minimum over the barcode. The correction posterior does not want a minimum:
+   it weighs the reported quality **at the position that differs**, and a minimum says every
+   position is as bad as the worst one. That overstates the error everywhere, which makes merges
+   easier — the wrong direction, since a wrong merge destroys a molecule and a missed one only
+   inflates a count. A v1 file still reads: the quality comes back empty and ``refine`` falls back
+   to the library's global rate, exactly as it does for a FASTQ with no ``QX:Z:`` tag.
 
 Three decisions worth knowing, because they look wrong until you measure them:
 

@@ -6,6 +6,8 @@
 build/
 # the thread-sanitizer build; see docs/performance.rst for how to make one
 build-tsan/
+# a second ordinary build, for verifying a change without disturbing the installed extension
+build-verify/
 # setup.sh creates this
 .venv/
 # intermediate record files; regenerate with `migec checkout`
@@ -36,3 +38,4 @@ docs/_build/
 *.bam
 *.bai
 *.crai
+build-verify/

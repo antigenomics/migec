@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 
 from migec import _core
+from migec.buckets import mig_buckets as _mig_buckets
 from migec.checkout import _bytes, _dur, _pct
 
 
@@ -104,36 +105,6 @@ def _quantiles_by_depth(grid: list[dict]) -> list[tuple]:
             )
         )
     return out
-
-
-def _mig_buckets(reads: str | Path) -> list[str]:
-    """The `.mig` buckets `reads` names, or an empty list when it is a FASTQ.
-
-    A directory is every bucket in it, sorted -- which is bucket order, because the suffix is
-    zero-padded. One `.mig` file brings its siblings with it: a single bucket of a partition is a
-    corner of the barcode space, and assembling it alone would silently drop the rest of the
-    sample rather than fail.
-    """
-    p = Path(reads)
-    if p.suffix == ".mig":
-        sample = p.name.split(".")[0]
-        return sorted(str(f) for f in p.parent.glob(f"{sample}.*.mig"))
-    if not p.is_dir():
-        return []
-    # A checkout output directory holds every sample's buckets. Never: assembling them together
-    # would group two samples' reads as one, and a UMI repeats across samples by design -- so the
-    # ambiguity is refused here, by name, rather than resolved by guessing.
-    by_sample: dict[str, list[str]] = {}
-    for f in sorted(p.glob("*.mig")):
-        by_sample.setdefault(f.name.split(".")[0], []).append(str(f))
-    if len(by_sample) > 1:
-        names = ", ".join(sorted(by_sample))
-        raise ValueError(
-            f"{p} holds buckets for {len(by_sample)} samples ({names}). assemble is a per-sample "
-            f"stage: point it at one sample's buckets, e.g. {p}/{sorted(by_sample)[0]}.000.mig, "
-            f"which brings the rest of that sample with it"
-        )
-    return next(iter(by_sample.values()), [])
 
 
 def run(

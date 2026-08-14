@@ -21,6 +21,10 @@ from migec.refine import run as refine_run
 
 from ._sim import SimConfig, simulate
 
+from tests.conftest import requires_core
+
+pytestmark = requires_core
+
 ADAPTER = "CAGTGGTATCAACGCAGAGT"
 THREADS = [1, 2, 3, 8]
 

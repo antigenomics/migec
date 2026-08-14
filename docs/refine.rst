@@ -13,6 +13,25 @@ molecules there were**.
 Input is a per-sample FASTQ from :doc:`checkout`; output is the same reads with the corrected
 barcode in ``RX`` and the original preserved in ``OX``, plus the barcode table.
 
+Or the ``.mig`` buckets ``checkout --mig`` wrote:
+
+.. code-block:: bash
+
+   migec checkout reads.fq.gz -b barcodes.txt -o out --mig
+   migec refine out/S1.000.mig -o ref/       # buckets in, buckets out
+   migec assemble ref/S1.000.mig -o asm/     # ...and assemble skips its partition pass
+
+The output is then buckets too, **re-partitioned on the corrected barcode**. A corrected barcode is
+a different key and a key decides its bucket, so copying a bucket through unchanged would stop it
+being a partition — and the reads whose barcode was corrected across a bucket boundary would be
+grouped with strangers by the next stage. The audit trail moves with it: a ``.mig`` record has no
+room for the pre-correction barcode the way a FASTQ comment has ``OX:Z:``, so
+``<sample>.barcodes.tsv`` — every barcode with its parent — is the record of what was merged. It is
+one row per barcode rather than two ``u64`` per read.
+
+Both routes produce the same numbers, down to the estimated error rate and the consensus that comes
+out the far end; ``tests/synthetic/test_mig_chain.py`` asserts exactly that.
+
 What the evidence is
 --------------------
 
@@ -56,6 +75,17 @@ the count ratio would have made.
 
 How well it works, and where it cannot
 --------------------------------------
+
+What one run prints, on a simulated library of 20,000 molecules carrying an injected barcode error
+rate of 3.0e-03:
+
+.. code-block:: text
+
+   barcodes    23,910 distinct
+     merged    3,855 (16.1%) into a parent, 3,889 reads moved
+   molecules   20,055 after correction          <- 20,000 were simulated
+
+   barcode error   2.87e-03 per base            <- 3.0e-03 injected
 
 ``scripts/correction_accuracy.py`` scores it against the simulator's truth. Recall is reported
 against the **reachable** set, because a child whose parent barcode was never sequenced has nothing

@@ -88,10 +88,29 @@ void parallel_for(size_t items, int threads, Fn&& fn) {
 
     std::vector<std::thread> pool;
     pool.reserve(static_cast<size_t>(n) - 1);
-    for (int t = 1; t < n; ++t) pool.emplace_back([&run, t] { run(t); });
+    // Never: a failed SPAWN must not abort. `emplace_back` throws std::system_error under a
+    // thread or RLIMIT_NPROC cap, and unwinding then runs ~thread() on the threads already
+    // started -- which is std::terminate: SIGABRT, no message, nothing flushed, which is the one
+    // outcome this file exists to prevent. The threads that did start finish their work, and the
+    // rest of the items are run right here, so the answer is the same and only the wall clock
+    // changes.
+    std::exception_ptr spawn_err;
+    for (int t = 1; t < n; ++t) {
+        try {
+            pool.emplace_back([&run, t] { run(t); });
+        } catch (...) {
+            spawn_err = std::current_exception();
+            break;
+        }
+    }
     run(0);
     for (std::thread& th : pool) th.join();
     if (err) std::rethrow_exception(err);
+    // The work is done -- `run` claims batches until the queue is empty, so whoever ran took the
+    // rest -- and the spawn failure is reported only if it left something undone.
+    if (spawn_err && next.load(std::memory_order_relaxed) < items) {
+        std::rethrow_exception(spawn_err);
+    }
 }
 
 }  // namespace migec

@@ -14,6 +14,10 @@ import pytest
 
 from migec.checkout import run
 
+from tests.conftest import requires_core
+
+pytestmark = requires_core
+
 MASTER = "NNNNNNNNNNNNTGACT"
 SLAVE = "AGTCANNNNNNNNNNNN"
 

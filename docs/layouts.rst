@@ -44,6 +44,10 @@ sequence that gets scored. Slices are **half-open and 0-based**, like Python's: 
 bases and the next slice may start at 8. Each is a UMI slice unless it is prefixed ``cell:``.
 Slices must be in increasing order and must not overlap, because one base belongs to one barcode.
 
+Never: ``umi_tools`` spells a cell-barcode position ``C``, and ``C`` is **cytosine** here. Pasting
+one of its patterns would otherwise compile into a demand for a run of literal cytosines that
+matches nothing, so it is refused by name with the translation to ``X`` rather than accepted.
+
 Anchoring
 ~~~~~~~~~
 
@@ -71,7 +75,7 @@ A preset places the barcode and stops there. What the *experiment* implies -- ho
 consensus needs, which pre-amplification floor applies, whether the reads under one barcode are
 even co-terminal -- is the other axis, and ``migec sheet --assay`` prints it as a paste-ready
 recipe. Eight profiles: ``airr``, ``amplicon`` (a targeted PCR panel, *not* an alias of ``airr``),
-``exome``, ``ctdna``, ``mrd``, ``rnaseq``, ``10x-gex``, ``10x-vdj``. See :doc:`detection`.
+``exome``, ``ctdna``, ``mrd``, ``rnaseq``, ``10x-gex``, ``10x-vdj``. See :doc:`assays`.
 
 .. list-table::
    :header-rows: 1
@@ -109,6 +113,11 @@ recipe. Eight profiles: ``airr``, ``amplicon`` (a targeted PCR panel, *not* an a
      - ``^NNNNNNNNNNGGG``
      - SMARTer template-switching RNA-seq: a 10 nt inline UMI, then the ``GGG`` the template switch
        leaves behind. ``ncgr/UMI-analysis``, whose quality filter reads offset 0 length 10.
+
+Measured on 10x's own ``sc5p_v2_hs_PBMC_1k`` VDJ-T run with ``--preset 10x-v2``: **100% of
+3,155,166 reads assigned**, 221,024 barcodes at 14.28 reads each, an effective UMI length of 9.97
+of 10, and 813 cells called by OrdMag from the 305,702 molecules on R2. ``SOURCES.md`` carries the
+fetch command and the rest of the run.
 
 Warning: the ``duplex`` preset extracts the tags and emits **single-strand** consensuses. Pairing
 the two strands of a molecule into a duplex consensus is not implemented, so no duplex error rate
