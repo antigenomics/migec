@@ -43,7 +43,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 | 4 | `--rt-error auto` | M1 | falls straight out of (3). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
 | 5 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
 | 6 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
-| 7 | ctDNA ground truth | M5 | **no longer has to be built.** `PRJNA788522` and `PRJNA507366` are cfDNA reference material at certified VAF (0 / 0.031 / 0.0625 / 0.125 / 0.25 / 1%) with a **real 12 nt inline UMI that survived deposition**, and a true-negative `WT` arm. Maruzani's two runs carry no UMI and had to be simulated; these do not. `SOURCES.md`, `docs/variants.rst` |
+| 7 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
 | 8 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
 | 9 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
@@ -140,7 +140,10 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       deliverable is a molecule count. Refused with `--contig`
 - [x] **Coverage capped at 10,000 reads per barcode into the consensus** (10x's rule). Never: the cap
       is on the reads consensed, never on the reads counted
-- [ ] `--rt-error auto`, fitted per dataset rather than taken from a named class
+- [ ] `--pre-amp-error auto`, fitted per dataset rather than taken from a named class. Note: the
+      flag was `--rt-error` and that name is kept as an alias, but only an RNA library has a
+      reverse transcription step -- on a DNA library the same floor is library-prep damage plus the
+      first PCR cycle, so `auto` has two chemistries to fit, not one
 - [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
 - Gate: per-base error ≤1e-5 at coverage ≥5 Done: (`tests/synthetic/test_assemble.py`, stratified by
   depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
@@ -307,9 +310,19 @@ model has to use the evidence that survives at one read:
       finds no pattern, `CMP_LINKAGE_GROUP` empty), so theirs had to be simulated — 9 nt, Phred
       fixed at 37, assigned to reads sharing start *and* end, which is the co-terminal assumption
       X1 falsified. That is a property of the two runs they picked, not of the public record
-- [ ] Variant calls on top of it: run the callers themselves (LoFreq, Mutect2, UMI-VarCal,
-      UMIErrorCorrect) against the `WT` true-negative arm and the certified dilutions. `docs/variants.rst`
-      reports the molecule counts and the detectability arithmetic; the call sets are the next step
+- [x] **LoFreq against the certified arms (2026-08-13/14).** Full chain on GRCh38 with the panel
+      inferred from coverage: `assemble` consensus, `minimap2 -y`, LoFreq, scored per target against
+      the certified VAF. **Reliable to 0.25%**, and the finding that mattered is that at
+      `--min-reads 1` the 2-colour dark-G artifact is **additive to true positives** -- the 0.25%
+      arm read 0.79% (0.25% + a 0.57% artifact floor). `--min-reads 3` takes specificity from 0% to
+      100% at no cost to sensitivity. `assets/ctdna_minreads.tsv`, `docs/detection.rst`
+- [ ] The other three callers: **Mutect2, UMI-VarCal, UMIErrorCorrect** on the same arms, so the
+      comparison is caller-vs-caller on identical consensus input rather than migec-vs-published.
+      Note: the LoFreq result above is one caller's, and the artifact it exposed is a property of
+      the *consensus input*, not of LoFreq -- which is exactly why the others have to be run
+- [ ] Re-run the arms with adapter trimming or `-q 20`. Adapter read-through is the diagnosed cause
+      of the chr2 mismapping (87S52M at MAPQ 4-16, TruSeq adapter), but the fix is **diagnosed, not
+      measured**: nothing has been re-run with it applied
 - Gate: grouping ARI ≥0.99; residual error ≤1e-5 on a clonal control; ≥3× MIGEC v1 wall-clock
 
 ## Deliberately not doing
