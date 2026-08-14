@@ -6,6 +6,24 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### UMI-tools and fgbio, measured
+
+`scripts/compare_grouping.py` runs both map-first tools end to end and scores all three partitions
+against the simulator's truth with the same adjusted Rand index Calib is scored with. What it
+measures is what the alignment position is worth, because that is the only difference: they group
+on *(position, UMI)*, we group on *(sample, cell, UMI)* and align once, afterwards.
+
+On **one reference** — a single amplicon, a clonal control, a targeted ctDNA panel — the position
+carries nothing, and migec wins: ARI 0.9967 against 0.9864 (UMI-tools) and 0.9817 (fgbio), with
+0.65% of reads in clusters that mix molecules against 3.0% and 3.9%. That is 4.6x and 6x fewer
+molecules destroyed, and destroying one is the error nothing downstream can detect. On 200 or
+20,000 distinct references they win by 0.001 ARI, which is the barcode collision rate and nothing
+else. migec is 8-48x faster throughout, including the alignment they cannot skip.
+
+`docs/grouping.rst` has the table, `assets/grouping_tools.tsv` the numbers, `SOURCES.md` how to
+install both (fgbio needs a JDK 17+; UMI-tools needs `--no-build-isolation` on Python 3.12+). The
+simulator now writes `clones.fa`, the reference a map-first tool has to align to.
+
 ### `refine`'s barcode table bounds itself
 
 The last thing in the pipeline that scaled with the library. Past 1 GB the table range-partitions

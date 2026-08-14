@@ -45,7 +45,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 | # | item | milestone | why it is next |
 |---|---|---|---|
 | 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
-| 2 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 2 | The rest of the published comparisons | M5 | **UMI-tools and fgbio are done and scored** (`docs/grouping.rst`, `assets/grouping_tools.tsv`). Open: MIGEC v1, MAGERI, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
 | 3 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
 | 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
@@ -351,9 +351,19 @@ model has to use the evidence that survives at one read:
 
 ## M5 — benchmarks and release
 
+- [x] **UMI-tools and fgbio, scored** (2026-08-14). `scripts/compare_grouping.py` runs both
+      map-first tools end to end -- barcode into the read name / into `RX`, minimap2 onto the
+      simulator's own `clones.fa`, then `umi_tools group` / `fgbio GroupReadsByUmi -s adjacency` --
+      and scores all three partitions against the simulator's truth with the same adjusted Rand
+      index Calib is scored with. The result is what the position is worth: **on ONE reference
+      migec wins** (ARI 0.9967 against 0.9864 and 0.9817) and wins on the direction that cannot be
+      undone, putting 0.65% of reads into mixed clusters against 3.0% and 3.9% -- 4.6x and 6x fewer
+      molecules destroyed. On 200 or 20,000 distinct references they win by 0.001 ARI, which is the
+      collision rate and nothing else. migec is 8-48x faster including the alignment they cannot
+      skip. `docs/grouping.rst`, `assets/grouping_tools.tsv`
 - [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
-      UMI-tools, Calib, fgbio, Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware
-      callers benchmarked by Maruzani et al. 2024 for low-frequency ctDNA)
+      Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware callers benchmarked by
+      Maruzani et al. 2024 for low-frequency ctDNA)
 - [x] ctDNA ground truth **located, not simulated** (2026-08-13): `PRJNA788522` (72 runs, cfDNA
       reference material at 0 / 0.125 / 0.25 / 1% VAF x 5/20/80 ng x 3.3/10/30x, three replicates)
       and `PRJNA507366` (28 runs, six polymerases plus 0.031% / 0.0625% VAF). Both carry a real
