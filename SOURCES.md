@@ -32,8 +32,14 @@ them rather than in `isalgo/umi_data`. Test corpora go the other way: HuggingFac
 
 ## Error-rate constants
 
-The pre-amplification floor (`--rt-error`) is a property of the protocol, so its values are cited
-rather than fitted. Nothing here was measured by us except the X2 row.
+The pre-amplification floor (`--pre-amp-error`, formerly `--rt-error`) is a property of the
+protocol, so its values are cited rather than fitted. Nothing here was measured by us except the X2
+row.
+
+Never: only an RNA library has a reverse transcription step. On a DNA library the same floor is
+supplied by library-preparation damage plus the first PCR cycle, and the two damage chemistries are
+sourced below. The class names `rt` / `medium` / `high` are historical brackets on the *rate*, not
+claims about mechanism.
 
 | Value | What it is | Source | Provenance |
 |---|---|---|---|
@@ -42,6 +48,8 @@ rather than fitted. Nothing here was measured by us except the X2 row.
 | 7.37e-5 (0.00737%) | TruSight Oncology 500 v2 error rate | Illumina product documentation | vendor-stated |
 | Taq 4.3e-5 +/- 1.8; Pfu 2.8e-6; Phusion 2.6e-6; Pwo 2.4e-6, per bp per template duplication | polymerase fidelity, no RT | McInerney P, Adams P, Hadi MZ. *Error Rate Comparison during Polymerase Chain Reaction by DNA Polymerase.* Mol Biol Int 2014:287430. doi:10.1155/2014/287430, PMID 25197572 | published, third party |
 | 0.3-6.6e-5 per base per cycle over nine polymerases; **linear-amplification errors 5 +/- 1x the per-cycle PCR rate** | why the FIRST cycle is the one that matters — it is copied into every read of the molecule | Shagin DA, Shagina IA, Zaretsky AR, Barsova EV, Kelmanson IV, Lukyanov S, Chudakov DM, Shugay M. *A high-throughput assay for quantitative measurement of PCR errors.* Sci Rep 2017;7:2718. doi:10.1038/s41598-017-02727-8, PMID 28578414 | published, ours |
+| `C>A`/`G>T` transversions at low allele fraction, read-orientation biased | oxidation of guanine to 8-oxoG during **acoustic shearing**, in extracts carrying reactive contaminants. The pre-amplification floor of a DNA library, and the reason `--min-reads` cannot remove it: damage predates the barcode. Detected by orientation bias, not by family size | Costello M, Pugh TJ, Fennell TJ, Stewart C, Lichtenstein L, Meldrim JC, Fostel JL, Friedrich DC, Perrin D, Dionne D, Kim S, Gabriel SB, Lander ES, Fisher S, Getz G. *Discovery and characterization of artifactual mutations in deep coverage targeted capture sequencing data due to oxidative DNA damage during sample preparation.* Nucleic Acids Res 2013;41(6):e67. doi:10.1093/nar/gks1443, PMID 23303777 | published, third party |
+| `C>T`/`G>A` transitions | cytosine (and 5-methylcytosine) deamination to uracil/thymine; the other DNA-library damage chemistry, dominant in FFPE material | Do H, Dobrovic A. *Sequence artifacts in DNA from formalin-fixed tissues: causes and strategies for minimization.* Clin Chem 2014;61(1):64-71. doi:10.1373/clinchem.2014.223040, PMID 25421801 | published, third party |
 | 10,000 reads per barcode | coverage cap into the consensus (never into the count) | 10x Genomics: "Very high coverage (greater than 10,000 reads) of transcripts can be problematic because it degrades computational performance and adds little information." | vendor-stated |
 
 ## Benchmark data

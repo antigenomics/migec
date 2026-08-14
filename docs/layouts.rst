@@ -67,6 +67,12 @@ five bases cannot pay. Anchored, there is only one place to be and the bar does 
     migec sheet --presets                                       # all of them, and their sources
     migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
 
+A preset places the barcode and stops there. What the *experiment* implies -- how many reads a
+consensus needs, which pre-amplification floor applies, whether the reads under one barcode are
+even co-terminal -- is the other axis, and ``migec sheet --assay`` prints it as a paste-ready
+recipe. Eight profiles: ``airr``, ``amplicon`` (a targeted PCR panel, *not* an alias of ``airr``),
+``exome``, ``ctdna``, ``mrd``, ``rnaseq``, ``10x-gex``, ``10x-vdj``. See :doc:`detection`.
+
 .. list-table::
    :header-rows: 1
    :widths: 14 34 52

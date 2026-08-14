@@ -192,15 +192,31 @@ def sheet(
     presets: bool = typer.Option(
         False, "--presets", help="List the named layouts instead, and where each one is from."
     ),
+    assay: Optional[str] = typer.Option(
+        None,
+        "--assay",
+        help="Print the paste-ready recipe for an assay: amplicon (airr), exome, ctdna, mrd, "
+        "rnaseq, 10x-gex, 10x-vdj. Pass `all` for every one. A layout says where the barcode is; "
+        "an assay also says what a consensus is worth.",
+    ),
 ) -> None:
     """Show what each row of a barcode table will extract, without running anything."""
-    from migec.sheet import describe, format_presets, read_barcodes
+    from migec.sheet import describe, format_assay, format_assays, format_presets, read_barcodes
 
+    if assay:
+        try:
+            typer.echo(format_assays() if assay.strip().lower() == "all" else format_assay(assay))
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        return
     if presets:
         typer.echo(format_presets())
         return
     if barcodes is None:
-        raise typer.BadParameter("give a barcode table, or --presets to list the named layouts")
+        raise typer.BadParameter(
+            "give a barcode table, --presets to list the named layouts, or --assay NAME "
+            "for what an experiment implies"
+        )
     typer.echo(describe(read_barcodes(barcodes)))
 
 
@@ -336,13 +352,18 @@ def assemble(
     sample_id: str = typer.Option("", "--sample", help="Defaults to the BC tag in the reads."),
     rt_error: str = typer.Option(
         "rt",
+        "--pre-amp-error",
         "--rt-error",
         help="The pre-amplification error floor, which caps every emitted quality at -10 log10 of "
-        "it. Name the chemistry: 'rt' (1e-4, Q40) for anything with a reverse transcription step, "
-        "'medium' (1e-5, Q50) for an ordinary polymerase and no RT, 'high' (1e-6, Q60) for a "
-        "proofreading one -- or give the rate itself. It is the ONE-MOLECULE floor and every "
-        "record here is one molecule: 10x's Q60 needs two UMIs to agree, and combining molecules "
-        "is arda's job. See docs/quality_floor.rst for what measured each.",
+        "it. Anything already in the molecule when the first amplification cycle started is in "
+        "every read of the group, so no consensus removes it. Name the chemistry: 'rt' (1e-4, "
+        "Q40), 'medium' (1e-5, Q50) for an ordinary polymerase, 'high' (1e-6, Q60) for a "
+        "proofreading one -- or give the rate itself. Note: the class names are historical. Only "
+        "an RNA assay has a reverse transcription step; on a DNA library the same floor is set by "
+        "library-prep damage (oxidation during shearing, cytosine deamination) plus the first PCR "
+        "cycle, and 'rt' is then just the name of the 1e-4 bracket. It is the ONE-MOLECULE floor "
+        "and every record here is one molecule: 10x's Q60 needs two UMIs to agree, and combining "
+        "molecules is arda's job. See docs/quality_floor.rst for what measured each.",
     ),
     contig: bool = typer.Option(
         False,
