@@ -135,9 +135,40 @@ Two things a total molecule count hides, both measured on that panel by aligning
        - **47-58%**
        - 11,500-12,700
 
-  The *absolute* off-target count barely moves (~15,000 molecules at both 5 and 20 ng at the same
-  depth) while on-target scales with input -- which is what template-independent product looks
-  like. At 5 ng more than half the library is not evidence about anything.
+  The *absolute* count barely moves (~15,000 molecules at both 5 and 20 ng at the same depth)
+  while on-target scales with input, so at 5 ng more than half the library is not evidence about
+  anything.
+
+  Never: **it is adapter read-through, not a PCR product and not poly-G reads.** The sequences
+  there are 85-95 bases soft-clipped with ~45 aligned (``87S52M``, ``94S45M``, ``95S44M``) at
+  **MAPQ 4-16**, against MAPQ 60 for 1,844 of 1,907 molecules on real TP53, and they carry the
+  TruSeq adapter ``GATCGGAAGAGCACACGTCTGAACTCCAGTCAC``. Short inserts let the read run past the
+  fragment into the adapter; the leftover mismaps into a low-complexity locus which is **97% G with
+  an 81 bp pure-G run**, against 19-33% G for every real amplicon.
+
+  So it is removed by things that cost nothing:
+
+  .. list-table::
+     :header-rows: 1
+     :widths: 26 22 52
+
+     * - fix
+       - where
+       - effect
+     * - ``-q 20`` MAPQ filter
+       - alignment
+       - removes essentially all of it -- MAPQ 4-16 against 60
+     * - adapter trimming
+       - before ``checkout``
+       - removes the cause
+     * - ``--min-reads 3``
+       - ``assemble``
+       - a *different* artifact class; see below
+
+  Note: the G-rich locus is a red herring worth naming, because it is the sort of thing that
+  invites a poly-G explanation. The barcodes of those molecules have ordinary G content (mode 3 of
+  12, same as a real amplicon) and under 5% of consensus records are even 50% G. The reference is
+  G-rich; the reads are not.
 
 So for ctDNA: count molecules **per target**, quote the weakest target rather than the mean, and
 never read a library total as on-target depth. Precisely when input is scarce -- the case that
@@ -443,8 +474,58 @@ counting. Measured on certified cfDNA reference material at 20 ng and 10x:
      - **gone**
      - gone
 
-**Every** ``-> G`` **artifact disappeared at ``--min-reads 3``; every certified variant survived
-with its frequency stable to the third decimal.** Requiring three reads discards the molecules that
+Scored against truth across three replicates per arm at 20 ng / 10x, the effect is categorical:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 14 16 14 18 18
+
+   * - arm
+     - ``--min-reads``
+     - calls/sample
+     - ``-> G`` calls
+     - H1047R called
+     - mean VAF
+   * - **0%, truth: absent**
+     - 1
+     - 10.0
+     - **29**
+     - **3/3 wrong**
+     - 0.0066
+   * - **0%**
+     - **3**
+     - 2.0
+     - **0**
+     - **0/3 correct**
+     - --
+   * - 0%
+     - 5
+     - 1.0
+     - 0
+     - 0/3 correct
+     - --
+   * - **1%, truth: present**
+     - 1
+     - 9.0
+     - 17
+     - 3/3 correct
+     - 0.0101
+   * - **1%**
+     - **3**
+     - 6.3
+     - 3
+     - **3/3 correct**
+     - **0.0102**
+   * - 1%
+     - 5
+     - 5.0
+     - 3
+     - 3/3 correct
+     - 0.0104
+
+**Specificity goes from 0% to 100% with no loss of sensitivity, and the measured frequency does not
+move** (1.01% -> 1.02% against a certified 1%). Every ``-> G`` artifact in the true negative is
+gone. Requiring three reads discards the molecules that
 were never error-corrected, which is exactly the population the dark-G bias rides on.
 
 It is not free, and the trade is worth stating in full. Measured on the 20 ng / 10x arm:
