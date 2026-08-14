@@ -84,22 +84,6 @@ struct MigRecord {
     std::string_view qual_umi, qual_cell;
 };
 
-// The sort key. Cell first so that a per-cell scope is contiguous, then umi, then src_index to
-// make the order total (and therefore the output reproducible).
-struct RecordKey {
-    uint64_t cell;
-    uint64_t umi;
-    uint64_t src_index;
-
-    friend bool operator<(const RecordKey& a, const RecordKey& b) {
-        if (a.cell != b.cell) return a.cell < b.cell;
-        if (a.umi != b.umi) return a.umi < b.umi;
-        return a.src_index < b.src_index;
-    }
-};
-
-inline RecordKey key_of(const MigRecord& r) { return RecordKey{r.cell, r.umi, r.src_index}; }
-
 // Per-file constants. Written once, in plaintext, so that a truncated file can still be
 // identified. `provenance` is a JSON blob (command line, version, sample id, pattern) -- it is
 // documentation, not something the reader interprets.

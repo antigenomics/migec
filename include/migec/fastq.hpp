@@ -4,6 +4,7 @@
 #ifndef MIGEC_FASTQ_HPP
 #define MIGEC_FASTQ_HPP
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -18,6 +19,23 @@ struct FastqRecord {
     std::string_view seq;
     std::string_view qual;
 };
+
+// The value of a SAM-style tag in a FASTQ comment, or an empty view. Tags are TAB separated and
+// the comment itself is whatever followed the first space, so a plain split on TAB is enough.
+// This is the inter-stage contract (docs/formats.rst): refine, assemble and subsample all read
+// the same tags out of the same comments, so they read them with the same function.
+inline std::string_view tag_value(std::string_view comment, std::string_view key) {
+    size_t pos = 0;
+    while (pos <= comment.size()) {
+        const size_t end = std::min(comment.find('\t', pos), comment.size());
+        const std::string_view field = comment.substr(pos, end - pos);
+        if (field.size() > key.size() && field.compare(0, key.size(), key) == 0) {
+            return field.substr(key.size());
+        }
+        pos = end + 1;
+    }
+    return {};
+}
 
 class FastqReader {
 public:

@@ -147,14 +147,17 @@ correction is written up in `project/review-algorithms.md`.
 - **Note: Do not reproduce MIGEC v1's bugs.** Quality must be indexed at the *match offset*, not the
   read start; low-quality mismatches must actually be counted (v1's dangling `else` meant they
   never were).
-- Done: The version string is in FOUR places -- `pyproject.toml`, `include/migec/version.hpp`,
-  `python/migec/__init__.py` and `docs/conf.py`. `__init__.py` asserts the middle two agree and CI
-  prints all three; nothing checks `docs/conf.py`, which is how it sat at `2.0.0.dev0` for three
-  releases while every published page showed it.
+- Done: The version string is written by hand in THREE places -- `pyproject.toml`,
+  `include/migec/version.hpp` and `python/migec/__init__.py`. `__init__.py` asserts the last two
+  agree and CI prints all three. `docs/conf.py` was a fourth and nothing checked it, which is how
+  it sat at `2.0.0.dev0` for three releases while every published page showed it; it now reads
+  `pyproject.toml` with `tomllib` instead. Never: it must not `import migec` to get the version --
+  `migec._core` is in `autodoc_mock_imports`, so the package's own version-agreement assertion
+  fires against a Mock and the docs build dies.
 
 ## Release process
 
-1. Bump the version in all FOUR places above; add a `CHANGELOG.md` section. Then check the README:
+1. Bump the version in all THREE places above; add a `CHANGELOG.md` section. Then check the README:
    it is the PyPI long description, so a repo-relative image or link is broken from the moment the
    wheel lands.
 2. Branch `release/<version>` → PR → CI and docs green.

@@ -1,12 +1,20 @@
 import os
+import pathlib
 import sys
+import tomllib
 
 sys.path.insert(0, os.path.abspath("../python"))
 
 project = "migec"
 copyright = "2026, Mikhail Shugay"
 author = "Mikhail Shugay"
-release = "2.4.0"
+# Read, never copied. This was the FOURTH place the version was written by hand and the only one
+# nothing checked, which is how every published page said 2.0.0.dev0 for three releases. Importing
+# the package instead would not work: `migec._core` is mocked below, so the package's own
+# version-agreement assertion fires against a Mock. The file is right there; read it.
+release = tomllib.loads(
+    (pathlib.Path(__file__).parent.parent / "pyproject.toml").read_text()
+)["project"]["version"]
 
 extensions = [
     "sphinx.ext.autodoc",

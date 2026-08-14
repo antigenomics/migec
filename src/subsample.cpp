@@ -9,23 +9,6 @@
 
 namespace migec {
 
-namespace {
-
-std::string_view tag_value(std::string_view comment, std::string_view key) {
-    size_t pos = 0;
-    while (pos <= comment.size()) {
-        const size_t end = std::min(comment.find('\t', pos), comment.size());
-        const std::string_view field = comment.substr(pos, end - pos);
-        if (field.size() > key.size() && field.compare(0, key.size(), key) == 0) {
-            return field.substr(key.size());
-        }
-        pos = end + 1;
-    }
-    return {};
-}
-
-}  // namespace
-
 SubsampleStats subsample(const SubsampleRequest& request) {
     Stopwatch clock;
     SubsampleStats stats;
