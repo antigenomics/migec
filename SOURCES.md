@@ -17,14 +17,29 @@ are never conflated in a table row.
 | `assets/SRR1763769.mig.tsv`, `assets/assemble.coverage.tsv` | `isalgo/umi_data` CI fixture | derived | `migec refine ci/SRR1763769_umi0.5pct.fq.gz -o r/ && migec assemble r/CTRL.fq.gz -o a/` |
 | `assets/*.svg`, `assets/*.gp` | the tables beside them | derived | `migec plot assets/ -o assets/` |
 | `assets/ctdna_titration.tsv` (+ `_runs.tsv`) | 100 runs of `PRJNA788522` + `PRJNA507366` | derived (migec over experimental data) | `python scripts/sra_fetch.py get <runs> -o simsen/` then `python scripts/ctdna_titration.py --reads simsen/ --out ctdna/ --design design.tsv` |
+| `assets/ctdna_panel.bed` | inferred from coverage, 3 deepest `PRJNA788522` runs aligned to GRCh38 | **derived** | `job/infer_panel.sbatch` on aldan3: minimap2 -> `bedtools genomecov` above a depth floor -> `merge -d 50` -> named against Ensembl 110 |
+| `assets/ctdna_per_target.tsv` | per-TARGET molecule counts, 72 runs | **derived** | `job/per_site.sbatch` then `python scripts/ctdna_persite.py --molecules m.tsv --variants v.tsv --design d.tsv --out out/` |
+| `assets/ctdna_minreads.tsv` | calls at `--min-reads` 1/3/5, 12 runs x 4 certified arms | **derived** | `job/minreads.sbatch` on aldan3 |
+
+Note: `ctdna_titration.tsv` is kept beside `ctdna_per_target.tsv` deliberately. The first divides a
+library total by an amplicon count inferred from consensus prefixes; the second counts molecules
+actually aligned to each target. The gap between them is what a reference buys, and deleting the
+first would hide it: it reported 5 amplicons where there are 6 intervals (one of them off-target),
+and a per-panel average where the weakest target holds **0.09-0.64x** the mean.
 
 Result tables and figures are output, not data, so they live here next to the script that made
 them rather than in `isalgo/umi_data`. Test corpora go the other way: HuggingFace, never git.
 
 ## Error-rate constants
 
-The pre-amplification floor (`--rt-error`) is a property of the protocol, so its values are cited
-rather than fitted. Nothing here was measured by us except the X2 row.
+The pre-amplification floor (`--pre-amp-error`, formerly `--rt-error`) is a property of the
+protocol, so its values are cited rather than fitted. Nothing here was measured by us except the X2
+row.
+
+Never: only an RNA library has a reverse transcription step. On a DNA library the same floor is
+supplied by library-preparation damage plus the first PCR cycle, and the two damage chemistries are
+sourced below. The class names `rt` / `medium` / `high` are historical brackets on the *rate*, not
+claims about mechanism.
 
 | Value | What it is | Source | Provenance |
 |---|---|---|---|
@@ -33,6 +48,8 @@ rather than fitted. Nothing here was measured by us except the X2 row.
 | 7.37e-5 (0.00737%) | TruSight Oncology 500 v2 error rate | Illumina product documentation | vendor-stated |
 | Taq 4.3e-5 +/- 1.8; Pfu 2.8e-6; Phusion 2.6e-6; Pwo 2.4e-6, per bp per template duplication | polymerase fidelity, no RT | McInerney P, Adams P, Hadi MZ. *Error Rate Comparison during Polymerase Chain Reaction by DNA Polymerase.* Mol Biol Int 2014:287430. doi:10.1155/2014/287430, PMID 25197572 | published, third party |
 | 0.3-6.6e-5 per base per cycle over nine polymerases; **linear-amplification errors 5 +/- 1x the per-cycle PCR rate** | why the FIRST cycle is the one that matters — it is copied into every read of the molecule | Shagin DA, Shagina IA, Zaretsky AR, Barsova EV, Kelmanson IV, Lukyanov S, Chudakov DM, Shugay M. *A high-throughput assay for quantitative measurement of PCR errors.* Sci Rep 2017;7:2718. doi:10.1038/s41598-017-02727-8, PMID 28578414 | published, ours |
+| `C>A`/`G>T` transversions at low allele fraction, read-orientation biased | oxidation of guanine to 8-oxoG during **acoustic shearing**, in extracts carrying reactive contaminants. The pre-amplification floor of a DNA library, and the reason `--min-reads` cannot remove it: damage predates the barcode. Detected by orientation bias, not by family size | Costello M, Pugh TJ, Fennell TJ, Stewart C, Lichtenstein L, Meldrim JC, Fostel JL, Friedrich DC, Perrin D, Dionne D, Kim S, Gabriel SB, Lander ES, Fisher S, Getz G. *Discovery and characterization of artifactual mutations in deep coverage targeted capture sequencing data due to oxidative DNA damage during sample preparation.* Nucleic Acids Res 2013;41(6):e67. doi:10.1093/nar/gks1443, PMID 23303777 | published, third party |
+| `C>T`/`G>A` transitions | cytosine (and 5-methylcytosine) deamination to uracil/thymine; the other DNA-library damage chemistry, dominant in FFPE material | Do H, Dobrovic A. *Sequence artifacts in DNA from formalin-fixed tissues: causes and strategies for minimization.* Clin Chem 2014;61(1):64-71. doi:10.1373/clinchem.2014.223040, PMID 25421801 | published, third party |
 | 10,000 reads per barcode | coverage cap into the consensus (never into the count) | 10x Genomics: "Very high coverage (greater than 10,000 reads) of transcripts can be problematic because it degrades computational performance and adds little information." | vendor-stated |
 
 ## Benchmark data
@@ -242,6 +259,39 @@ McInerney 2014's published fidelities can be checked against.
 | Note | the comment flag is **`-y` on `map`** (the minimap2 spelling) and **`-C` on the legacy `mem` subcommand** (bwa's). Each rejects the other's flag with a non-zero exit, so the tags are never dropped silently |
 | Checked by | `tests/unit/test_downstream.py::test_an_aligner_carries_the_tags_into_the_sam[minibwa]`, skipped when not on `PATH` |
 | Provenance | derived (run here against our own synthetic 10x-shaped fixture) |
+
+### Reference genome and panel definitions (aldan3, 2026-08-14)
+
+Not fetched here — already on the cluster, and the panel is **inferred from the data** rather than
+taken from a vendor file.
+
+| Item | Value |
+|---|---|
+| Genome | `/projects/cdr3_common/reference/genome/human/Homo_sapiens.GRCh38.dna.primary_assembly.fa` (3.15 GB) + `.fai` |
+| Annotation | `Homo_sapiens.GRCh38.110.chr.gtf` (1.46 GB), Ensembl 110 |
+| Note: contig naming | **Ensembl style — `>1`, not `>chr1`.** Every BED, region string and tool must match, or it silently intersects nothing |
+| Note: existing indices | `bwamem2_index/` is **empty**, and the `.bwameth.c2t.*` index is bisulfite-converted and unusable for ordinary alignment. Build a minimap2 index |
+| Panel | derived: align the consensus, `bedtools genomecov` above a depth floor, `merge -d 50`, then name the intervals against the GTF. `scripts/`-adjacent job at `/projects/tcr_bcr_rnaseq/migec_ctdna/job/` |
+| Provenance | experimental (Ensembl reference); the inferred panel is **derived** |
+
+**Why inferred rather than vendor-supplied:** the amplicon count in `assets/ctdna_titration.tsv`
+came from a consensus-prefix tally, which assumes the panel is evenly covered. It is not — observed
+shares 20.4 / 17.4 / 16.9 / 15.9 / 7.6%, so `molecules / n_amplicons` overstates the weakest target
+by **2.6x**. Real coordinates turn a per-target average into a per-target count.
+
+Two production pipelines read as design references for the panel handling, neither run here:
+
+| Repo | What it is good for |
+|---|---|
+| [AWGL/TSO500_post_processing](https://github.com/AWGL/TSO500_post_processing) | Illumina TSO500 post-processing. Ships `hotspot_variants/*.bed`, `hotspot_coverage/*combined.bed`, `vendorCaptureBed_100pad_updated.bed` and `TSO_extra_padding_chr.interval_list` — note the padding beyond Illumina's +/-2 bp, and the `chr`-prefixed naming, which is the opposite convention to the Ensembl reference above |
+| [ikmb/exome-seq](https://github.com/ikmb/exome-seq) | Exome capture. `--kit xGen_v2 \| Agilent_v7 \| xGen_pan_cancer`; `--assembly GRCh38_no_alt` recommended for short reads; `--baits`/`--targets` as Picard interval lists, `--panel cardio\|cancer\|liver\|...`, and **`--amplicon_bed` for amplicon primer positions** — the same object this job infers |
+| [AstraZeneca-NGS/reference_data](https://github.com/AstraZeneca-NGS/reference_data/tree/master/hg38) | **Ready-made hg38 capture BEDs**, no vendor login: `Exome-Agilent_V2/V4/V5/V6` (plus `_UTR` and `_Padded` variants), `Exome-IDT_V1.bed`, `Exome-MedExome.bed`, `Exome-NGv3.bed`, `Exome-AZ_V2.bed`, `Exome-Agilent-OneSeq.bed`, and `CDS-canonical.bed` (5.7 MB). Also a `tricky_regions/` directory. Fetch one file with `curl -sL https://raw.githubusercontent.com/AstraZeneca-NGS/reference_data/master/hg38/bed/<name>.bed` |
+
+Note: these are **exome capture** targets, so they are the right object for
+`notebooks/exome_capture.py` and the wrong one for the SiMSen-Seq amplicon panels above — an
+amplicon panel's coordinates are set by its primers, not by a capture bait set, which is why they
+are inferred here. `CDS-canonical.bed` is still useful against the inferred panel, as a check on
+whether the amplicons land in coding sequence.
 
 ### UMIErrorCorrect / UMIAnalyzer — Österlund et al. (Clin Chem 2022, doi:10.1093/clinchem/hvac136)
 

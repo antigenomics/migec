@@ -53,6 +53,16 @@ again. Nothing errors; the molecule count just quietly drops.
 What to run
 -----------
 
+.. warning::
+
+   **A standard caller on consensus reads needs a background model, not just a threshold.** Run
+   over the 0%-certified arm of a reference series, ``LoFreq`` on migec consensus returns 9-11
+   calls per sample at 0.4-1.4% VAF; **94% are** ``-> G``, eight positions recur in 3 of 3
+   replicates, and one of them is the PIK3CA H1047R hotspot itself. That is 2-colour chemistry's
+   dark-G bias, and no consensus removes it because it is systematic rather than random. See
+   :doc:`detection`. What removes it is a per-position background built from normals -- which is
+   the real contribution of the UMI-aware and panel-of-normals callers below.
+
 **If you have UMIs and you are running migec**, collapse first and use a standard caller:
 
 .. code-block:: bash
@@ -159,53 +169,105 @@ there. ``assets/ctdna_titration_runs.tsv`` beside it has all 100 runs individual
 Where detection stops being about the caller
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-At 0.125% VAF the input mass alone decides the outcome:
+Calling variants on the consensus and scoring against the certified frequencies gives the honest
+performance of this panel and pipeline. The locus is PIK3CA H1047R (``3:179234297 A>G``), twelve
+runs per arm:
 
 .. list-table::
    :header-rows: 1
-   :widths: 14 12 26 24 24
+   :widths: 22 18 20 20 20
 
-   * - input
-     - depth
-     - molecules at the site
-     - variant molecules
-     - P(at least 3)
-   * - 5 ng
-     - 3.3x
-     - 2,699
-     - 3.4
-     - **0.65**
-   * - 5 ng
-     - 10x
-     - 4,530
-     - 5.7
-     - **0.89**
-   * - 20 ng
-     - 3.3x
-     - 7,162
-     - 9.0
-     - 0.99
-   * - 20 ng
-     - 10x
-     - 11,961
-     - 15.0
-     - 1.00
+   * - certified VAF
+     - detected
+     - sensitivity
+     - mean measured
+     - verdict
+   * - undiluted (~3.6%)
+     - 24/24
+     - 100%
+     - 3.61%
+     - reliable
+   * - 1%
+     - 11/12
+     - **92%**
+     - 0.93%
+     - reliable, and accurate
+   * - 0.25%
+     - 4/12
+     - **33%**
+     - 0.23%
+     - accurate when seen, mostly missed
+   * - 0.125%
+     - 1/12
+     - **8%**
+     - 0.04%
+     - effectively undetectable
+   * - **0% (true negative)**
+     - **3/12**
+     - -- (**25% false positive**)
+     - 0.16%
+     - **calls a variant that is not there**
 
-**At 5 ng a 0.125% variant is a coin flip and no caller fixes it** -- a third of replicates simply
-do not contain three copies of it. At 20 ng the same variant is comfortably present. The decision
-that mattered was made at extraction, not at variant calling.
+Read the last two rows together. Below 1% VAF **sensitivity collapses faster than specificity
+does**: at 0.125% the assay finds 8% of real variants while still calling 25% of the true
+negatives. That is the worst possible shape, and it is not fixed by choosing a different caller --
+:doc:`detection` shows the artifact is systematic, reproducible and ``-> G`` biased.
+
+Never: **that table is ``--min-reads 1``, which is the wrong setting for variant calling**, and it
+is why the numbers looked so poor. Re-run at ``--min-reads 3`` (:doc:`detection`), three replicates
+per arm at 20 ng / 10x:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 20 20 20 24
+
+   * - truth
+     - ``mr=1`` called
+     - ``mr=1`` VAF
+     - ``mr=3`` called
+     - ``mr=3`` VAF
+   * - **0%**
+     - 3/3 **wrong**
+     - 0.66%
+     - **0/3 correct**
+     - --
+   * - 0.125%
+     - 1/3
+     - 0.17%
+     - 1/3
+     - 0.05%
+   * - **0.25%**
+     - 3/3
+     - **0.79%** (3.2x too high)
+     - **3/3**
+     - **0.22%**
+   * - 1%
+     - 3/3
+     - 1.01%
+     - 3/3
+     - 1.02%
+
+Note: **the artifact was inflating true positives, not only inventing false ones.** At 0.25% it
+read 0.79%, and 0.25% + the 0.57% artifact floor is 0.82% -- the contamination is additive, so a
+quantitative result was wrong by threefold at a frequency where the call itself looked fine.
+
+**The reliable limit is 0.25%, quantified accurately**, once singleton molecules are excluded. That
+is fourfold better than the same pipeline at ``--min-reads 1`` and in the range Illumina specify
+for TruSight Oncology 500 ctDNA v2 (0.2% for SNVs at 20 ng). 0.125% remains out of reach here at
+1 of 3 replicates -- that arm is molecule-limited, and the published <0.1% claims for this
+chemistry assume both more input and a per-position background model.
 
 Note: **depth does buy molecules, until it does not.** Deeper sequencing recovers more of the
 molecules that are in the tube -- 20 ng of undiluted material gives 6,310 / 10,299 / 16,809
 molecules per amplicon at 3.3 / 10 / 30x -- but the ceiling is the number of input molecules, and
-past it further reads only raise reads-per-molecule. The 3.3x arms here are clearly below that
-ceiling; the honest summary is that depth and input are *both* worth spending on until the
-molecule count stops rising.
+past it further reads only raise reads-per-molecule. The honest summary is that depth and input are
+*both* worth spending on until the molecule count stops rising.
 
-Never: **the molecule total of a multiplex panel is not the count at a site.** A variant sits on
-one amplicon, so dividing by the panel size is mandatory; the total overstates the evidence by
-exactly that factor. The panel size is measured from consensus prefixes rather than assumed --
-5 amplicons for PRJNA788522, 3 for PRJNA507366, whose own sample labels say ``3plx``.
+Never: **the molecule total of a multiplex panel is not the count at a site**, and dividing by the
+panel size is not enough either. Aligning to GRCh38 and counting per target shows the weakest one
+holds **0.09-0.64x** the panel mean (median 0.36) -- so an average overstates the weakest target by
+up to elevenfold. The panel is TP53 x2, PIK3CA x2 and KIT, inferred from coverage;
+:doc:`detection` has the method and the off-target share that comes with it.
 
 The barcode error tracks polymerase fidelity
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

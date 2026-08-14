@@ -49,6 +49,48 @@ Presets (`migec sheet --presets` prints each with its source): `umi`, `migec`, `
 **single-strand** consensuses; duplex pairing is not implemented, so no duplex error rate may be
 quoted from it.
 
+## Assay profiles: what the experiment implies
+
+A preset places the barcode. `migec sheet --assay NAME` says what a consensus is worth, which is
+the axis that decides whether the run is usable. `--assay all` prints every one.
+
+| assay | sensitivity | `--min-reads` | also | layout |
+|---|---|---|---|---|
+| `airr` (`repseq`, `quasispecies`) | counting | 1 | | `migec`, `primerid` |
+| `amplicon` (`targeted`, `panel`) | sensitive | 2 | | `umi` |
+| `exome` (`capture`) | sensitive | 2 | | `umi` |
+| `ctdna` (`cfdna`) | ultrasensitive | 3 | `--pre-amp-error 7.37e-5` | `tso500`, `duplex` |
+| `mrd` | ultrasensitive | 3 | | `migec`, `duplex` |
+| `rnaseq` | counting | 1 | `--fast` | `smarter-umi`, `umi` |
+| `10x-gex` (`10x`, `gex`) | counting | 1 | `--fast` | `10x` |
+| `10x-vdj` (`vdj`) | counting | 1 | `--contig` | `10x-v2`, `10x` |
+
+**Never: `amplicon` is not an alias for `airr`.** A targeted panel of a few PCR-amplified regions
+is also an amplicon assay and wants the opposite settings. Two profiles; `amplicon` is the targeted
+one, because that is what the word means outside immunology.
+
+**Never: there is no reverse transcriptase in a DNA assay**, and four of the eight profiles are
+DNA. `--rt-error` is now spelled `--pre-amp-error` (the old name still works). On an RNA library
+the floor is an RT miscall plus the first PCR cycle; on a DNA library it is library-prep damage
+plus the first PCR cycle — guanine oxidation during acoustic shearing gives 8-oxoG and therefore
+`G>T`/`C>A`, cytosine deamination gives `C>T`/`G>A`. Both predate amplification, so every read of
+the group carries them and no consensus removes them. Note: that damage signature is **not** the
+`-> G` artifact measured here, which is the 2-colour dark-G instrument artifact. A `C>A` excess
+instead means oxidative damage, and `--min-reads` will not fix it — enzymatic repair before
+ligation will, in the wet lab.
+
+**Never: do not carry a threshold across the axis.** `--min-reads 3` on a shallow repertoire
+library discards 79% of the barcodes and nothing downstream can tell a filtered molecule from an
+absent one. `--min-reads 1` on a rare-variant assay feeds raw read quality to the caller: measured
+on certified cfDNA, the 2-colour dark-G artifact was **additive to true positives**, so the 0.25%
+arm read 0.79% — a quantitative answer wrong threefold that looks perfectly well-formed.
+
+Note: `payload_diverse` in `sheet.ASSAYS` records whether the template itself distinguishes
+molecules. On AIRR and MRD the rearrangement is near-unique, so `refine`'s payload-agreement term
+and `assemble`'s linkage sub-clustering have real evidence; on exome, RNA-seq and a ctDNA panel
+every molecule at a locus reads the same and the barcode carries the whole burden. Never: payload
+agreement must be discounted by the measured clonality — on a clonal library it is worth nothing.
+
 ## The barcode pattern grammar
 
 MIGEC's, so published barcode tables work verbatim.
@@ -442,6 +484,37 @@ worst *error* at the same substitution distance. Targets after UMI consensus: `V
 
 Note: Anchor on the junction's 3′ end only. V1 differs at position 4 and V2 at 7–8, so a 5′ anchor
 makes both variants count as zero and the metric look perfect.
+
+## Limit of detection (`docs/detection.rst`, `scripts/detection_limit.py`)
+
+Two numbers answer "how low can this assay go", and the caller is neither: **N** molecules covering
+the site, and **p** the per-MOLECULE error floor. Every assay is in one of two regimes:
+
+| | molecule-limited | floor-limited |
+|---|---|---|
+| fix | more input DNA, or track more sites | lower floor: proofreading enzyme, or duplex |
+| does **not** help | deeper sequencing, a better caller | deeper sequencing, **more input DNA**, a better caller |
+
+**Never: the crossover is `VAF = p/3`** -- the frequency at which a true variant molecule is as rare
+as the chemistry's own false ones. At the `rt` floor of 1e-4 that is **3.3e-5**, and no amount of
+input reaches below it. A 50 ng / 30-site MRD panel has molecules for 6.9e-6 and a single-strand
+floor at 3.3e-5: the molecules promise what the chemistry cannot deliver.
+
+```bash
+python scripts/detection_limit.py --input-ng 20 --sites 5
+python scripts/detection_limit.py --input-ng 50 --sites 30 --rt-error duplex
+```
+
+**Note: MRD pools evidence across sites.** Tracking 30 patient-specific variants is 30x the
+molecules that can carry a signal and 30x lower a reachable VAF, from the same blood draw. This is
+migec's original application -- the leukaemic clone's IGH rearrangement -- with the clonotype half
+belonging to **arda**, whose AIRR `duplicate_count` is then a molecule count.
+
+**Never: measured on a real panel, a library total is not on-target evidence.** Off-target product
+took **5-7% at 80 ng, 24% at 20 ng and 47-58% at 5 ng** -- its absolute count barely moves while
+on-target scales with input, so precisely when input is scarce the total is most misleading. And
+coverage is not uniform: the weakest target held 0.31-0.61x of the on-target mean. Count molecules
+**per target** (distinct `MI` in the region) and quote the weakest, not the mean.
 
 ## Running a cohort
 

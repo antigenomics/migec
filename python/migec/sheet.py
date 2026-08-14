@@ -260,13 +260,203 @@ def preset(name: str) -> tuple[str, str | None]:
     return master, slave
 
 
+# --------------------------------------------------------------------------------------------
+# Assay profiles: what to run, once you know what the experiment is FOR.
+#
+# A layout says where the barcode is. It does not say how many reads a consensus needs before it is
+# worth anything, and that turns out to matter more than the layout does. The two axes are
+# independent -- the same 12 nt inline UMI serves a repertoire census and an MRD assay, and the
+# right settings are opposite.
+#
+# Never: `--min-reads` defaults to 1, which is right for COUNTING molecules and wrong for CALLING
+# VARIANTS. A consensus over one read IS that read -- no error correction at all, just counting.
+# Measured on certified cfDNA reference material at 20 ng/10x, every systematic `-> G` false
+# positive (the 2-colour dark-G artifact) vanished at `--min-reads 3`, taking specificity from 0%
+# to 100%, while every certified variant survived with its frequency stable to the third decimal.
+# It cost 41% of the molecules and bought an 8x better limit. `docs/detection.rst`.
+#
+# Never: a counting assay must NOT inherit the variant-calling threshold. Discarding singletons
+# throws away 79% of the barcodes on a shallow repertoire library, and a clonotype seen once is
+# still a clonotype. The `sensitivity` field is what separates them, and it is the whole point of
+# this table:
+#
+#     counting        every molecule counts, errors are corrected not excluded   --min-reads 1
+#     sensitive       a variant needs a real family behind it                    --min-reads 2
+#     ultrasensitive  a variant needs a family that outvoted the chemistry       --min-reads 3
+#
+# Note: `payload_diverse` records whether the template itself distinguishes molecules. On an AIRR
+# amplicon or an MRD IGH assay the rearrangement is near-unique, so `refine`'s payload-agreement
+# term and `assemble`'s linkage sub-clustering both have real evidence to work with. On an exome,
+# an RNA-seq library or a ctDNA panel every molecule at a locus reads the same, so that evidence is
+# worth ~nothing and the barcode carries the whole burden. Never: payload agreement must be
+# discounted by the measured clonality -- on a clonal library it is worth nothing even when the
+# payload is nominally diverse.
+
+
+# Never: the pre-amplification floor is NOT a reverse-transcription rate outside an RNA assay, and
+# three of the seven profiles below are DNA. What the floor actually is, per class:
+#
+#   RNA (airr, rnaseq, 10x)   reverse transcriptase miscall, then the first PCR cycle. The RT is
+#                             the dominant term and 1e-4 is 10x's own figure for their V(D)J RT.
+#   DNA (exome, amplicon,     library-prep damage plus the first PCR cycle. Oxidation of guanine
+#        ctdna, mrd)          during acoustic shearing gives 8-oxoG and therefore G>T / C>A;
+#                             cytosine deamination gives C>T / G>A. Both are in the molecule
+#                             before amplification, so every read of the group carries them and no
+#                             consensus removes them -- which is the same argument as for RT, with
+#                             a different chemistry supplying it.
+#
+# Note: that damage signature is NOT the artifact measured here. Ours is `-> G`, which is the
+# 2-colour dark-G instrument artifact (G is the base call for no signal). A C>A or G>T excess
+# instead points at oxidative damage during library preparation, and `--min-reads` will not fix it
+# -- damage predates the barcode, so every read of the molecule agrees. Enzymatic repair before
+# ligation is the fix, and it belongs in the wet lab.
+#
+# The CLI spelling is `--pre-amp-error`; `--rt-error` is kept as an alias because it shipped.
+
+
+@dataclass(frozen=True)
+class Assay:
+    layouts: tuple[str, ...]
+    sensitivity: str            # counting | sensitive | ultrasensitive
+    min_reads: int
+    pre_amp_error: str
+    payload_diverse: bool
+    extra: tuple[str, ...]      # further flags the assay implies, verbatim
+    note: str
+
+
+ASSAYS: dict[str, Assay] = {
+    "airr": Assay(
+        ("migec", "primerid"), "counting", 1, "rt", True, (),
+        "Repertoire sequencing, and viral quasispecies amplicons like Primer ID, which pose the "
+        "same problem: many distinct variants of one locus. The UMI is inline in the read that "
+        "also carries the template, and the template is a rearrangement, so the payload is a "
+        "second identifier. A clonotype seen once is still a clonotype -- keep --min-reads 1. "
+        "Raise it to 3 only when the deliverable is a somatic hypermutation call, not a count.",
+    ),
+    "amplicon": Assay(
+        ("umi",), "sensitive", 2, "rt", False, (),
+        "Targeted amplicon panel: a few regions amplified by PCR, read for variants. Same purpose "
+        "and same tier as `exome` -- what differs is depth per molecule, because every read lands "
+        "on one of a handful of loci rather than being spread over a capture space. Families are "
+        "therefore deep, so --min-reads 3 costs little here and is worth taking; below ~1% VAF use "
+        "the `ctdna` profile instead, which is what that regime actually needs.",
+    ),
+    "exome": Assay(
+        ("umi",), "sensitive", 2, "rt", False, (),
+        "Hybrid-capture exome or gene panel on germline-to-subclonal frequencies. Families are "
+        "small (capture duplication is a few-fold, not the hundreds an amplicon gives), so 3 costs "
+        "more than it buys; 2 still means every base was seen twice. The vendor sets the UMI "
+        "length -- IDT, Twist and Illumina all differ -- so run `migec suggest` on the FASTQ rather "
+        "than trusting a preset here.",
+    ),
+    "ctdna": Assay(
+        ("tso500", "duplex"), "ultrasensitive", 3, "7.37e-5", False, (),
+        "Circulating tumour DNA: the input is cell-free DNA from a blood draw, the target is the "
+        "tumour-derived fraction of it, and that fraction is what the VAF measures. Molecule-"
+        "limited by the draw and artifact-limited below ~1%, so both halves of the limit bind at "
+        "once. Measured on certified reference material: reliable to 0.25%, and at --min-reads 1 "
+        "the dark-G artifact was ADDITIVE to true positives -- the 0.25% arm read 0.79%. Count "
+        "molecules per target, never per panel. Note: there is no reverse transcription anywhere "
+        "in this assay; the floor is library-prep damage plus the first PCR cycle.",
+    ),
+    "mrd": Assay(
+        ("migec", "duplex"), "ultrasensitive", 3, "rt", True, (),
+        "Minimal residual disease: one known clone, tracked to the lowest frequency the input "
+        "allows. The IGH rearrangement is the marker, so the payload identifies the molecule as "
+        "well as the barcode does -- which is the one advantage this assay has over ctDNA at the "
+        "same depth. The limit is set by input DNA: 1e-6 needs ~3e6 informative molecules, and no "
+        "consensus threshold substitutes for them. Note: clinical MRD amplifies GENOMIC DNA, so "
+        "there is no reverse transcription and the 1e-4 floor is a deliberately conservative "
+        "bracket, not an RT rate -- it caps quality lower, which is the safe direction. Drop to "
+        "`medium` only if the protocol's polymerase fidelity is known. An RNA-based 5'-RACE MRD "
+        "assay does have an RT step, and 1e-4 is then the literal figure.",
+    ),
+    "rnaseq": Assay(
+        ("smarter-umi", "umi"), "counting", 1, "rt", False, ("--fast",),
+        "UMI-tagged bulk RNA-seq where the deliverable is a molecule count per gene. --fast is the "
+        "counting consensus: modal exact sequence, per-base max quality over the reads carrying "
+        "it. It is not a cheaper consensus for variant work -- it is the right one when you are "
+        "deduplicating rather than error-correcting.",
+    ),
+    "10x-gex": Assay(
+        ("10x",), "counting", 1, "rt", False, ("--fast",),
+        "10x Chromium 3' gene expression. Shallow by design -- 1-3 reads per (cell, UMI) is the "
+        "normal case, so a read threshold would delete most of the library. Never: alevin, "
+        "bustools and STARsolo must not see a consensus FASTQ; they deduplicate from a raw barcode "
+        "read that no longer exists. Feed the consensus to an aligner and count from the BAM.",
+    ),
+    "10x-vdj": Assay(
+        ("10x-v2", "10x"), "counting", 1, "rt", True, ("--contig",),
+        "10x Chromium 5' V(D)J. Reads under one (cell, UMI) are random-primed fragments of one "
+        "receptor and are NOT co-terminal, so --contig places them and emits one consensus per "
+        "overlap component. Never bridged across a gap. Assembling the full-length receptor, "
+        "calling doublets and dropping contaminating chains are arda's job, not migec's.",
+    ),
+}
+
+# What people actually type. Never: "amplicon" is ambiguous in the wild and must not be an alias of
+# `airr` -- a targeted panel of a few PCR-amplified regions is also an amplicon assay, and it wants
+# the opposite settings (variant calling on a uniform payload, not counting a diverse one). They
+# are two profiles, and `amplicon` is the targeted one because that is what the word means outside
+# immunology.
+ALIASES = {"repseq": "airr", "rep-seq": "airr", "quasispecies": "airr",
+           "targeted": "amplicon", "panel": "amplicon", "capture": "exome",
+           "10x": "10x-gex", "gex": "10x-gex", "vdj": "10x-vdj",
+           "cfdna": "ctdna"}
+
+
+def assay(name: str) -> tuple[str, Assay]:
+    """Look up an assay profile by name or alias. Raises ValueError listing every one."""
+    key = ALIASES.get(name.strip().lower(), name.strip().lower())
+    if key not in ASSAYS:
+        listed = "\n".join(f"  {n:<10} {ASSAYS[n].sensitivity}" for n in ASSAYS)
+        raise ValueError(f"unknown assay {name!r}. Available:\n{listed}")
+    return key, ASSAYS[key]
+
+
+def format_assay(name: str) -> str:
+    """The paste-ready recipe for one assay, for `migec sheet --assay`."""
+    key, a = assay(name)
+    layout = a.layouts[0]
+    master, slave, _ = PRESETS[layout]
+    extra = "".join(" " + f for f in a.extra)
+    payload = ("diverse -- a second identifier" if a.payload_diverse
+               else "uniform -- the barcode carries the whole burden")
+    out = [
+        f"{key}  ({a.sensitivity})",
+        f"    {a.note}",
+        "",
+        f"    layout          {layout}   {master}" + (f"   slave {slave}" if slave else ""),
+        f"    also fits       {', '.join(a.layouts[1:]) or '-'}",
+        f"    payload         {payload}",
+        "",
+        f"    migec checkout READS.fq.gz --bc-pattern '{master}' --sample S1 -o co/",
+        "    migec refine co/S1.fq.gz -o rf/",
+        f"    migec assemble rf/S1.fq.gz -o as/ --min-reads {a.min_reads} "
+        f"--pre-amp-error {a.pre_amp_error}{extra}",
+    ]
+    return "\n".join(out)
+
+
+def format_assays() -> str:
+    """Every assay profile, one block each."""
+    return "\n\n".join(format_assay(n) for n in ASSAYS)
+
+
 def format_presets() -> str:
     """The preset table, for `migec sheet --presets` and the docs."""
+    used: dict[str, list[str]] = {}
+    for name, a in ASSAYS.items():
+        for layout in a.layouts:
+            used.setdefault(layout, []).append(name)
     out = []
     for name, (master, slave, description) in PRESETS.items():
         out.append(f"{name}")
         out.append(f"    pattern  {master}" + (f"    slave  {slave}" if slave else ""))
         out.append(f"    {description}")
+        out.append(f"    assays   {', '.join(used.get(name, [])) or '-'}"
+                   f"   (`migec sheet --assay NAME` for the settings each implies)")
     return "\n".join(out)
 
 

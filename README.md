@@ -84,6 +84,28 @@ software runs: sequencing deeper buys more reads per molecule, only more input D
 [docs/variants.rst](docs/variants.rst) has the caller table, the published comparison, and the run
 over cell-free DNA reference material at known allele frequency that puts numbers on it.
 
+### How low can you go — exome, ctDNA, MRD
+
+Every rare-variant application asks one question, and two numbers answer it: `N`, the molecules
+covering the site, and `p`, the per-**molecule** error floor. You are always in one of two regimes,
+and knowing which tells you what to buy:
+
+```bash
+python scripts/detection_limit.py --input-ng 20 --sites 5                      # a ctDNA panel
+python scripts/detection_limit.py --input-ng 50 --sites 30 --rt-error duplex   # MRD
+```
+
+| | molecule-limited | floor-limited |
+|---|---|---|
+| fix | more input DNA, or track more sites | a lower floor: proofreading enzyme, or **duplex** |
+| does **not** help | deeper sequencing, a better caller | deeper sequencing, *more input DNA*, a better caller |
+
+The crossover is `VAF = p/3` — 3.3e-5 at the default RT floor. A 50 ng, 30-site MRD panel has
+enough molecules for 6.9e-6 but a single-strand protocol floors out five times higher, so those
+molecules promise something the chemistry cannot deliver. That is the design decision to get right
+before buying sequencing. [docs/detection.rst](docs/detection.rst) covers all three applications;
+MRD is where migec started, tracking a leukaemic clone's IGH rearrangement.
+
 ## Install
 
 ```bash
@@ -152,6 +174,35 @@ written down):
 ```bash
 migec checkout R1.fq.gz R2.fq.gz --preset 10x-v2 -o out/
 ```
+
+### Or name the experiment
+
+A preset says *where the barcode is*. It does not say what a consensus is worth, and that matters
+more: the same 12 nt inline UMI serves a repertoire census and an MRD assay, and the right settings
+are opposite. `migec sheet --assay NAME` prints the paste-ready recipe (`--assay all` for every
+one).
+
+| assay | sensitivity | `--min-reads` | also | why |
+|---|---|---|---|---|
+| `airr` (`repseq`) | counting | 1 | | a clonotype seen once is still a clonotype |
+| `amplicon` (`targeted`, `panel`) | sensitive | 2 | | a few PCR-amplified regions; deep families, so 3 is nearly free |
+| `exome` (`capture`) | sensitive | 2 | | capture duplication is a few-fold, so 3 costs more than it buys |
+| `ctdna` (`cfdna`) | ultrasensitive | 3 | `--pre-amp-error 7.37e-5` | artifact-limited below 1% |
+| `mrd` | ultrasensitive | 3 | | one known clone, tracked as low as the input allows |
+| `rnaseq` | counting | 1 | `--fast` | deduplicating, not error-correcting |
+| `10x-gex` (`10x`) | counting | 1 | `--fast` | 1–3 reads per (cell, UMI) is the normal case |
+| `10x-vdj` (`vdj`) | counting | 1 | `--contig` | random-primed fragments, not co-terminal |
+
+**Never: `amplicon` is not an alias for `airr`.** A targeted panel of a few PCR-amplified regions
+is also an amplicon assay, and it wants the opposite settings — variant calling on a uniform
+payload, not counting a diverse one. They are two profiles.
+
+**Never: a counting assay must not inherit a variant-calling threshold.** `--min-reads 3` discards
+79% of the barcodes on a shallow repertoire library, and nothing downstream can distinguish a
+molecule that was filtered from one that never existed. **Never: the reverse is worse.** At
+`--min-reads 1` a consensus over one read *is* that read, and on certified cfDNA the 2-colour
+dark-G artifact was *additive to true positives* — the 0.25% arm read 0.79%.
+[`docs/detection.rst`](docs/detection.rst).
 
 fgbio, Picard, samtools and TSO500 write the same thing as a *read structure*, taken verbatim:
 

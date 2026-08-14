@@ -29,3 +29,9 @@ PY
 echo
 echo "C++ tests:  cmake -S . -B build -DMIGEC_TESTS=ON && cmake --build build -j && ctest --test-dir build"
 echo "Python:     python -m pytest tests/unit tests/synthetic -q"
+echo "Docs:       sphinx-build -W --keep-going -b html docs docs/_build/html"
+# The notebooks are NOT installed here on purpose: each declares its own dependencies in a PEP 723
+# header, so `uv run` builds an environment per notebook and they stay runnable for someone who
+# never cloned the repo. Running one with this venv's bare python instead fails on a missing
+# polars, which looks like a broken notebook rather than a missing extra.
+echo "Notebooks:  uv run marimo edit notebooks/platforms.py   (deps come from the notebook header)"

@@ -192,3 +192,72 @@ def test_the_verdict_never_claims_more_than_metadata_can_show(row, expect):
     v = sf.verdict(row)
     assert expect in v
     assert v.endswith("peek to confirm")
+
+
+# --- assay recommendations ------------------------------------------------------------------------
+
+
+def test_every_layout_preset_belongs_to_an_assay():
+    """A preset says where the barcode is; an assay says what a consensus is worth. Never: a layout
+    no assay claims is a layout `migec sheet --assay` can never reach, so nobody is told what to
+    run with it."""
+    from migec.sheet import ASSAYS, PRESETS
+
+    claimed = {layout for a in ASSAYS.values() for layout in a.layouts}
+    assert claimed <= set(PRESETS), f"assay points at a layout that does not exist: {claimed - set(PRESETS)}"
+    assert set(PRESETS) <= claimed, f"no assay claims {set(PRESETS) - claimed}"
+
+
+def test_sensitivity_and_min_reads_agree():
+    """The whole point of the table is that a counting assay must not inherit a variant-calling
+    threshold, and vice versa. Never: --min-reads 3 on a shallow repertoire library deletes 79% of
+    the barcodes, and a clonotype seen once is still a clonotype."""
+    from migec.sheet import ASSAYS
+
+    expected = {"counting": 1, "sensitive": 2, "ultrasensitive": 3}
+    for name, a in ASSAYS.items():
+        assert a.sensitivity in expected, f"{name}: unknown sensitivity {a.sensitivity!r}"
+        assert a.min_reads == expected[a.sensitivity], (
+            f"{name}: {a.sensitivity} means --min-reads {expected[a.sensitivity]}, not {a.min_reads}")
+        assert a.pre_amp_error, f"{name}: needs a pre-amplification floor"
+        assert a.note, f"{name}: a recommendation without a reason is folklore"
+
+
+def test_an_alias_resolves_to_the_assay_it_names():
+    """Never: `amplicon` is ambiguous -- an AIRR library and a targeted PCR panel are both
+    amplicons and want opposite settings. Aliasing one to the other returned the wrong recipe
+    silently, which is the failure mode a profile table exists to prevent."""
+    from migec.sheet import ALIASES, ASSAYS, assay
+
+    for alias, target in ALIASES.items():
+        assert target in ASSAYS, f"alias {alias!r} points at {target!r}, which is not an assay"
+        assert assay(alias)[0] == target
+    assert assay("airr")[0] == "airr"
+    assert assay("repseq")[0] == "airr"
+    assert assay("amplicon")[0] == "amplicon"
+    assert ASSAYS["airr"].sensitivity != ASSAYS["amplicon"].sensitivity
+
+
+def test_every_assay_recipe_is_runnable():
+    """Never: a recipe that does not run is worse than none, because it looks supported. Every flag
+    the profile emits must exist on the command it is emitted for, and the pattern must compile."""
+    from typer.main import get_command
+
+    from migec import _core
+    from migec.cli import app
+    from migec.sheet import ASSAYS, PRESETS, format_assay, is_positional, parse_layout
+
+    cmd = get_command(app)
+    known = {
+        name: {o for p in c.params for o in p.opts if o.startswith("--")}
+        for name, c in cmd.commands.items()
+    }
+    assert known["assemble"], "no options found -- the check would pass vacuously"
+    for name, a in ASSAYS.items():
+        for flag in a.extra:
+            assert flag in known["assemble"], f"{name}: `{flag}` is not a flag of migec assemble"
+        master, _, _ = PRESETS[a.layouts[0]]
+        pattern, _ = parse_layout(master)
+        _core.match_pattern(pattern, "A" * (len(pattern) + 1),
+                            max_offset=0 if is_positional(pattern) else -1)
+        assert f"--min-reads {a.min_reads}" in format_assay(name)
