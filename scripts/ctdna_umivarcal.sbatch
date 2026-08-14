@@ -52,7 +52,16 @@ MICROMAMBA=$HOME/bin/micromamba
 # Never: test for `conda-meta/history`, not for `bin/python`. A half-deleted prefix still has a
 # python and micromamba no longer calls it an environment, so a `bin/python` guard skips the
 # rebuild and every later `install -p` fails with "Expected environment not found at prefix".
-if [ ! -s "$UVDIR/conda-meta/history" ]; then
+usable_env() {
+    [ -s "$UVDIR/conda-meta/history" ] || return 1
+    "$UVDIR/bin/python" - <<'PY' 2>/dev/null
+import sys
+import msgpack, psutil, tqdm     # noqa: F401 -- the import IS the check
+sys.exit(0 if msgpack.version < (1, 0) else 1)
+PY
+}
+
+if ! usable_env; then
     echo "=== creating the UMI-VarCal environment ==="
     rm -rf "$UVDIR"
     # Never: `psutil` is NOT in its README's requirements list and the tool does not start without
@@ -62,17 +71,18 @@ if [ ! -s "$UVDIR/conda-meta/history" ]; then
     # that keyword was removed in msgpack 1.0 (2019), so on anything current it raises
     # `TypeError: unpackb() got an unexpected keyword argument 'encoding'` in the middle of
     # `call`, after extraction and alignment have already run. The package pins nothing.
+    # Never: and that pins PYTHON to 3.8. conda-forge's last `msgpack-python` below 1.0 is 0.6.2
+    # and it has no build for 3.9 or later, so `python=3.9` with `msgpack-python<1.0` has no
+    # solution at all -- the solver says so at length and the job dies before it runs anything.
+    # Running the tool on the interpreter it was written for is the honest way round; patching its
+    # source would be measuring a different tool.
     "$MICROMAMBA" create -y -p "$UVDIR" -c conda-forge -c bioconda \
-        python=3.9 cython "msgpack-python<1.0" scipy statsmodels pysam numpy pip samtools \
+        python=3.8 cython "msgpack-python<1.0" scipy statsmodels pysam numpy pip samtools \
         minimap2 psutil tqdm
     "$UVDIR/bin/pip" install --quiet pyfasta || echo "pyfasta from pip failed"
 fi
 export PATH="$UVDIR/bin:$PATH"
-# Idempotent, and cheaper than rebuilding the prefix when one undocumented dependency turns up.
-"$UVDIR/bin/python" -c "import psutil, tqdm" 2>/dev/null || \
-    "$MICROMAMBA" install -y -p "$UVDIR" -c conda-forge psutil tqdm
-"$UVDIR/bin/python" -c "import msgpack, sys; sys.exit(0 if msgpack.version < (1, 0) else 1)" \
-    2>/dev/null || "$MICROMAMBA" install -y -p "$UVDIR" -c conda-forge "msgpack-python<1.0"
+"$UVDIR/bin/python" -c "import msgpack; print('msgpack', msgpack.version)"
 
 # It is a git checkout with a Cython extension to build, not a package.
 if [ ! -d "$SRC/.git" ]; then
