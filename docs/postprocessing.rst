@@ -127,6 +127,9 @@ Read next
        by an artifact -- and which of the three you are in
    * - :doc:`Grouping accuracy <grouping>`
      - map-first against collapse-first, scored against a known truth
+   * - :doc:`Single cell <single_cell>`
+     - migec against Cell Ranger on a 10x droplet library: barcode validity, cell calling, and
+       what a cell count does and does not tell you
 
 .. toctree::
    :maxdepth: 1
@@ -135,3 +138,4 @@ Read next
    downstream
    variants
    detection
+   single_cell

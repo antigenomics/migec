@@ -1,0 +1,5 @@
+cellranger_version	locus	min_reads	min_molecules	cells_scored	chains_cellranger	chains_migec	chains_shared	chain_recall	junction_aa_concordance	molecules_scored	molecules_total
+5.0.0	TRA	30	1	479	426	451	426	1.0000	0.9507	7855	47584
+5.0.0	TRB	30	1	479	469	474	468	0.9979	0.9915	7855	47584
+10.1.0	TRA	30	1	478	424	450	424	1.0000	0.9505	7855	47584
+10.1.0	TRB	30	1	478	469	473	468	0.9979	0.9915	7855	47584

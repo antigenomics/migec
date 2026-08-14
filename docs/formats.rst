@@ -138,7 +138,13 @@ Consensus FASTQ
 
 The pipeline output, and the contract with everything downstream::
 
-    @<sample>.<mig>[.<g>]:<CB>:<UMI> RX:Z:<umi>\tQX:Z:<umi qual>\tCB:Z:<cell>\t...
+    @<sample>[.<cell>].<umi>[.c<k>][.<m>] RX:Z:<umi>\tBC:Z:<sample>\tCB:Z:<cell>\tMI:Z:<name>\tcD:i:<reads>
+
+Every field is separated by a **dot**, and there is no colon anywhere in the name. ``.c<k>`` is the
+overlap component in ``--contig`` mode and ``.<m>`` the linkage split index; each is written only
+when there is more than one, so the name carries three, four or five fields. A parser must
+therefore read it **from the right** rather than indexing from the left -- and a sample id may
+itself contain a dot, since ``validate_sample_id`` does not forbid one.
 
 Tags are separated by **TAB**, not space: ``bwa mem -C`` and ``minimap2 -y`` append the FASTQ
 comment verbatim into the SAM record, so it has to be SAM-conformant or the resulting BAM is

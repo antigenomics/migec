@@ -553,8 +553,14 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
         const size_t s = file_of[static_cast<size_t>(r.sample)];
         bool umi_has_n = false, cell_has_n = false;
         const uint64_t umi_key = pack_barcode(r.umi, &umi_has_n);
+        const uint64_t cell_key = r.cell.empty() ? 0 : pack_barcode(r.cell, &cell_has_n);
+        // The molecule's whole key, cell then UMI, which is what `refine` and `assemble` group on.
+        // `pack_barcode` puts base 0 in the top bits, so shifting the UMI down by the cell's width
+        // lands it exactly where `pack_barcode(cell + umi)` would -- without the concatenation,
+        // which would be an allocation per read.
+        const uint64_t mol_key =
+            r.cell.empty() ? umi_key : (cell_key | (umi_key >> (2 * r.cell.size())));
         if (mig.on) {
-            const uint64_t cell_key = r.cell.empty() ? 0 : pack_barcode(r.cell, &cell_has_n);
             MigStaged st;
             st.cell = cell_key;
             st.umi = umi_key;
@@ -591,7 +597,7 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
             append_fastq(w.out1[s], name1, tags, r.seq1, r.qual1);
             if (paired) append_fastq(w.out2[s], name2, tags, r.seq2, r.qual2);
         }
-        w.umis.emplace_back(static_cast<uint32_t>(s), umi_key);
+        w.umis.emplace_back(static_cast<uint32_t>(s), mol_key);
     }
     // The per-sample buffers are empty in `.mig` mode -- nothing was formatted -- but unmatched
     // reads are FASTQ either way: they have no barcode, so there is no bucket to put them in.
@@ -637,14 +643,22 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
             row_of_file.push_back(i);
-            stats.umi_counts.emplace_back(patterns.umi_length(i));
+            // Never: the counter is keyed on the WHOLE barcode -- cell then UMI -- not on the UMI
+            // alone. A molecule is sample + cell + UMI; UMIs repeat across cells by design, so a
+            // UMI-keyed counter merges every cell's copy of one UMI into a single entry. On a 10x
+            // library that read 221,026 distinct barcodes where there are 311,962 molecules, which
+            // put the depth 1.41x high and the space 21% occupied against a true 3e-6 -- so the
+            // saturation warning and `err_unreliable` fired on an artefact of the pooling.
+            stats.umi_counts.emplace_back(patterns.cell_length(i) + patterns.umi_length(i));
+            stats.sample_cell_length.push_back(patterns.cell_length(i));
         } else {
             file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
-            // The rows would otherwise write UMIs of two lengths into one counter, and the
+            // The rows would otherwise write barcodes of two lengths into one counter, and the
             // composition, the collision statistics and the correction would all be nonsense.
-            if (patterns.umi_length(i) != stats.umi_counts[file_of[i]].length()) {
+            if (patterns.cell_length(i) + patterns.umi_length(i) !=
+                stats.umi_counts[file_of[i]].length()) {
                 throw MigecError("checkout: sample '" + ids[i] +
-                                 "' is declared with two different UMI lengths");
+                                 "' is declared with two different barcode lengths");
             }
         }
     }

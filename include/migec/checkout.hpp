@@ -341,6 +341,11 @@ struct CheckoutStats {
     std::vector<std::array<uint64_t, 61>> sample_phred;    // parallel to sample_ids
     std::vector<std::array<uint64_t, kPayloadHistLen>> sample_payload_len;  // and so is this
     std::vector<UmiCounts> umi_counts;   // parallel to sample_ids
+    // Also parallel to sample_ids. The counters are keyed on the WHOLE barcode -- cell then UMI --
+    // because a molecule is sample + cell + UMI and a UMI-keyed counter merges every cell's copy of
+    // one UMI. So the composition's length is the barcode's, and this is what splits it back into
+    // the two reported lengths. Zero on a bulk library, where the two coincide.
+    std::vector<int> sample_cell_length;
     double wall_seconds = 0.0;
     double reads_per_second = 0.0;
     size_t peak_rss_bytes = 0;

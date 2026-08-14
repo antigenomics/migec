@@ -1,0 +1,5 @@
+method	variant	cells	contigs_scored	kmer_coverage_mean	contigs_at_90pct	cdr3_exact	cdr3_total	cdr3_exact_rate	contig_n50	chain_recall	doublet_candidates	wall_note
+migec molecules (no assembly)	ceiling	479	943	0.9990	943	942	943	0.9989	0	nan	0	k-mer ceiling, not a method
+arda cells	default	479	943	0.9759	892	933	943	0.9894	536	0.9777	17	10944 contigs from 249635 molecules
+arda cells	no phasing	479	943	0.9663	868	926	943	0.9820	460	0.9714	12	9898 contigs from 249635 molecules
+arda cells	no adapter trim	479	943	0.9525	879	907	943	0.9618	580	0.9491	16	10998 contigs from 249635 molecules

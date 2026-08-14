@@ -259,7 +259,13 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         s["over_sequenced"] = h.over_sequenced();
         s["hist_reads"] = h.reads;
         s["hist_units"] = h.units;
-        s["umi_length"] = comp.length;
+        // The counter is keyed on cell + UMI, so the composition spans the whole barcode. Report
+        // the three lengths separately rather than letting `umi_length` quietly mean the barcode:
+        // `--preset 10x-v2` would then print a 26 nt "UMI" for a 10 nt one.
+        const int cell_len = i < stats.sample_cell_length.size() ? stats.sample_cell_length[i] : 0;
+        s["cell_length"] = cell_len;
+        s["umi_length"] = comp.length - cell_len;
+        s["barcode_length"] = comp.length;
         s["total_entropy"] = comp.total_entropy();
         s["total_information"] = comp.total_information();
         s["effective_length"] = comp.effective_length();
