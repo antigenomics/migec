@@ -122,39 +122,36 @@ if [ -d "$SRC/functions" ]; then
 fi
 ls "$SRC" | head
 
+# Never: `extract` takes a BAM OR SAM, NOT a FASTQ, and its flags are `-i`, `-f` and
+# `--umi_length | -l` -- there is no `-u` and no `-o`. It writes into `EXTRACTED/<name>/` relative
+# to the CURRENT DIRECTORY. Reading `functions/Config.py` and `functions/Extract.py` once would
+# have replaced five failed attempts; every one of them was a guess at an interface.
+#
+# And the interface is better than its paper suggests: `--umi_length 0` makes it read the UMI from
+# the **RX tag** instead of from the read start. So it can be given migec's own aligned reads --
+# `checkout` + `refine` output, barcode found, corrected and carried into the BAM by `minimap2 -y`
+# -- and then the ONLY difference between its row and ours is what each does with an identical
+# alignment carrying identical barcodes: its UMI-aware pileup and Poisson caller against our
+# consensus plus a standard caller. That is a cleaner isolation than re-extracting from FASTQ, and
+# it reuses the BAM `ctdna_rawreads.sbatch` already built.
 process() {
     local acc=$1 out=$WORK/$acc
+    local src=$ROOT/rawreads/$acc/$acc.bam
+    [ -s "$src" ] || { echo "  no aligned reads for $acc yet (run ctdna_rawreads.sbatch first)" >&2; return 1; }
     mkdir -p "$out"
-    local fq
-    fq=$(fastq_for "$acc") || { echo "  no fastq $acc" >&2; return 1; }
+    local extracted="$out/EXTRACTED/$acc/${acc}_extracted_sorted.bam"
 
-    # 12 nt UMI at the read start, the same layout `migec checkout --bc-pattern '0:12'` reads.
-    if [ ! -s "$out/extracted.fastq" ]; then
-        # Never: `extract` requires `-f` as well. `Extract.py` reads `config['fasta']` and the tool
-        # exits with "The parameter --fasta | -f is required but missing" -- into its own log, so a
-        # loop that only checks for output sees an empty FASTQ and carries on to align nothing.
-        "$UVDIR/bin/python" "$SRC/umi-varcal.py" extract -i "$fq" -u 12 -f "$LOCALREF" \
-            -o "$out/extracted.fastq" \
-            > "$out/extract.log" 2>&1 || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
+    if [ ! -s "$extracted" ]; then
+        ( cd "$out" && "$UVDIR/bin/python" "$SRC/umi-varcal.py" extract \
+            -i "$src" -f "$LOCALREF" -l 0 ) > "$out/extract.log" 2>&1 \
+            || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
     fi
-    # A BAM built from an empty extraction is a few kB and passes `-s`. Rebuild anything that
-    # holds fewer records than the FASTQ it came from could possibly justify.
-    if [ -f "$out/$acc.bam" ] && [ "$(stat -c%s "$out/$acc.bam")" -lt 100000 ]; then
-        rm -f "$out/$acc.bam" "$out/$acc.bam.bai"
-    fi
-    if [ ! -s "$out/$acc.bam" ]; then
-        minimap2 -ax sr -t "$THREADS" "$MMI" "$out/extracted.fastq" 2>/dev/null \
-            | samtools sort -@ "$THREADS" -o "$out/$acc.bam" -
-        samtools index "$out/$acc.bam"
-    fi
-    if [ ! -s "$out/$acc.vcf" ]; then
-        # Never: a failed `call` leaves a truncated `.msgpack` pileup behind, and the next attempt
-        # reads it and dies with "Unpack failed: incomplete input" -- which reads as a new bug and
-        # is the previous one's litter. Keep the expensive artefacts, drop everything else.
-        find "$out" -maxdepth 1 -type f ! -name 'extracted.fastq' ! -name "$acc.bam" \
-            ! -name "$acc.bam.bai" ! -name '*.log' -delete
+    [ -s "$extracted" ] || { echo "  extract wrote no BAM for $acc"; ls -R "$out" | head -20; return 1; }
+
+    if [ ! -s "$out/${acc}_extracted_sorted.vcf" ]; then
+        find "$out" -maxdepth 1 -type f ! -name '*.log' -delete
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \
-            "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$out/$acc.bam" -b "$PANEL" \
+            "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$extracted" -b "$PANEL" \
             -f "$LOCALREF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
             || { echo "  call failed for $acc"; tail -5 "$out/call.log"; return 1; }
     fi
