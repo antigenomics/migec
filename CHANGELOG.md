@@ -6,6 +6,68 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### What migec is worth downstream, measured against certified material
+
+The comparisons the version number was waiting on. All of them run on commercial cfDNA reference
+material with certified allele frequencies **including a 0%-certified arm that is a true negative
+by construction**, three replicates per arm, one panel, one aligner, matched molecule-support
+thresholds, substitutions only — migec emits no indels by design and 56% of UMIErrorCorrect's calls
+are deletions. `assets/ctdna_callers.tsv`, `docs/postprocessing.rst`.
+
+| pipeline | false calls per sample, 0% arm | 0.125% | 0.25% | 1% |
+|---|---|---|---|---|
+| migec + Mutect2 | **0.67** | 0 of 3 | 1 of 3 | **3 of 3** |
+| migec + LoFreq | **2.00** | **1 of 3** | **3 of 3** | **3 of 3** |
+| UMIErrorCorrect, its own consensus and caller | 7.67 | 1 of 3 | 3 of 3 | 2 of 2 |
+
+**migec + LoFreq matches the best sensitivity at every arm and reports 3.8x fewer false positives
+on the true negative.** Against **MAGERI 1.1.1** on a simulated shallow library where both tools
+emit the *same* consensuses at the same accuracy (0.8990 against 0.8985 exactly a template), MAGERI
+reports 142 variants of which 137 are at positions nothing was injected at; migec + LoFreq reports
+5 and is right about all five. At 8 reads per UMI the two are indistinguishable — the regime where
+a caller can be wrong is the shallow one.
+
+Two flags decide more than the choice of caller, and both are now measured:
+
+- Never: `gatk Mutect2 --max-reads-per-alignment-start 0`. The default is **50**, and on an
+  amplicon consensus every molecule starts at the same coordinate — so Mutect2 saw 78-207 molecules
+  where LoFreq saw 4,282-15,895 on the identical BAM, reported about one call per sample and never
+  the certified hotspot. That reads as "Mutect2 cannot do this" and is really "Mutect2 was shown
+  1.5% of the evidence".
+- Never: `--min-reads 3` is the only remedy of the three that works. A `-q 20` MAPQ floor **raises**
+  the true-negative burden 10.0 -> 25.7 calls per sample (its call set is a strict superset: 13
+  positions shared, 18 added, 16 of the 18 `-> G`), and adapter trimming raises the off-target
+  molecule share 10.6% -> 13.0% and the burden 10.0 -> 13.0 while costing 2% of molecules.
+  `--min-reads 3` takes off-target 10.6% -> 0.7% and the burden 10.0 -> 2.0.
+
+Running LoFreq and Mutect2 on the *same* consensus BAM also settled what one caller could not: on
+the 0% arm five of Mutect2's ten positions are LoFreq's and seven of ten are `-> G`, so the
+artifact is in the consensus input rather than in either caller's threshold.
+
+### The docs have a post-processing section
+
+`downstream`, `variants` and `detection` were three peers in a flat toctree, so the question they
+jointly answer — what do I run after migec, and what was collapsing worth — had no page.
+`docs/postprocessing.rst` is that page and it opens with the table above; the README carries it too.
+
+### FastQC, checked rather than assumed
+
+Every module completes on every stage's output. Never: **concatenated gzip members are read in
+full** — the stages compress on the workers, so their output is several members in one file (14 for
+a 110,002-read run) and FastQC reported exactly 110,002 sequences. A reader that stopped at the
+first member would report a fraction of the library and no error. Note: **"Per tile sequence
+quality" does not run on migec output** and cannot: tile coordinates live in the FASTQ comment and
+`checkout` replaces the comment with the SAM tags, because `bwa mem -C` and `minimap2 -y` append
+that comment verbatim into the SAM record. Run FastQC on the raw reads for per-tile.
+
+### `subsample` is not a fixture builder
+
+It was documented as one, which undersells it. Sampling *reads* is trivial; sampling **molecules**
+is not, because a molecule's reads are scattered through the file and nothing in a raw FASTQ says
+which they are. That is what equalises molecule counts across a cohort sequenced to different
+depths, what a saturation curve is computed over, and only incidentally what makes a fixture behave
+like the run it came from.
+
 ### BAM, SAM and CRAM are inputs
 
 Every stage that took a FASTQ now takes an alignment file too, recognised from the file rather than
