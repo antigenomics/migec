@@ -414,9 +414,23 @@ model has to use the evidence that survives at one read:
       added, 16 of the 18 `-> G`); cutadapt raises the off-target molecule share 10.6% -> 13.0% and
       the burden 10.0 -> 13.0, and costs 2% of molecules. Only `--min-reads 3` works: off-target
       10.6% -> 0.7%, burden 10.0 -> 2.0
-- [ ] The last two rows: the **no-consensus baseline** (same reads, same aligner, same callers,
-      reads instead of molecules -- the row that says what collapsing was worth) and **UMI-VarCal**,
-      whose input convention is the UMI in the read *name*. Both running
+- [x] **The no-consensus baseline** (2026-08-14), `scripts/ctdna_rawreads.sbatch`: the same reads,
+      trimming, barcode correction, aligner and caller as the migec row, with a record being a read
+      rather than a molecule. **2.8x the false positives** on the certified true negative (5.67
+      calls per sample against 2.00), the measured frequency 1.27x of certified at 1% and 1.52x at
+      0.25% where the consensus reads 1.02x and 0.90x, and it **detects less from 38x more depth**
+      -- 0 of 3 replicates at 0.125% against the consensus's 1 of 3, at 197,772x read coverage
+      against 5,903 molecules. Never: a read count is not a molecule count. Note: the surviving
+      artifact is MORE concentrated after collapsing, 77% `-> G` against 41%, because the consensus
+      removes the random per-read errors and leaves the common-mode ones
+- [x] **UMI-VarCal: cannot be run on these arms**, and the reason is the data shape rather than the
+      configuration. `Extract.py` pairs reads *by read id* -- each waits in a `seen` dict until the
+      same id appears again -- so on a **single-end** library both its FASTQs come out empty and
+      the extracted BAM holds 0 of 901,938 reads, after the log reports "Working 100 %". The
+      certified arms are single-end 151 nt. Recorded in `SOURCES.md` with the four unrelated
+      packaging defects found on the way (undocumented `psutil`, an `encoding=`/`max_buffer_size=`
+      pair that no msgpack version accepts, `extract` needing `-f`, and a FASTA index cached beside
+      the reference behind an `isfile` check that accepts a 0-byte file)
 - [x] **MIGEC 1.2.9 head to head** (2026-08-14), `scripts/compare_migec_v1.py`. Same dialect, same
       sheet, same library, both pipelines end to end, `--min-count` matched -- v1 defaults to 5 and
       we default to 1, and v1 names its output `.t5.` for exactly that reason, so leaving each at

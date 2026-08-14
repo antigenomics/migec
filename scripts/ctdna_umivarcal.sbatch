@@ -159,7 +159,17 @@ process() {
             -i "$ubam" -f "$LOCALREF" -l 12 ) > "$out/extract.log" 2>&1 \
             || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
     fi
-    [ -s "$extracted" ] || { echo "  extract wrote no BAM for $acc"; ls -R "$out/EXTRACTED" 2>/dev/null | head -10; return 1; }
+    # Never: EMPTY OUTPUT HERE MEANS THE LIBRARY IS SINGLE-END, not that something misfired.
+    # `Extract.py` pairs reads BY READ ID -- it holds each read in a `seen` dict and writes to R1/R2
+    # only when the same id turns up a SECOND time (lines 138-154). On a single-end library every
+    # id appears once, so both FASTQs stay empty, `bwa mem` aligns nothing, and the extracted BAM
+    # has 0 records after reporting "Working 100 %". The tool is for paired-end libraries, as its
+    # own description says, and `PRJNA788522` is single-end 151 nt.
+    if [ ! -s "$extracted" ] || [ "$(samtools view -c "$extracted" 2>/dev/null || echo 0)" -eq 0 ]; then
+        echo "  extract produced an EMPTY bam for $acc -- UMI-VarCal pairs reads by id and this"
+        echo "  library is single-end, so there is nothing it can do with it. Not a config error."
+        return 1
+    fi
 
     if ! compgen -G "$out"/*.vcf > /dev/null; then
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \

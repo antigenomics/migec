@@ -94,6 +94,13 @@ direction: the consensus removes the random per-read errors and leaves the commo
 is exactly the class :doc:`detection` says needs a per-position background model rather than a
 threshold.
 
+Never: **UMI-VarCal is missing from that table because it could not be run, not because it lost.**
+It requires paired-end reads -- ``Extract.py`` pairs reads *by read id*, holding each one until the
+same id appears a second time -- and these arms are single-end 151 nt, so both of its intermediate
+FASTQs come out empty and the extracted BAM holds 0 of 901,938 reads after its log has reported
+"Working 100 %". That is an input-shape mismatch, not a configuration error, and it is recorded
+with the evidence in ``SOURCES.md`` rather than as a poor score.
+
 Two things this does *not* say. It does not say Mutect2 is a better caller than LoFreq in general
 -- both were run at defaults plus the one non-default each needs on consensus input, and that flag
 matters more than the choice between them (see :doc:`Variant calling <variants>`). And it does not
