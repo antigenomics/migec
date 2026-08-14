@@ -50,6 +50,11 @@ on the true negative.** migec + Mutect2 gives the fewest false positives of anyt
 and pays for it at 0.25%. Which of the two to run is a decision about which error is expensive,
 and :doc:`Detection limits <detection>` is where that arithmetic lives.
 
+Note: **UMIErrorCorrect is not losing on evidence.** The median depth at the sites it called is
+7,475 molecules against migec + LoFreq's 4,046 at the matched threshold -- it has *more* molecules
+and still reports 3.8x more calls on a sample where the right answer is none. The difference is in
+what each pipeline does with them, not in how many it has.
+
 Two things this does *not* say. It does not say Mutect2 is a better caller than LoFreq in general
 -- both were run at defaults plus the one non-default each needs on consensus input, and that flag
 matters more than the choice between them (see :doc:`Variant calling <variants>`). And it does not

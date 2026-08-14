@@ -90,13 +90,19 @@ def main(argv: list[str] | None = None) -> int:
         key = (c["pipeline"], c["caller"], int(c["mapq_floor"]), int(c["min_reads"]), c["arm"])
         per_run[(key, c["run"])].append(c)
 
-    rows = collections.defaultdict(lambda: {"runs": set(), "all": [], "subs": [], "hs": []})
+    rows = collections.defaultdict(
+        lambda: {"runs": set(), "all": [], "subs": [], "hs": [], "dp": []}
+    )
     spectrum: dict = collections.defaultdict(collections.Counter)
     for (key, run), cs in per_run.items():
         agg = rows[key]
         agg["runs"].add(run)
         agg["all"].append(len(cs))
         agg["subs"].append(sum(1 for c in cs if c["substitution"]))
+        # The depth the caller saw. On a consensus BAM it is a MOLECULE count; without the
+        # consensus it is a read count and roughly an order of magnitude larger, which is most of
+        # why a no-consensus row calls more -- more power over a noisier pileup.
+        agg["dp"] += [int(c["dp"]) for c in cs if c.get("dp", "").isdigit()]
         hit = [c for c in cs if c["chrom"] == chrom and c["pos"] == pos]
         agg["hs"].append(float(hit[0]["af"]) if hit else 0.0)
         if key[4] == "WT":
@@ -105,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
                     spectrum[key[0]][(c["ref"], c["alt"])] += 1
 
     cols = ["pipeline", "caller", "mapq_floor", "min_reads", "arm", "certified_vaf", "runs",
-            "calls_per_run", "substitutions_per_run", "hotspot_detected", "hotspot_vaf_mean"]
+            "calls_per_run", "substitutions_per_run", "hotspot_detected", "hotspot_vaf_mean",
+            "median_depth"]
     lines = ["\t".join(cols)]
     for key in sorted(rows, key=lambda k: (k[0], k[1], k[2], k[3], str(k[4]))):
         pipeline, caller, mapq, mr, arm = key
@@ -119,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{sum(agg['subs']) / len(agg['subs']):.2f}",
             str(len(seen)),
             f"{sum(seen) / len(seen):.6f}" if seen else "0",
+            str(sorted(agg["dp"])[len(agg["dp"]) // 2]) if agg["dp"] else "0",
         ]))
     out = "\n".join(lines)
     print(out)
