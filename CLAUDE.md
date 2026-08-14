@@ -190,6 +190,27 @@ correction is written up in `project/review-algorithms.md`.
   wall than the gzip reader. `correct_umis` in particular is O(n · 3L · log n) and arguably belongs
   in `refine` (M3) rather than in checkout at all — decide that when `refine` lands, and until then
   it is why `match_seconds` is reported next to `wall_seconds`.
+- **The whole chain runs on buckets (2026-08-14, 2.3.0): checkout --mig -> refine -> assemble.**
+  refine reads buckets and writes them back **re-partitioned on the CORRECTED barcode** -- a
+  corrected barcode is a different key and a key decides its bucket, so copying a bucket through
+  unchanged stops it being a partition and the reads corrected across a boundary get grouped with
+  strangers. Every number matches the FASTQ route (`tests/synthetic/test_mig_chain.py`): reads,
+  barcodes, merges, molecules, the error to nine digits, the barcode table byte for byte, the
+  consensus byte for byte. Note: the audit trail on this route is `<sample>.barcodes.tsv` -- a
+  `.mig` record has no room for the pre-correction barcode the way a comment has `OX:Z:`.
+- **`.mig` is at v2, and a v1 file still reads.** v2 carries the BARCODE's own quality, one Phred
+  per base, as two fixed-width columns. Never: v1 stored `umi_minq`/`cell_minq`, the MINIMUM over
+  the barcode, and the posterior weighs the quality AT THE POSITION THAT DIFFERS -- a minimum says
+  every position is as bad as the worst, which overstates the error everywhere and makes merges
+  easier, the wrong direction. A v1 file comes back with empty columns and refine falls back to the
+  global rate, as it does for a FASTQ with no `QX:Z:`.
+- **Never: an adversarial audit of new code is worth more than another test of old code.** The
+  `.mig` work passed every test it had and still carried three data-integrity bugs, all reproduced:
+  refine wrote its output buckets OVER its input (same names, `"wb"` truncates); refine's bucket
+  rewrite ignored `--limit-*` and emitted uncorrected reads beside corrected ones; and the sample
+  id -- which in assemble and refine comes from the DATA, the `BC:Z:` tag -- went into every output
+  path unvalidated, so `BC:Z:../..` wrote outside the output directory. `validate_sample_id` is the
+  guard, in types.hpp, called where the id is attributable.
 - **`checkout --mig` writes the partition `assemble` was building (2026-08-14).** Same key, same
   range partition, `<sample>.<bbb>.mig`, one writer per (sample, bucket) owned by one thread for
   the whole run so `-t` still changes nothing but the clock. 500 k reads, four samples, `-t 4`:
