@@ -54,11 +54,7 @@ MICROMAMBA=$HOME/bin/micromamba
 # rebuild and every later `install -p` fails with "Expected environment not found at prefix".
 usable_env() {
     [ -s "$UVDIR/conda-meta/history" ] || return 1
-    "$UVDIR/bin/python" - <<'PY' 2>/dev/null
-import sys
-import msgpack, psutil, tqdm     # noqa: F401 -- the import IS the check
-sys.exit(0 if msgpack.version < (1, 0) else 1)
-PY
+    "$UVDIR/bin/python" -c "import msgpack, psutil, tqdm" 2>/dev/null
 }
 
 if ! usable_env; then
@@ -67,17 +63,8 @@ if ! usable_env; then
     # Never: `psutil` is NOT in its README's requirements list and the tool does not start without
     # it -- the import is inside the compiled `functions.pyx`, so it surfaces as a
     # ModuleNotFoundError from a .pyx line and not as a missing dependency. Same for `tqdm`.
-    # Never: msgpack MUST be < 1.0. The tool calls `msgpack.unpack(..., encoding="utf-8")` and
-    # that keyword was removed in msgpack 1.0 (2019), so on anything current it raises
-    # `TypeError: unpackb() got an unexpected keyword argument 'encoding'` in the middle of
-    # `call`, after extraction and alignment have already run. The package pins nothing.
-    # Never: and that pins PYTHON to 3.8. conda-forge's last `msgpack-python` below 1.0 is 0.6.2
-    # and it has no build for 3.9 or later, so `python=3.9` with `msgpack-python<1.0` has no
-    # solution at all -- the solver says so at length and the job dies before it runs anything.
-    # Running the tool on the interpreter it was written for is the honest way round; patching its
-    # source would be measuring a different tool.
     "$MICROMAMBA" create -y -p "$UVDIR" -c conda-forge -c bioconda \
-        python=3.8 cython "msgpack-python<1.0" scipy statsmodels pysam numpy pip samtools \
+        python=3.10 cython msgpack-python scipy statsmodels pysam numpy pip samtools \
         minimap2 psutil tqdm
     "$UVDIR/bin/pip" install --quiet pyfasta || echo "pyfasta from pip failed"
 fi
@@ -87,6 +74,29 @@ export PATH="$UVDIR/bin:$PATH"
 # It is a git checkout with a Cython extension to build, not a package.
 if [ ! -d "$SRC/.git" ]; then
     git clone --recursive https://gitlab.com/vincent-sater/umi-varcal.git "$SRC"
+fi
+# Never: THE ONE PATCH, and it is a serialization CALL, not the algorithm.
+#
+# UMI-VarCal calls `msgpack.pack(..., encoding="utf-8")` and
+# `msgpack.unpack(..., encoding="utf-8", max_buffer_size=<huge>)` in eleven places. `encoding` was
+# removed in msgpack 1.0 (2019) and `max_buffer_size` is not an `unpackb` argument in 0.6 either,
+# so the tool runs on NO msgpack a solver will give you: 1.x rejects `encoding`, 0.6.2 rejects
+# `max_buffer_size`, and the last release accepting both is 0.5.6, which conda-forge builds only
+# for Python <= 3.6.
+#
+# Both kwargs are simply DELETED, which is msgpack's own documented migration: `raw=False` (what
+# `encoding="utf-8"` did) is the 1.x default for unpack, `use_bin_type=True` is the 1.x default for
+# pack, and `max_buffer_size` was set to 10^12 to disable a limit that does not apply to a bytes
+# input. Nothing about the pileup, the grouping or the calling changes -- but it IS a patched
+# comparator and every row it produces has to say so.
+if [ -d "$SRC/functions" ] && [ ! -f "$SRC/.migec-msgpack-patched" ]; then
+    echo "=== patching the msgpack calls (see the note above) ==="
+    grep -rn 'encoding="utf-8"' "$SRC/functions"/*.pyx "$SRC/functions"/*.py \
+        > "$WORK/msgpack_calls_before.txt" 2>/dev/null || true
+    sed -i -E 's/, *encoding="utf-8" *, *max_buffer_size=[^)]*\)/)/g; s/, *encoding="utf-8" *\)/)/g' \
+        "$SRC/functions"/*.pyx "$SRC/functions"/*.py
+    touch "$SRC/.migec-msgpack-patched"
+    echo "patched $(wc -l < "$WORK/msgpack_calls_before.txt") call sites"
 fi
 if [ -d "$SRC/functions" ]; then
     (cd "$SRC/functions" && "$UVDIR/bin/python" setup.py build_ext --inplace) \
