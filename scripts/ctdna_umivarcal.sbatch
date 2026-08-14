@@ -58,15 +58,21 @@ if [ ! -s "$UVDIR/conda-meta/history" ]; then
     # Never: `psutil` is NOT in its README's requirements list and the tool does not start without
     # it -- the import is inside the compiled `functions.pyx`, so it surfaces as a
     # ModuleNotFoundError from a .pyx line and not as a missing dependency. Same for `tqdm`.
+    # Never: msgpack MUST be < 1.0. The tool calls `msgpack.unpack(..., encoding="utf-8")` and
+    # that keyword was removed in msgpack 1.0 (2019), so on anything current it raises
+    # `TypeError: unpackb() got an unexpected keyword argument 'encoding'` in the middle of
+    # `call`, after extraction and alignment have already run. The package pins nothing.
     "$MICROMAMBA" create -y -p "$UVDIR" -c conda-forge -c bioconda \
-        python=3.9 cython msgpack-python scipy statsmodels pysam numpy pip samtools minimap2 \
-        psutil tqdm
+        python=3.9 cython "msgpack-python<1.0" scipy statsmodels pysam numpy pip samtools \
+        minimap2 psutil tqdm
     "$UVDIR/bin/pip" install --quiet pyfasta || echo "pyfasta from pip failed"
 fi
 export PATH="$UVDIR/bin:$PATH"
 # Idempotent, and cheaper than rebuilding the prefix when one undocumented dependency turns up.
 "$UVDIR/bin/python" -c "import psutil, tqdm" 2>/dev/null || \
     "$MICROMAMBA" install -y -p "$UVDIR" -c conda-forge psutil tqdm
+"$UVDIR/bin/python" -c "import msgpack, sys; sys.exit(0 if msgpack.version < (1, 0) else 1)" \
+    2>/dev/null || "$MICROMAMBA" install -y -p "$UVDIR" -c conda-forge "msgpack-python<1.0"
 
 # It is a git checkout with a Cython extension to build, not a package.
 if [ ! -d "$SRC/.git" ]; then
