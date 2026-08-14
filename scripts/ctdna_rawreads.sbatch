@@ -3,7 +3,7 @@
 #SBATCH --partition=medium
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
-#SBATCH --time=06:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output=/projects/tcr_bcr_rnaseq/migec_ctdna/logs/%x_%j.out
 #SBATCH --error=/projects/tcr_bcr_rnaseq/migec_ctdna/logs/%x_%j.err
 #
@@ -44,6 +44,15 @@ declare -A ARMS=(
 
 echo "host=$(hostname) job=${SLURM_JOB_ID:-local} threads=$THREADS"
 
+# Never: ALIGN AND CALL WITH LOFREQ FOR EVERY RUN FIRST, THEN MUTECT2.
+#
+# On consensus input Mutect2 takes ~7 s a sample. On raw reads with the downsampling off it takes
+# tens of minutes, because the thing being downsampled is now millions of reads per amplicon rather
+# than tens of thousands of molecules -- which is itself part of the answer, but it means a loop
+# that does both per run spends its whole wall clock on four samples and leaves the LoFreq baseline
+# -- the row the headline comparison needs -- with eight arms missing. Two passes: the cheap one
+# completes for all twelve, the expensive one gets as far as it gets, and the table's `runs` column
+# says which.
 for acc in "${!ARMS[@]}"; do
     src=$ROOT/minreads/$acc/rf/$acc.fq.gz
     [ -s "$src" ] || { echo "  no refined reads for $acc" >&2; continue; }
@@ -61,6 +70,12 @@ for acc in "${!ARMS[@]}"; do
         lofreq call -f "$LOCALREF" -l "$PANEL" -o "$out/lofreq.vcf" "$out/$acc.bam" 2>/dev/null || true
         [ -f "$out/lofreq.vcf" ] && bgzip -f "$out/lofreq.vcf"
     fi
+    echo "  lofreq done $acc (${ARMS[$acc]})"
+done
+
+for acc in "${!ARMS[@]}"; do
+    out=$WORK/$acc
+    [ -s "$out/$acc.bam" ] || continue
     if [ ! -s "$out/mutect2.vcf.gz" ]; then
         # Same `--max-reads-per-alignment-start 0` as the consensus arm. Here it matters even more:
         # an amplicon's reads all start at the same coordinate, so the default 50 would leave a
@@ -71,7 +86,7 @@ for acc in "${!ARMS[@]}"; do
         [ -s "$out/mutect2.raw.vcf.gz" ] && "$GATK" FilterMutectCalls -R "$LOCALREF" \
             -V "$out/mutect2.raw.vcf.gz" -O "$out/mutect2.vcf.gz" >> "$out/mutect2.log" 2>&1 || true
     fi
-    echo "  done $acc (${ARMS[$acc]})"
+    echo "  mutect2 done $acc (${ARMS[$acc]})"
 done
 
 {

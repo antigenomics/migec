@@ -45,8 +45,8 @@ Everything below is either open or half-open. Nothing else on this page is.
 | # | item | milestone | why it is next |
 |---|---|---|---|
 | 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
-| 2 | The rest of the published comparisons | M5 | **MIGEC v1, MAGERI, UMI-tools and fgbio are done and scored** (`docs/validation.rst`, `docs/grouping.rst`). Open: Cell Ranger, UMI-VarCal, UMIErrorCorrect -- the last two are pipeline-level, from raw reads, because they replace `assemble` rather than following it. This is what the version number is waiting on, not the code |
-| 3 | The other callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). **Mutect2 on the identical consensus BAM, and a MAPQ 20 floor, are running** (`scripts/ctdna_callers.sbatch`). Open after that: UMI-VarCal and UMIErrorCorrect, and the adapter-trim re-run, which is diagnosed but not measured |
+| 2 | The rest of the published comparisons | M5 | **MIGEC v1, MAGERI, UMIErrorCorrect, UMI-tools and fgbio are done and scored** (`docs/postprocessing.rst`, `docs/validation.rst`, `docs/grouping.rst`). Open: Cell Ranger, and UMI-VarCal which is running. This is what the version number is waiting on, not the code |
+| 3 | The last two rows of the ctDNA table | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI. Done: LoFreq and Mutect2 on the identical consensus BAM, a MAPQ 20 floor, adapter trimming, and UMIErrorCorrect end to end (`assets/ctdna_callers.tsv`). Running: the **no-consensus baseline** -- same reads, same aligner, same callers, reads instead of molecules -- and **UMI-VarCal** |
 | 4 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
 Nothing is blocked on data any more. **Britanova et al ageing** (bulk TCR, shallow -- the real
@@ -368,9 +368,16 @@ model has to use the evidence that survives at one read:
       barcode, 7/14 at 40.9, then 10/10, 13/13, 10/10 at 82, 161 and 283. migec is 8-48x faster
       including the alignment they cannot skip. `docs/grouping.rst`,
       `assets/grouping_tools.tsv`, `assets/collision_split.tsv`
-- [ ] `2026-migec-benchmark` repo, `isalgo/umi_data`, comparisons against MIGEC v1, MAGERI,
-      Cell Ranger, **UMI-VarCal and UMIErrorCorrect** (the two UMI-aware callers benchmarked by
-      Maruzani et al. 2024 for low-frequency ctDNA)
+- [x] **MAGERI 1.1.1 head to head** (2026-08-14), `scripts/compare_mageri.py`, at the consensus
+      *and* the variant level. Consensus: 4.9-5.1x the wall clock with the alignment folded in,
+      4.1-8.0x less memory, and 13.5% over truth at one read per MIG against our 0.09% -- within a
+      tenth of a point of MIGEC 1.2.9's 13.6%, which is what a shared count-ratio lineage looks
+      like. Variants, on one reference plus five point variants at a known fraction: at 8 reads per
+      UMI the two are indistinguishable, and at **1.5 reads per UMI they separate 28x** with the
+      consensus quality matched to 5e-4 -- 142 calls of which 137 are false against 5 of 5 clean.
+      `assets/mageri.tsv`, `assets/mageri_variants.tsv`
+- [ ] `2026-migec-benchmark` repo and `isalgo/umi_data`. Cell Ranger is the one comparator still
+      unrun, and its only overlap is cell calling, which is OrdMag plus a knee by design
 - [x] ctDNA ground truth **located, not simulated** (2026-08-13): `PRJNA788522` (72 runs, cfDNA
       reference material at 0 / 0.125 / 0.25 / 1% VAF x 5/20/80 ng x 3.3/10/30x, three replicates)
       and `PRJNA507366` (28 runs, six polymerases plus 0.031% / 0.0625% VAF). Both carry a real
@@ -384,13 +391,32 @@ model has to use the evidence that survives at one read:
       `--min-reads 1` the 2-colour dark-G artifact is **additive to true positives** -- the 0.25%
       arm read 0.79% (0.25% + a 0.57% artifact floor). `--min-reads 3` takes specificity from 0% to
       100% at no cost to sensitivity. `assets/ctdna_minreads.tsv`, `docs/detection.rst`
-- [ ] The other three callers: **Mutect2, UMI-VarCal, UMIErrorCorrect** on the same arms, so the
-      comparison is caller-vs-caller on identical consensus input rather than migec-vs-published.
-      Note: the LoFreq result above is one caller's, and the artifact it exposed is a property of
-      the *consensus input*, not of LoFreq -- which is exactly why the others have to be run
-- [ ] Re-run the arms with adapter trimming or `-q 20`. Adapter read-through is the diagnosed cause
-      of the chr2 mismapping (87S52M at MAPQ 4-16, TruSeq adapter), but the fix is **diagnosed, not
-      measured**: nothing has been re-run with it applied
+- [x] **Mutect2 on the identical consensus BAM** (2026-08-14), `scripts/ctdna_callers.sbatch`. It
+      settled the question the LoFreq result could not: on the 0%-certified arm at `--min-reads 1`
+      five of Mutect2's ten positions are LoFreq's and seven of ten are `-> G`, so the artifact is
+      in the **consensus input**, not in one caller's threshold. Never: it needs
+      `--max-reads-per-alignment-start 0` -- the default 50 showed it 78-207 molecules where LoFreq
+      saw 4,282-15,895 on the same BAM, and it then reported ~1 call per sample and never the
+      hotspot. Matched at `--min-reads 3`, substitutions only, on the true negative: **Mutect2 0.67
+      calls per sample, LoFreq 2.00**; Mutect2 pays for it at 0.25%, where it finds the hotspot in
+      1 replicate of 3 against LoFreq's 3 of 3
+- [x] **UMIErrorCorrect end to end** (2026-08-14), `scripts/ctdna_umierrorcorrect.sbatch` --
+      pipeline against pipeline, since it aligns first and groups on *(position, UMI)*. Matched
+      group size, substitutions only, true negative: **7.67 calls per sample against migec +
+      LoFreq's 2.00**, at equal sensitivity except at 1% where it found the hotspot in 2 of 2
+      completed replicates and migec in 3 of 3. Never: score substitutions against substitutions --
+      56% of its PASS calls are deletions and migec emits no indels. Note: it crashed on one of the
+      twelve runs, `KeyError: "sequence '10' not present"`. Note: its 0%-arm spectrum is 9% `-> G`
+      against migec's 77%: the two pipelines do not fail the same way
+- [x] **Adapter trimming and the MAPQ floor, both measured and both useless** (2026-08-14),
+      `scripts/ctdna_trimming.sbatch`. `-q 20` raises the true-negative burden 10.0 -> 25.7 calls
+      per sample at `--min-reads 1` (the MAPQ 20 call set is a strict superset: 13 shared, 18
+      added, 16 of the 18 `-> G`); cutadapt raises the off-target molecule share 10.6% -> 13.0% and
+      the burden 10.0 -> 13.0, and costs 2% of molecules. Only `--min-reads 3` works: off-target
+      10.6% -> 0.7%, burden 10.0 -> 2.0
+- [ ] The last two rows: the **no-consensus baseline** (same reads, same aligner, same callers,
+      reads instead of molecules -- the row that says what collapsing was worth) and **UMI-VarCal**,
+      whose input convention is the UMI in the read *name*. Both running
 - [x] **MIGEC 1.2.9 head to head** (2026-08-14), `scripts/compare_migec_v1.py`. Same dialect, same
       sheet, same library, both pipelines end to end, `--min-count` matched -- v1 defaults to 5 and
       we default to 1, and v1 names its output `.t5.` for exactly that reason, so leaving each at
