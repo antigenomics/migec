@@ -74,6 +74,16 @@ date as they land.
 | Access | `aldan3 ls`, `aldan3 pull` (see `~/vcs/code/aldan3-client`) |
 | Provenance | experimental, unpublished |
 
+### Ageing cohort, 5'-RACE bulk TCR beta (Britanova et al., J Immunol 2014, doi:10.4049/jimmunol.1302064)
+
+| Item | Value |
+|---|---|
+| What | One HiSeq lane, ten donors multiplexed by a 4 nt sample tag, 149,588,907 read pairs, 16 nt UMI |
+| Layout | Taken from the lane's own metadata, never reconstructed from a preset: the tag length, the adapter and the UMI shape differ between lanes of the same cohort |
+| Provenance | experimental, published cohort; the raw reads are held internally and do not leave it |
+| Derived | `assets/shallow_repertoire.tsv` (per-donor correction and consensus summary), written up in `docs/validation.rst` |
+| Why | The real 1-3 reads/UMI library. Every shallow-regime claim was otherwise measured on simulated data or on a deep amplicon |
+
 **Never: Experiment 1 raw reads must not leave the cluster.** Only derived summaries (histograms,
 error-rate tables, consensus statistics) may be published or uploaded to HuggingFace.
 
