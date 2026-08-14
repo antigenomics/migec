@@ -5,7 +5,7 @@ fallback, because a fallback would make a failed C++ build look like a successfu
 surface forty minutes into a run.
 """
 
-__version__ = "2.3.0"  # keep in sync with pyproject.toml and include/migec/version.hpp
+__version__ = "2.4.0"  # keep in sync with pyproject.toml and include/migec/version.hpp
 
 from migec import _core
 from migec._core import (
