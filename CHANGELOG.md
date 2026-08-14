@@ -6,6 +6,12 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## 2.4.0 — 2026-08-14
 
+Note: the wheel smoke test lowercased the whole barcode-sheet line, sample id included, so
+`checkout` wrote `co/s1.fq.gz` and the next command asked for `co/S1.fq.gz`. That passes on macOS,
+whose filesystem is case-insensitive, and fails on Linux — and 2.4.0 is the first release whose
+publish run executed the script at all, so it failed there and nowhere else. The adapter is
+lowercased on its own now.
+
 **Nothing in the pipeline scales with the library any more**, and the comparisons the version
 number was waiting on have started landing: MIGEC 1.2.9, UMI-tools and fgbio are all run end to
 end and scored.
