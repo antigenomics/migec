@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 
 
 def run(
@@ -21,7 +21,19 @@ def run(
     max_reads: int = 200_000,
     umi_deviation: float = 0.18,
 ) -> dict:
-    """Profile `reads` and suggest a barcode pattern. Writes TSVs if `out_dir` is given."""
+    """Profile `reads` and suggest a barcode pattern. Writes TSVs if `out_dir` is given.
+
+    `reads` may be a BAM, SAM or CRAM. No `RX` is required -- the whole point of this stage is that
+    nothing is known about the layout yet -- and a paired file is profiled on mate 1, the same
+    convention as a paired FASTQ, which this stage also takes one mate at a time.
+    """
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, out_dir or Path.cwd(), need_rx=False) as (mate1, mate2):
+            summary = run(mate1, out_dir, cycles, max_reads, umi_deviation)
+        summary["input"] = str(reads) + ("#R1" if mate2 is not None else "")
+        if out_dir is not None:
+            (Path(out_dir) / "suggest.json").write_text(json.dumps(summary, indent=2, default=str))
+        return summary
     summary = _core.suggest(str(reads), cycles, max_reads, umi_deviation)
     summary["input"] = str(reads)
     if out_dir is not None:

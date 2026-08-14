@@ -1,15 +1,21 @@
-"""The subsample stage: build a smaller library that is still a library.
+"""The subsample stage: a smaller library that is still a library.
+
+Sampling READS is trivial and every toolkit does it. Sampling MOLECULES is not, because a
+molecule's reads are scattered through the file and nothing in a raw FASTQ says which they are --
+which is why this exists. It is what equalises molecule counts across a cohort sequenced to
+different depths, what a saturation curve is computed over, and what makes a test fixture behave
+like the run it came from.
 
 Never: Never a fraction of the reads. At four reads per molecule, ten thousand random reads give ten
 thousand molecules seen once each -- the MIG size distribution is gone and every consensus is a
-single read, so the fixture tests nothing it was built to test.
+single read, so the smaller library is not a smaller version of the same library.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 from migec.checkout import _bytes, _dur, _pct
 
 
@@ -20,13 +26,22 @@ def run(
     by_cell: bool = True,
     gzip_level: int = _core.GZIP_LEVEL,
 ) -> dict:
-    """Keep all the reads of `keep_percent` of the barcodes."""
+    """Keep all the reads of `keep_percent` of the barcodes.
+
+    `reads` may be a BAM, SAM or CRAM carrying `RX` (see `migec.bam`); a paired one is sampled on
+    mate 1.
+    """
     per_10k = round(keep_percent * 100)
     if not 1 <= per_10k <= 10000:
         raise ValueError(
             f"--keep {keep_percent} is {per_10k} ten-thousandths; it must be in 0.01..100"
         )
     Path(output).parent.mkdir(parents=True, exist_ok=True)
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, Path(output).parent) as (mate1, mate2):
+            summary = run(mate1, output, keep_percent, by_cell, gzip_level)
+        summary["input"] = str(reads) + ("#R1" if mate2 is not None else "")
+        return summary
     summary = _core.subsample(str(reads), str(output), per_10k, by_cell, gzip_level)
     summary["input"] = str(reads)
     summary["output"] = str(output)

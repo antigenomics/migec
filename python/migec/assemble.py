@@ -14,7 +14,7 @@ import math
 import shutil
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 from migec.buckets import mig_buckets as _mig_buckets
 from migec.checkout import _bytes, _dur, _pct
 
@@ -298,9 +298,28 @@ def run(
     with `.mig` buckets the pair is already in the record and `merge_mates` alone turns it on.
     Either way mate 2 is reverse-complemented and PLACED against mate 1, so a pair whose mates
     overlap becomes one consensus spanning the insert and a pair whose mates do not stays two.
+
+    `reads` may also be a BAM, SAM or CRAM whose records carry `RX` (see `migec.bam`). A paired
+    file supplies both mates, so `mate2` must not also be given: the merge would then be against
+    the wrong file and the mismatch would look like a library with no overlap.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, out) as (mate1, from_bam):
+            if from_bam is not None and mate2:
+                raise ValueError(
+                    f"{Path(reads).name} is paired and already carries mate 2, but --mate2 names "
+                    f"{mate2} as well. Give one or the other"
+                )
+            summary = run(
+                mate1, out_dir, sample_id, rt_floor, linkage_threshold, contig, fast,
+                from_bam or mate2, merge_mates, min_reads, gzip_level, threads, limit_reads,
+                limit_umis,
+            )
+        summary["input"] = str(reads)
+        (out / "assemble.json").write_text(json.dumps(summary, indent=2, default=str))
+        return summary
     estimate = None
     if isinstance(rt_floor, str):
         # `auto` costs a second assembly, deliberately. The consensus SEQUENCES do not depend on

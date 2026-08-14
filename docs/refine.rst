@@ -10,8 +10,10 @@ molecules there were**.
    migec refine out/S1.fq.gz -o ref/ --min-posterior 0.99      # correct less
    migec refine out/S1.fq.gz -o ref/ --no-payload --no-quality # what the count ratio alone does
 
-Input is a per-sample FASTQ from :doc:`checkout`; output is the same reads with the corrected
-barcode in ``RX`` and the original preserved in ``OX``, plus the barcode table.
+Input is a per-sample FASTQ from :doc:`checkout` -- or any FASTQ, BAM, SAM or CRAM whose records
+carry ``RX``, which is what an fgbio or Picard UMI pipeline writes
+(:doc:`Bring your own UMI <byo_umi>`). Output is the same reads with the corrected barcode in
+``RX`` and the original preserved in ``OX``, plus the barcode table.
 
 Or the ``.mig`` buckets ``checkout --mig`` wrote:
 

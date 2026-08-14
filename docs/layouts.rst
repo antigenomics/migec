@@ -5,6 +5,11 @@ There is exactly one thing migec has to be told, and everything after it -- corr
 the quality cap -- is the same three commands whatever the answer. Four ways to say it, in the
 order you should reach for them.
 
+If the barcode has already been extracted -- a capture, exome or ctDNA kit puts it in the index
+read, so it reaches you in the ``RX`` tag of a BAM rather than inside R1 -- then there is no layout
+to declare and ``checkout`` is not the stage you want. See
+:doc:`Bring your own UMI <byo_umi>`.
+
 1. A position
 -------------
 

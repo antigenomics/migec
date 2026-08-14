@@ -4,6 +4,28 @@ File formats
 This page is the contract between stages. It is frozen before the stages that use it are written,
 and ``tests/cpp/test_mig_record.cpp`` fails if any of it changes by accident.
 
+What a stage will read
+----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - format
+     - recognised by
+   * - FASTQ
+     - anything else. Plain or gzipped, decided by the first two bytes rather than the suffix,
+       because half the world writes gzipped data to a name ending ``.fastq``
+   * - ``.mig``
+     - the ``MIGB`` magic; ``refine`` and ``assemble`` only, as a file, a directory or a glob
+   * - BAM, SAM, CRAM
+     - ``BAM\1`` after inflating the first block, ``CRAM`` at byte 0, or a leading ``@HD``/``@SQ``.
+       Converted once with ``samtools`` into a temporary FASTQ inside the output directory, then
+       read as one — see :doc:`Bring your own UMI <byo_umi>`
+
+There is no ``--format`` flag and there will not be one: the file says what it is, and a flag that
+can disagree with the file is a flag that will.
+
 .. _mig-format:
 
 The ``.mig`` intermediate

@@ -6,6 +6,8 @@ from __future__ import annotations
 import gzip
 from collections import Counter
 
+import pytest
+
 from tests.synthetic._sim import SimConfig, simulate
 
 
@@ -89,3 +91,45 @@ def test_collisions_appear_when_the_umi_space_is_small(tmp_path):
     with open(info["truth_molecules"]) as fh:
         umis = Counter(line.split("\t")[2] for line in fh.readlines()[1:])
     assert max(umis.values()) > 1
+
+
+def test_variant_clones_are_one_reference_plus_point_variants(tmp_path):
+    """`variant_af` is what makes a variant CALLER comparable, so its truth has to be exact."""
+    cfg = SimConfig(n_molecules=4000, n_clones=4, coverage=5.0, seq_len=120,
+                    variant_af=0.05, seed=3)
+    info = simulate(cfg, tmp_path)
+
+    reference = "".join(
+        line.strip() for line in open(info["reference"]).read().splitlines()
+        if not line.startswith(">")
+    )
+    rows = [line.split("\t") for line in open(info["truth_variants"]).read().splitlines()[1:]]
+    assert len(rows) == info["n_variants"] == cfg.n_clones - 1
+
+    clones = {}
+    name = None
+    for line in open(info["clones"]).read().splitlines():
+        if line.startswith(">"):
+            name = line[1:]
+            clones[name] = ""
+        else:
+            clones[name] += line.strip()
+    assert clones["clone0"] == reference
+
+    for i, (chrom, pos, ref_base, alt, af) in enumerate(rows, start=1):
+        p = int(pos) - 1
+        assert chrom == "clone0"
+        assert reference[p] == ref_base            # the ref base is the reference's base
+        assert clones[f"clone{i}"][p] == alt       # and the variant clone carries the alt
+        # ...and differs from the reference nowhere else, or "the variant" would be plural.
+        assert sum(a != b for a, b in zip(clones[f"clone{i}"], reference)) == 1
+        assert float(af) == cfg.variant_af
+
+    # The molecules actually drawn follow the requested fraction, which is what a called allele
+    # fraction is compared against.
+    per_clone = Counter(
+        int(line.split("\t")[1])
+        for line in open(info["truth_molecules"]).read().splitlines()[1:]
+    )
+    for i in range(1, cfg.n_clones):
+        assert per_clone[i] / cfg.n_molecules == pytest.approx(cfg.variant_af, rel=0.3)

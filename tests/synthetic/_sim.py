@@ -68,6 +68,12 @@ class SimConfig:
     # `read_len` 0 means the whole payload, so the mates overlap completely.
     paired: bool = False
     read_len: int = 0
+    # Turn the clone set into a REFERENCE plus point variants of it, each at this allele fraction.
+    # 0 leaves the default: `n_clones` unrelated random sequences, which is a repertoire. Anything
+    # above 0 is the ctDNA shape -- one template, `n_clones - 1` single substitutions of it, each
+    # in `variant_af` of the molecules -- and it is what makes a VARIANT CALLER comparable, since
+    # a caller needs one reference and a known answer at known positions.
+    variant_af: float = 0.0
     truth: dict = field(default_factory=dict)
 
 
@@ -140,6 +146,10 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
     rng = random.Random(cfg.seed)
 
     clones = [_rand_seq(rng, cfg.seq_len) for _ in range(cfg.n_clones)]
+    variants: list[tuple[int, int, str, str]] = []   # clone, 0-based pos, ref base, alt base
+    clone_weights = None
+    if cfg.variant_af > 0.0:
+        clones, variants, clone_weights = _variant_clones(cfg, rng, clones[0])
     qual_char = chr(33 + cfg.mean_qual)
 
     reads_path = out / "reads.fq.gz"
@@ -156,6 +166,18 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         for i, seq in enumerate(clones):
             cf.write(f">clone{i}\n{seq}\n")
 
+    # With variants, a caller needs ONE reference and the answer at known positions. Both are
+    # written even though `clones.fa` holds the same sequence: pointing a caller at every variant
+    # clone as well would let each variant read align to its own reference and be called nothing.
+    reference = out / "reference.fa"
+    truth_variants = out / "truth_variants.tsv"
+    if variants:
+        reference.write_text(f">clone0\n{clones[0]}\n")
+        with open(truth_variants, "w") as vf:
+            vf.write("chrom\tpos\tref\talt\texpected_af\n")
+            for _, pos, ref_base, alt in variants:
+                vf.write(f"clone0\t{pos + 1}\t{ref_base}\t{alt}\t{cfg.variant_af:.6g}\n")
+
     n_reads = 0
     n_collisions = 0
     seen_umis: dict[str, int] = {}
@@ -168,7 +190,8 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         tm.write("molecule_id\tclone_id\tumi_true\tn_reads\trt_errors\tearly_pcr_errors\n")
 
         for mol in range(cfg.n_molecules):
-            clone = rng.randrange(cfg.n_clones)
+            clone = (rng.randrange(cfg.n_clones) if clone_weights is None
+                     else rng.choices(range(cfg.n_clones), weights=clone_weights, k=1)[0])
             umi = _draw_umi(rng, cfg.umi_len, cfg.umi_base_freqs)
             if umi in seen_umis:
                 n_collisions += 1
@@ -218,6 +241,9 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         "truth_molecules": str(truth_mols),
         "truth_consensus": str(truth_cons),
         "clones": str(truth_clones),
+        "reference": str(reference) if variants else "",
+        "truth_variants": str(truth_variants) if variants else "",
+        "n_variants": len(variants),
         "n_reads": n_reads,
         "n_molecules": cfg.n_molecules,
         "n_distinct_umis": len(seen_umis),
@@ -225,6 +251,36 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
         # Paste-ready barcode pattern for `migec checkout` on this corpus.
         "pattern": "N" * cfg.umi_len + cfg.adapter.lower(),
     }
+
+
+def _variant_clones(cfg: SimConfig, rng: random.Random, reference: str):
+    """One reference plus `n_clones - 1` single-substitution variants of it, each at `variant_af`.
+
+    Positions are spread evenly and kept 10 bases clear of both ends, because an aligner soft-clips
+    there and a variant nobody can align to is a measurement of the aligner rather than the caller.
+    """
+    n_var = cfg.n_clones - 1
+    if n_var < 1:
+        raise ValueError("variant_af needs n_clones >= 2: one reference and at least one variant")
+    total = cfg.variant_af * n_var
+    if not 0.0 < total < 1.0:
+        raise ValueError(
+            f"variant_af {cfg.variant_af} x {n_var} variants is {total:.3f} of the library; "
+            f"it has to leave room for the reference"
+        )
+    margin = 10
+    usable = cfg.seq_len - 2 * margin
+    if usable < n_var:
+        raise ValueError(f"{n_var} variants do not fit in {usable} usable positions")
+    clones, variants = [reference], []
+    for i in range(n_var):
+        pos = margin + (i * usable) // n_var
+        ref_base = reference[pos]
+        alt = rng.choice([b for b in BASES if b != ref_base])
+        clones.append(reference[:pos] + alt + reference[pos + 1:])
+        variants.append((i + 1, pos, ref_base, alt))
+    weights = [1.0 - total] + [cfg.variant_af] * n_var
+    return clones, variants, weights
 
 
 def _log_mu(mean: float, cv: float) -> float:

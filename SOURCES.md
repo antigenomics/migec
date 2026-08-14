@@ -17,9 +17,15 @@ are never conflated in a table row.
 | `assets/SRR1763769.mig.tsv`, `assets/assemble.coverage.tsv` | `isalgo/umi_data` CI fixture | derived | `migec refine ci/SRR1763769_umi0.5pct.fq.gz -o r/ && migec assemble r/CTRL.fq.gz -o a/` |
 | `assets/*.svg`, `assets/*.gp` | the tables beside them | derived | `migec plot assets/ -o assets/` |
 | `assets/ctdna_titration.tsv` (+ `_runs.tsv`) | 100 runs of `PRJNA788522` + `PRJNA507366` | derived (migec over experimental data) | `python scripts/sra_fetch.py get <runs> -o simsen/` then `python scripts/ctdna_titration.py --reads simsen/ --out ctdna/ --design design.tsv` |
-| `assets/ctdna_panel.bed` | inferred from coverage, 3 deepest `PRJNA788522` runs aligned to GRCh38 | **derived** | `job/infer_panel.sbatch` on aldan3: minimap2 -> `bedtools genomecov` above a depth floor -> `merge -d 50` -> named against Ensembl 110 |
-| `assets/ctdna_per_target.tsv` | per-TARGET molecule counts, 72 runs | **derived** | `job/per_site.sbatch` then `python scripts/ctdna_persite.py --molecules m.tsv --variants v.tsv --design d.tsv --out out/` |
-| `assets/ctdna_minreads.tsv` | calls at `--min-reads` 1/3/5, 12 runs x 4 certified arms | **derived** | `job/minreads.sbatch` on aldan3 |
+| `assets/ctdna_panel.bed` | inferred from coverage, 3 deepest `PRJNA788522` runs aligned to GRCh38 | **derived** | `sbatch scripts/ctdna_infer_panel.sbatch`: minimap2 -> `bedtools genomecov` above a depth floor -> `merge -d 50` -> named against Ensembl 110 |
+| `assets/ctdna_per_target.tsv` | per-TARGET molecule counts, 72 runs | **derived** | `sbatch scripts/ctdna_per_site.sbatch` then `python scripts/ctdna_persite.py --molecules m.tsv --variants v.tsv --design d.tsv --out out/` |
+| `assets/ctdna_minreads.tsv` | calls at `--min-reads` 1/3/5, 12 runs x 4 certified arms | **derived** | `sbatch scripts/ctdna_minreads.sbatch` |
+
+Note: the three `scripts/ctdna_*.sbatch` are the cluster half of the ctDNA work and are committed
+because a `Regenerate` cell that names a file nobody has is not provenance. They run on aldan3
+against `ROOT=/projects/tcr_bcr_rnaseq/migec_ctdna` and build their own micromamba environment,
+because the cluster's system python is 3.8 and migec needs >= 3.10; they install migec from PyPI
+rather than from source, which doubles as a check that the published Linux wheels work.
 
 Note: `ctdna_titration.tsv` is kept beside `ctdna_per_target.tsv` deliberately. The first divides a
 library total by an amplicon count inferred from consensus prefixes; the second counts molecules
@@ -97,7 +103,9 @@ Never: `scratch/spikein/S1_R2_2M.fq` on aldan3 is **corrupt past record 1,742,61
 | Duplex sequencing | SRA `SRR1799908`; primer patterns `NNNNNNNNNNNNtgact` / `agtcaNNNNNNNNNNNN` |
 | HIV protease amplicons | SRA `SRP052322`; patterns `NNNNNNNNNcagtttaacttttgggccatccattcc` / `ctatcggctcctgnnnn` |
 | Companion repo | https://github.com/mikessh/mageri-paper (error model PDFs, analysis scripts) |
-| Provenance | experimental |
+| Jar | `gh release download 1.1.1 --repo mikessh/mageri -p mageri.zip` (v1.1.1, 2016-12-20); runs on JDK 11 |
+| Head to head | `python scripts/compare_mageri.py --out out/ --jar mageri.jar --molecules 20000 --clones 200 --min-count 1` -> `assets/mageri.tsv` |
+| Provenance | experimental; `assets/mageri.tsv` is derived (both pipelines over one simulated library with known truth) |
 
 The patterns above are quoted verbatim from the paper's Methods and are directly reusable as
 `checkout` test cases.
@@ -232,6 +240,96 @@ PRJNA788522's floor, and it is the only public dataset here that varies the poly
 holding template and protocol fixed — which is the comparison `--rt-error auto` needs and the one
 McInerney 2014's published fidelities can be checked against.
 
+### MRD and duplex — the read-structure screen of 2026-08-14
+
+Two studies were proposed as the MRD and exome arms. Neither is usable **as deposited**, and both
+verdicts are from the data rather than from the methods section. Screening for a public substitute
+then found two TwinStrand Duplex Sequencing studies that did keep their tags. Every accession
+touched is listed, negatives included, so that the next screen does not repeat this one.
+
+| study | bioproject | runs | assay | UMI as deposited | verdict |
+|---|---|---|---|---|---|
+| `SRP475624` | `PRJNA1028782` | 234 | MAESTRO-Pool MRD, cfDNA + WGS, duplex UMI adapters | not checkable | controlled access, dbGaP `phs003447` |
+| `SRP578416` | `PRJNA1250480` | 8 | xGen AML capture panel, UMI adapters | absent | UMIs existed, SRA did not keep them |
+| `SRP598252` | `PRJNA1278818` | 82 | duplex capture, normal bladder | not checkable | controlled access, consent `GRU` |
+| `SRP613942` | `PRJNA1312025` | 51 | TwinStrand duplex capture, normal human skin | present, inline, both mates | **usable** |
+| `SRP677910` | `PRJNA1425166` | 12 | duplex, HEK293 LIG1 mutagenesis | present, inline, both mates | **usable** |
+| `SRP579806` | `PRJNA1252794` | 36 | duplex capture, retroviral and lentiviral vectors | present, inline, both mates, non-uniform | usable, second choice |
+
+| Item | Value |
+|---|---|
+| Provenance | experimental (SRA); every verdict below is derived |
+| Probe | `python scripts/sra_fetch.py probe <runs>` |
+| Peek | `curl -r 0-4000000 <ena fastq url>`, `gunzip -c`, then `migec suggest <peek>.fq --cycles 30` on **each mate separately** |
+
+**`SRP475624` — MAESTRO-Pool, controlled.** SRA study title: *MAESTRO-Pool enables highly parallel
+and specific mutation-enrichment sequencing for minimal residual disease detection in cohort
+studies* (submitting centre `NCI-PHS003447`; the paper is not cited here because it has not been
+retrieved). 9 melanoma patients, 98 plasma samples screened for 22,333 mutations, Kapa Hyper
+Prep with custom dual-index **duplex** UMI adapters from IDT, NovaSeq 6000, 215 Targeted-Capture
+runs plus 19 WGS, 26,613,420,959 spots, 959 GB. ENA answers `Protected file(s). Go to dbGap` for
+every run; the consent group is `DS-MSC-MDS`. It is the ideal MRD arm and it needs an approved
+dbGaP application before any of it can be fetched. Recorded here so the next screen does not
+rediscover it.
+
+**`SRP578416` — the UMIs existed and SRA dropped them.** Targeted DNA-Seq of human AML treated with
+TP-0903 (Ohio State), xGen DNA Lib Prep MC UNI kit, xGen AML Cancer Hybridization Panel plus a
+three-gene spike-in, NovaSeq 6000, 8 runs, 65,630,386 spots, 8.8 GB. The design description says
+"Picard Tools was used to perform UMI-consensus calling", so the library carried a UMI. It is not
+in the public record:
+
+- The submissions are **aligned BAMs** (`NCBI:align:db:alignment_sorted`, `bam-load.3.0.8`), and
+  `vdb-dump -T SEQUENCE -C LINKAGE_GROUP` is **empty** — that is where an `RX` would have survived.
+- Read names are rewritten to ordinals (`NAME` = `1`, `2`, `3`), so nothing is hiding in the header.
+- Spots hold **two** biological reads and no technical read; per-cycle composition has no UMI run in
+  either mate, and the mates of a pair overlap as plain genomic sequence (one fragment: 161 bp, R1
+  `[0,150)`, R2 `[11,161)`).
+- The original `U_21_0148.bam` is listed on `s3://sra-pub-src-18` with `access_type="Use Cloud Data
+  Delivery"` and `free_egress="-"`. Anonymous `GetObject` returns 403; `--request-payer requester`
+  returns `AccessDenied` on `GetObject`, `HeadObject` and `ListObjectsV2`; and
+  `prefetch --type all` resolves only the 1,339 MB normalised run. **NCBI Cloud Data Delivery**, an
+  account-bound request, is the only remaining route.
+
+This is the same failure mode as the Maruzani entry above, and it is the case that motivated BAM
+input: had the pre-consensus BAM been deposited rather than an SRA-normalised run, it would have
+been a one-command migec input.
+
+**`SRP613942` — Mutomics: mutations in normal human skin.** 51 runs, 7,048,584,922 read pairs,
+988.2 GB, NovaSeq 6000, 2x151. "Library prepped via targeted capture using custom probe panel from
+TwinStrand Biosciences and Duplex Sequencing kit". Sun-shielded against sun-exposed skin, blood and
+saliva, with a UV dose series (300 / 1000 J/m2).
+
+**`SRP677910` — HEK293 LIG1 WT against K845N.** 12 runs, 3,768,336,083 read pairs, 501.7 GB,
+NovaSeq X Plus, 2x151. Duplex sequencing of mutation frequency after menadione at 0 / 8 / 20 uM,
+48 h recovery, two replicates per cell. The smaller of the two and the one with a dose-response
+ground truth, so it is the first target.
+
+Both carry the same recoverable layout, read off the data with no knowledge of the kit: an **8 nt
+inline tag followed by a fixed `T`, on both mates** — `migec suggest` calls cycles 0-7 UMI and
+cycle 8 variable, and cycle 8 is `T` in 77.8% of `SRP613942` reads and 80.4% of `SRP677910` reads
+against 4.4-8.5% for the other three bases. In migec's grammar that is `^NNNNNNNN.` as master and
+the same as slave, which is the `duplex` preset's shape at this kit's lengths. Note: cycle 0 is
+semi-degenerate by design (T at 0.09 against C at 0.37), which is a property of the TwinStrand
+adapter and not a defect — `checkout` measures the effective barcode length rather than assuming
+`4^L`.
+
+Never: **these give a single-strand consensus, not a duplex one.** The two strands of a molecule
+carry the tag pair swapped, and migec concatenates master and slave into one 16 nt identifier, so
+the two strands are two different UMIs and are consensed separately. That is the correct behaviour
+for this codebase (`docs/roadmap.rst`, "deliberately not doing"), and it is also what makes these
+studies a *measurement*: TwinStrand's own duplex calls are the comparator for what single-strand
+consensus does and does not remove.
+
+**`SRP579806`** (quantifying the mutational landscape of retroviral and lentiviral vectors in gene
+therapy patients, Duplex Sequencing library prep and ADA hybridization probe capture, NovaSeq X
+Plus, 2x150, 36 runs) also carries an inline tag on both mates, but the prefix distribution is
+strongly non-uniform (`TTGCGAAG` alone takes 3 of 8 sampled reads) and cycles 5-7 are only partly
+constant, so the tag boundary is not clean from composition alone. Second choice.
+
+**`SRP598252`** (somatic mutation in normal bladder, duplex sequencing over a bladder-cancer gene
+panel, 82 runs) is controlled under consent `GRU`: ENA answers `Protected file(s). Go to dbGap`,
+and `fastq-dump` exits 3.
+
 ### Calib (github.com/vpc-ccg/calib)
 
 | Item | Value |
@@ -296,6 +394,16 @@ McInerney 2014's published fidelities can be checked against.
 | Regenerate | `python scripts/compare_migec_v1.py --out DIR --jar migec-1.2.9.jar --molecules 20000 --clones 200 --coverage 8 --min-count {1,5} --tsv out.tsv` |
 | Provenance | derived (computed) |
 
+### `assets/mageri.tsv`
+
+| Item | Value |
+|---|---|
+| What | consensuses, exactness, wall clock and peak RSS for MAGERI 1.1.1 and migec 2 at matched MIG-size thresholds, one row per (tool, min_count) |
+| Regenerate | `for mc in 1 2 5; do python scripts/compare_mageri.py --out DIR$mc --jar mageri.jar --molecules 20000 --clones 200 --min-count $mc --tsv out_$mc.tsv; done`, then concatenate |
+| Never | MAGERI's threshold is `forceOverseq`/`defaultOverseq` in its preset XML, not a flag. The script rewrites the exported preset and then reads back the threshold MAGERI REPORTS it used, refusing to score if they differ |
+| Note | the `migec-2+minimap2` row folds `minimap2 -ax sr -y` onto the same reference into migec's clock, because MAGERI aligns as part of its run. It costs 0.05 s of 0.35 |
+| Provenance | derived (computed) |
+
 ### `assets/collision_split.tsv`
 
 | Item | Value |
@@ -341,7 +449,7 @@ taken from a vendor file.
 | Annotation | `Homo_sapiens.GRCh38.110.chr.gtf` (1.46 GB), Ensembl 110 |
 | Note: contig naming | **Ensembl style — `>1`, not `>chr1`.** Every BED, region string and tool must match, or it silently intersects nothing |
 | Note: existing indices | `bwamem2_index/` is **empty**, and the `.bwameth.c2t.*` index is bisulfite-converted and unusable for ordinary alignment. Build a minimap2 index |
-| Panel | derived: align the consensus, `bedtools genomecov` above a depth floor, `merge -d 50`, then name the intervals against the GTF. `scripts/`-adjacent job at `/projects/tcr_bcr_rnaseq/migec_ctdna/job/` |
+| Panel | derived: align the consensus, `bedtools genomecov` above a depth floor, `merge -d 50`, then name the intervals against the GTF. `scripts/ctdna_infer_panel.sbatch` |
 | Provenance | experimental (Ensembl reference); the inferred panel is **derived** |
 
 **Why inferred rather than vendor-supplied:** the amplicon count in `assets/ctdna_titration.tsv`

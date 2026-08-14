@@ -10,6 +10,27 @@ A smaller library that is still a library.
 Keeps **all the reads of a fraction of the barcodes**, selected by hashing. One streaming pass, no
 sort, no memory.
 
+What it is for
+--------------
+
+Sampling *reads* is trivial — ``seqtk sample``, ``head``, an awk one-liner. Sampling **molecules**
+is not, because the reads of one molecule are scattered through the file and nothing in a raw FASTQ
+says which they are. That is the whole job:
+
+* **Equalise molecule counts across samples.** A cohort sequenced to different depths cannot be
+  compared on anything that scales with molecules -- diversity, clonality, a per-target count --
+  until every sample holds the same number. Down to the smallest sample's count, by molecule.
+* **Saturation and rarefaction curves.** How many molecules would another lane buy? The answer is a
+  curve over *molecule* fractions, and each point has to be a real library with its MIG size
+  distribution intact, not a thinned read file.
+* **Cheap iteration on a big run.** 1% of the barcodes with all of their reads runs in seconds and
+  behaves like the library, so a pattern, a threshold or a whole pipeline can be checked before
+  committing a lane to it.
+* **Test fixtures**, which is the same property used for a different purpose.
+
+The selection is deterministic and nested, so a curve computed at 1, 5, 10 and 50% is computed on
+subsets of one another rather than on four independent draws.
+
 Why not a fraction of the reads
 -------------------------------
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from migec import _core
+from migec import _core, bam
 from migec.buckets import mig_buckets
 from migec.checkout import _bytes, _dur, _pct
 
@@ -40,9 +40,24 @@ def run(
     `<sample>.barcodes.tsv`: a `.mig` record has no room for the pre-correction barcode the way a
     FASTQ comment has `OX:Z:`, and the table carries it one row per barcode instead of once per
     read.
+
+    `reads` may also be a BAM, SAM or CRAM whose records carry `RX` -- what an fgbio, Picard or
+    xGen pipeline hands you when the UMI came from the index read. It is converted once (see
+    `migec.bam`); a paired file is refined on **mate 1**, which is the mate `checkout` writes the
+    barcode into, and the summary says so.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    if bam.is_alignment(reads):
+        with bam.as_fastq(reads, out) as (mate1, mate2):
+            summary = run(
+                mate1, out_dir, sample_id, use_quality, use_payload, payload_width, min_posterior,
+                expect_cells, cell_whitelist, min_whitelist_posterior, target_fdr, gzip_level,
+                threads, limit_reads, limit_umis, table_budget_bytes,
+            )
+        summary["input"] = str(reads) + ("#R1" if mate2 is not None else "")
+        (out / "refine.json").write_text(json.dumps(summary, indent=2, default=str))
+        return summary
     mig_inputs = mig_buckets(reads)
     summary = _core.refine(
         "" if mig_inputs else str(reads), str(out), sample_id, use_quality, use_payload,

@@ -50,6 +50,17 @@ again. Nothing errors; the molecule count just quietly drops.
    -- every record already is a family -- so a ``--min-family-size 3`` filter discards the entire
    library and reports zero variants without an error.
 
+.. warning::
+
+   Never: **turn a caller's downsampling off before you run it on an amplicon consensus.** Mutect2
+   defaults to ``--max-reads-per-alignment-start 50``, and on a panel every molecule starts at the
+   same coordinate -- so on the certified ctDNA arms it saw **78-207 molecules where LoFreq saw
+   4,282-15,895 on the identical BAM**. A 1% variant was then supported by one or two molecules and
+   it reported about one call per sample, never the certified hotspot. That reads as "Mutect2
+   cannot do this" and is really "Mutect2 was shown 1.5% of the evidence". Pass
+   ``--max-reads-per-alignment-start 0``. The general form of the trap: a default tuned for
+   whole-genome reads, applied to records that are already molecules.
+
 What to run
 -----------
 

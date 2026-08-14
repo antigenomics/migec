@@ -599,6 +599,49 @@ rebuild the old tag.
   v1 names its output `.t5.` for exactly that reason, so leaving each at its own default compares
   defaults and credits us with recovering molecules v1 was told to discard. `assets/migec_v1.tsv`,
   `docs/validation.rst`. Note: the jar is `gh release download 1.2.9`, and it runs on JDK 11.
+- **MAGERI 1.1.1 head to head (2026-08-14).** `scripts/compare_mageri.py`. Consensus, one machine:
+  4.9-5.1x the wall clock with minimap2 + sort folded into our row, 4.1-8.0x less memory (the
+  range is the JVM's -- 1,146 to 2,246 MB on the same input against our 279-281 MB), and at one
+  read per MIG 22,707 consensuses for 20,000 molecules, **13.5% over, within a tenth of a point of
+  v1's 13.6%**, against our 0.09%. Never: **the threshold is `forceOverseq`/`defaultOverseq` in a
+  preset XML, not a flag** -- the script rewrites the exported preset and then reads back the
+  threshold MAGERI *reports*, refusing to score if they differ. Same trap as v1's `-m 5`.
+- **The MAGERI comparison goes to the VARIANT level, and that is where it separates.** The
+  simulator grew `variant_af`: one reference plus point variants at a known fraction, the ctDNA
+  shape, `truth_variants.tsv` + `reference.fa`. Never: **8 reads/UMI does not discriminate** --
+  both are 5/5 with no false positive at 1% and 0.1%. At **1.5 reads/UMI they separate 28x and it
+  is the CALLING, not the collapsing**: both emit the same 20,170 consensuses at the same accuracy
+  (0.8990 vs 0.8985 exactly a template), and on that matched input MAGERI reports 142 variants of
+  which **137 are at positions nothing was injected at**, LoFreq on our consensus reports 5 and is
+  right about all. At 0.1% MAGERI buys 4 extra true positives with 137 false ones, PPV 3.5%.
+  `assets/mageri_variants.tsv`, `scripts/compare_mageri.sbatch` (LoFreq lives on aldan3).
+- **BAM, SAM and CRAM are inputs now (2026-08-14).** `python/migec/bam.py`: format from the file's
+  magic, never the suffix; `samtools` converts once into a temp FASTQ inside the output directory.
+  Motivating case: on a capture/exome/ctDNA/MRD kit the UMI is on the INDEX read, so `checkout` has
+  nothing to find and the user has an fgbio/Picard BAM with `RX` -- which `refine`/`assemble` could
+  always read from a comment and migec could not open. Never: **no htslib** (`project/design-io-interop.md`
+  ratified it out) and **not a FIFO** -- refine opens its input three times in one call and
+  assemble sizes its partition from `file_size`, which on a pipe silently under-partitions. Never:
+  **on an ALIGNED file the conversion collates first** (`samtools fastq -1/-2` pairs by adjacency;
+  assemble matches mates by position, so a coordinate-sorted BAM would consense the wrong pair);
+  an unaligned BAM skips collate and keeps its record order, and `@SQ` decides. Never: **no `RX`
+  is refused by name** in refine/assemble/subsample, because otherwise the run "succeeds" with zero
+  molecules. `docs/byo_umi.rst`.
+- **The two studies proposed as the MRD and exome arms are both unusable as deposited
+  (2026-08-14), and the screen found substitutes.** `SRP475624` (MAESTRO-Pool, duplex UMI, 234
+  runs) is dbGaP `phs003447`. `SRP578416` (xGen AML capture) HAD UMIs -- its methods say Picard
+  called consensuses -- and SRA dropped them: aligned-BAM submission, `LINKAGE_GROUP` empty, names
+  rewritten to ordinals, two biological reads, no UMI run in either mate's composition. The
+  original BAM needs NCBI Cloud Data Delivery: anonymous S3 403, requester-pays AccessDenied,
+  `prefetch --type all` offers only the normalised run. Substitutes found by screening read
+  structure: **`SRP613942`** (TwinStrand duplex, normal human skin, 51 runs, 988 GB) and
+  **`SRP677910`** (duplex, HEK293 LIG1, 12 runs, 502 GB), both an **8 nt inline tag then a fixed
+  `T` on BOTH mates**. Note: those give a SINGLE-STRAND consensus -- the strands carry the tag pair
+  swapped, so they are two different UMIs here, which is what makes TwinStrand's own duplex calls
+  the comparator rather than the ground truth. Every accession probed is in `SOURCES.md`,
+  negatives included.
+- **The cluster jobs `SOURCES.md` cited are committed** as `scripts/ctdna_{infer_panel,per_site,minreads}.sbatch`.
+  A `Regenerate` cell naming a file nobody has is not provenance.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
   1. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.

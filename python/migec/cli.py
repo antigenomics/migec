@@ -6,7 +6,7 @@ Five pipeline commands, and that is the whole surface:
     suggest     infer where the UMI/primer/cell barcode actually is in the reads
     refine      estimate error rates, correct barcodes, write QC tables and plots
     assemble    build consensus sequences per molecule, write FASTQ
-    subsample   take N whole UMIs (with all their reads) to make an example fixture
+    subsample   keep a fraction of the MOLECULES, with all of their reads
 
 plus `info` and `sheet`, which read no data and produce no pipeline output.
 
@@ -34,7 +34,7 @@ app = typer.Typer(
 _LIMIT_READ_HELP = (
     "Stop after this many input reads. A smoke test on a big run -- never a sample: the first N "
     "reads of a FASTQ are one corner of one flowcell, so nothing measured under a limit describes "
-    "the library. Use `migec subsample` when you want a fixture."
+    "the library. Use `migec subsample` when you want a smaller library rather than a shorter file."
 )
 _LIMIT_UMI_HELP = (
     "Stop once this many distinct barcodes have been seen. Same warning as --limit-read: these "
@@ -54,7 +54,11 @@ def info() -> None:
 
 @app.command()
 def checkout(
-    reads: Path = typer.Argument(..., help="Input FASTQ (R1), optionally gzipped."),
+    reads: Path = typer.Argument(
+        ...,
+        help="Input FASTQ (R1), optionally gzipped, or an unaligned BAM/SAM/CRAM -- a paired one "
+        "supplies both mates on its own.",
+    ),
     reads2: Optional[Path] = typer.Argument(
         None,
         help="Second mate. When given, the tag is looked for in either mate and the pair is "
@@ -275,7 +279,10 @@ def plot(
 
 @app.command()
 def suggest(
-    reads: Path = typer.Argument(..., help="FASTQ to profile. For paired data try both mates."),
+    reads: Path = typer.Argument(
+        ...,
+        help="FASTQ or BAM/SAM/CRAM to profile. For paired data try both mates.",
+    ),
     out_dir: Optional[Path] = typer.Option(
         None, "--out", "-o", help="Write suggest.cycles.tsv, suggest.segments.tsv, suggest.json."
     ),
@@ -301,7 +308,8 @@ def suggest(
 def refine(
     reads: Path = typer.Argument(
         ...,
-        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        help="A per-sample FASTQ or BAM/SAM/CRAM whose records carry RX -- `migec checkout` writes "
+        "one, and so does any fgbio/Picard UMI pipeline. Or the `.mig` buckets that "
         "`checkout --mig` wrote, given as a directory or as one bucket file, in which case refine "
         "writes buckets back and `migec assemble` takes them straight from here.",
     ),
@@ -386,7 +394,8 @@ def refine(
 def assemble(
     reads: Path = typer.Argument(
         ...,
-        help="A per-sample FASTQ written by `migec checkout` -- or the `.mig` buckets that "
+        help="A per-sample FASTQ or BAM/SAM/CRAM whose records carry RX -- `migec checkout` writes "
+        "one, and so does any fgbio/Picard UMI pipeline. Or the `.mig` buckets that "
         "`checkout --mig` wrote, given as a directory or as one bucket file, in which case the "
         "partition pass is skipped because it has already been done.",
     ),
@@ -491,23 +500,23 @@ def assemble(
 
 @app.command()
 def subsample(
-    reads: Path = typer.Argument(..., help="A FASTQ carrying RX (and CB) tags."),
+    reads: Path = typer.Argument(..., help="A FASTQ or BAM/SAM/CRAM carrying RX (and CB) tags."),
     output: Path = typer.Option(..., "--out", "-o", help="Output FASTQ; .gz is honoured."),
     keep: float = typer.Option(
         1.0,
         "--keep",
         help="Percent of BARCODES to keep, with all of their reads. Never a percent of the reads: "
         "sampling reads gives one read per molecule and destroys the MIG size distribution, which "
-        "is the one thing a UMI fixture exists to preserve.",
+        "is the one thing that makes the result a smaller version of the same library.",
     ),
     by_umi_only: bool = typer.Option(
         False,
         "--by-umi-only",
-        help="Sample molecules rather than whole cells. Off by default, because a fixture of "
-        "thousands of cells holding one molecule each is the same mistake as sampling reads.",
+        help="Sample molecules rather than whole cells. Off by default, because thousands of "
+        "cells holding one molecule each is the same mistake as sampling reads.",
     ),
 ) -> None:
-    """Take all the reads of a fraction of the barcodes."""
+    """Keep all the reads of a fraction of the molecules -- equalise depth, or build a fixture."""
     from migec.subsample import format_report, run
 
     summary = run(reads, output, keep_percent=keep, by_cell=not by_umi_only)
