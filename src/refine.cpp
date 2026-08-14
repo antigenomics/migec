@@ -19,19 +19,6 @@ namespace migec {
 
 namespace {
 
-std::string_view tag_value(std::string_view comment, std::string_view key) {
-    size_t pos = 0;
-    while (pos <= comment.size()) {
-        const size_t end = std::min(comment.find('\t', pos), comment.size());
-        const std::string_view field = comment.substr(pos, end - pos);
-        if (field.size() > key.size() && field.compare(0, key.size(), key) == 0) {
-            return field.substr(key.size());
-        }
-        pos = end + 1;
-    }
-    return {};
-}
-
 // The molecule's whole key: cell barcode then UMI, so that the same UMI in two cells is two
 // keys. `cell` is empty on a bulk library and the key is just the UMI.
 uint64_t pack_key(std::string_view cell, std::string_view umi) {

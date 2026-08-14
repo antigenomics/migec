@@ -28,6 +28,19 @@ app = typer.Typer(
     help="UMI barcode extraction, correction and consensus assembly.",
 )
 
+# The two intake limits read the same on every stage that has them, so they are worded once. A
+# per-command copy is a warning that drifts: three copies, and the one a user happens to read is
+# the one nobody updated.
+_LIMIT_READ_HELP = (
+    "Stop after this many input reads. A smoke test on a big run -- never a sample: the first N "
+    "reads of a FASTQ are one corner of one flowcell, so nothing measured under a limit describes "
+    "the library. Use `migec subsample` when you want a fixture."
+)
+_LIMIT_UMI_HELP = (
+    "Stop once this many distinct barcodes have been seen. Same warning as --limit-read: these "
+    "are the barcodes that happen to appear first, not a sample of them."
+)
+
 
 @app.command()
 def info() -> None:
@@ -115,9 +128,7 @@ def checkout(
     limit_read: int = typer.Option(
         0,
         "--limit-read",
-        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
-        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
-        "limit describes the library. Use `migec subsample` when you want a fixture.",
+        help=_LIMIT_READ_HELP,
     ),
     mig: bool = typer.Option(
         False,
@@ -335,15 +346,12 @@ def refine(
     limit_read: int = typer.Option(
         0,
         "--limit-read",
-        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
-        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
-        "limit describes the library. Use `migec subsample` when you want a fixture.",
+        help=_LIMIT_READ_HELP,
     ),
     limit_umi: int = typer.Option(
         0,
         "--limit-umi",
-        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
-        "these are the barcodes that happen to appear first, not a sample of them.",
+        help=_LIMIT_UMI_HELP,
     ),
     no_quality: bool = typer.Option(
         False, "--no-quality", help="Ignore the barcode's own base quality (QX)."
@@ -443,15 +451,12 @@ def assemble(
     limit_read: int = typer.Option(
         0,
         "--limit-read",
-        help="Stop after this many input reads. A smoke test on a big run -- never a sample: the "
-        "first N reads of a FASTQ are one corner of one flowcell, so nothing measured under a "
-        "limit describes the library. Use `migec subsample` when you want a fixture.",
+        help=_LIMIT_READ_HELP,
     ),
     limit_umi: int = typer.Option(
         0,
         "--limit-umi",
-        help="Stop once this many distinct barcodes have been seen. Same warning as --limit-read: "
-        "these are the barcodes that happen to appear first, not a sample of them.",
+        help=_LIMIT_UMI_HELP,
     ),
     min_reads: int = typer.Option(
         1,

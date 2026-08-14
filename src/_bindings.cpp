@@ -912,7 +912,6 @@ PYBIND11_MODULE(_core, m) {
 
     m.def("peak_rss_bytes", &peak_rss_bytes,
           "Peak resident set size of this process in bytes, 0 if the platform will not say.");
-    m.def("hardware_threads", &hardware_threads);
 
     m.def(
         "match_pattern",
