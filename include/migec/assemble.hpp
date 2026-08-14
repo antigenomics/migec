@@ -80,6 +80,15 @@ struct AssembleRequest {
     // the only thing that pass builds. One sample's buckets, never two samples' -- the sample id
     // is a property of the file and assemble is a per-sample stage.
     std::vector<std::string> mig_inputs;
+    // The other mate of `input`, matched by position -- checkout's `<sample>_R2.fq.gz`. Only the
+    // sequence is taken: the barcode, the sample and the read name all come from mate 1, which is
+    // the mate checkout anchored its pattern on.
+    std::string mate_input;
+    // Place mate 2 against mate 1 and consense the pair as one molecule. Implies `consensus.contig`
+    // -- the mates start at different bases of the insert, so without placement they would be
+    // consensed on top of each other. Never: a pair whose mates do not overlap stays TWO contigs.
+    // Bridging them would assert the bases between the mates, which no read covers.
+    bool merge_mates = false;
     std::string output_dir;
     std::string sample_id;   // taken from the BC tag when empty
     ConsensusParams consensus;

@@ -71,6 +71,13 @@ struct Resident {
     uint64_t umi;
     uint64_t src_index;
     std::string seq, qual;
+    // Mate 2, and only when `--merge-mates` asked for it: empty otherwise, so a single-end run
+    // pays nothing. Stored REVERSE-COMPLEMENTED, once, at load -- an Illumina pair is FR by
+    // construction, and placing mate 2 against mate 1 without turning it round would find no seed
+    // and leave every pair as two contigs. Note: this is the one place assemble re-orients
+    // anything, it happens because a flag asked for it, and it happens before the pair reaches
+    // the consensus rather than inside it.
+    std::string seq2, qual2;
 
     // Cell first, so a cell's molecules are contiguous. The identity of a molecule is the WHOLE
     // key: the same UMI in two cells, or in two samples, is two molecules and always was -- a
@@ -91,9 +98,20 @@ void bin(std::vector<uint64_t>& histogram, uint64_t n) {
 
 }  // namespace
 
-AssembleStats assemble(const AssembleRequest& request) {
+AssembleStats assemble(const AssembleRequest& in) {
     Stopwatch clock;
     AssembleStats stats;
+    // Validated here, on the caller's thread, where the mistake is still attributable to the flag
+    // that made it rather than to a read on a worker.
+    if (!in.mate_input.empty() && !in.mig_inputs.empty()) {
+        throw MigecError("assemble: --mate2 cannot be given with `.mig` buckets -- a bucket record "
+                         "already carries both mates. Use --merge-mates alone");
+    }
+    if (!in.mate_input.empty() && !in.merge_mates) {
+        throw MigecError("assemble: --mate2 was given without --merge-mates, which would read the "
+                         "second file and consense mate 1 alone");
+    }
+    const AssembleRequest& request = in;
     stats.sample_id = request.sample_id;
 
     std::filesystem::path out_dir(request.output_dir);
@@ -144,6 +162,13 @@ AssembleStats assemble(const AssembleRequest& request) {
             if (!bucket_paths[h.bucket_index].empty()) {
                 throw MigecError("assemble: bucket " + std::to_string(h.bucket_index) +
                                  " was given twice ('" + path + "')");
+            }
+            // Never: refused rather than quietly consensing mate 1 alone. A run asked to merge
+            // and given single-end buckets would report molecules covering half the insert, and
+            // nothing in the output would say which half was missing.
+            if (request.merge_mates && !h.paired) {
+                throw MigecError("assemble: --merge-mates was asked for but '" + path +
+                                 "' holds single-end records. Run `checkout` with both mates");
             }
             bucket_paths[h.bucket_index] = path;
         }
@@ -216,11 +241,18 @@ AssembleStats assemble(const AssembleRequest& request) {
         // record, so a fresh chunk costs 4 x kChunkReads allocations and the reader spends its time
         // in malloc rather than in inflate. `assign` reuses the capacity a previous chunk left.
         std::vector<FastqOwned> chunk(kChunkReads);
+        // Mate 2, read in lockstep with mate 1 and stored in the same record. Empty and untouched
+        // without `--mate2`, so a single-end run allocates nothing here.
+        std::vector<FastqOwned> mates(request.mate_input.empty() ? 0 : kChunkReads);
         std::vector<Parsed> parsed(kChunkReads);
         size_t held = 0;
 
         FastqReader reader(request.input);
-        FastqRecord rec;
+        std::unique_ptr<FastqReader> mate_reader;
+        if (!request.mate_input.empty()) {
+            mate_reader = std::make_unique<FastqReader>(request.mate_input);
+        }
+        FastqRecord rec, mate_rec;
         uint64_t index = 0;
         IntakeLimit limit = request.limit;
         bool eof = false, stopped = false;
@@ -228,11 +260,26 @@ AssembleStats assemble(const AssembleRequest& request) {
         while (!eof && !stopped) {
             held = 0;
             while (held < kChunkReads && reader.next(rec)) {
-                FastqOwned& slot = chunk[held++];
+                FastqOwned& slot = chunk[held];
                 slot.name.assign(rec.name);
                 slot.comment.assign(rec.comment);
                 slot.seq.assign(rec.seq);
                 slot.qual.assign(rec.qual);
+                if (mate_reader) {
+                    // Never: the mates are matched by POSITION, which is the contract checkout's
+                    // `_R1`/`_R2` output keeps. A file that runs out early is two different runs,
+                    // not a pair, and pairing what is left by position would attach one molecule's
+                    // mate to another's -- silently, and with a consensus that looks fine.
+                    if (!mate_reader->next(mate_rec)) {
+                        throw MigecError("assemble: --mate2 ended before the first file did, at "
+                                         "read " + std::to_string(held + 1) + " of this chunk -- "
+                                         "these are not two mates of one run");
+                    }
+                    FastqOwned& m = mates[held];
+                    m.seq.assign(mate_rec.seq);
+                    m.qual.assign(mate_rec.qual);
+                }
+                ++held;
             }
             if (held < kChunkReads) eof = true;
             if (held == 0) break;
@@ -250,7 +297,8 @@ AssembleStats assemble(const AssembleRequest& request) {
                 bool has_n = false, cell_has_n = false;
                 p.umi_key = pack_barcode(umi, &has_n);
                 p.cell_key = cell.empty() ? 0 : pack_barcode(cell, &cell_has_n);
-                p.flags = static_cast<uint16_t>(kSingleEnd | (has_n ? kUmiHasN : 0) |
+                p.flags = static_cast<uint16_t>((mates.empty() ? kSingleEnd : 0) |
+                                                (has_n ? kUmiHasN : 0) |
                                                 (cell_has_n ? kCellHasN : 0));
                 // Partition on the cell when there is one: every read of a cell then lands in one
                 // bucket, which is what makes a per-cell scope local. Without cells the UMI is the
@@ -311,7 +359,7 @@ AssembleStats assemble(const AssembleRequest& request) {
                 header.cell_len = static_cast<uint8_t>(stats.cell_length);
                 header.bucket_index = static_cast<uint8_t>(b);
                 header.bucket_bits = static_cast<uint8_t>(bits);
-                header.paired = false;
+                header.paired = !request.mate_input.empty();
                 header.sample_id = stats.sample_id;
                 buckets[b].path = bucket_paths[b];
                 buckets[b].writer =
@@ -330,9 +378,19 @@ AssembleStats assemble(const AssembleRequest& request) {
                     out.flags = p.flags;
                     out.seq1 = chunk[i].seq;
                     out.qual1 = chunk[i].qual;
+                    if (!mates.empty()) {
+                        out.seq2 = mates[i].seq;
+                        out.qual2 = mates[i].qual;
+                    }
                     buckets[p.bucket].writer->write(out);
                 }
             });
+        }
+        // The other direction of the same check: a longer mate 2 is also two runs rather than one
+        // pair. Not checked under a limit, where stopping early is the point.
+        if (mate_reader && !stopped && mate_reader->next(mate_rec)) {
+            throw MigecError("assemble: the first file ended before --mate2 did -- these are not "
+                             "two mates of one run");
         }
         for (Bucket& b : buckets) {
             if (b.writer) b.writer->close();
@@ -416,7 +474,14 @@ AssembleStats assemble(const AssembleRequest& request) {
         std::vector<ConsensusRead> reads;
         reads.reserve(used);
         for (size_t i = 0; i < used; ++i) reads.push_back({group[i].seq, group[i].qual});
-        const std::vector<Consensus> molecules = assemble_group(reads, request.consensus);
+        std::vector<ConsensusRead> mates;
+        if (request.merge_mates) {
+            mates.reserve(used);
+            for (size_t i = 0; i < used; ++i) mates.push_back({group[i].seq2, group[i].qual2});
+        }
+        const std::vector<Consensus> molecules =
+            request.merge_mates ? assemble_pairs(reads, mates, request.consensus)
+                                : assemble_group(reads, request.consensus);
         const uint32_t components = molecules.empty() ? 1 : molecules[0].components;
         if (components > 1) { ++out.groups_fragmented; out.contigs += components; }
         if (molecules.size() > components) ++out.groups_split;
@@ -476,7 +541,12 @@ AssembleStats assemble(const AssembleRequest& request) {
             MigRecord rec;
             while (reader.next(rec)) {
                 records.push_back({rec.cell, rec.umi, rec.src_index, std::string(rec.seq1),
-                                   std::string(rec.qual1)});
+                                   std::string(rec.qual1), std::string(), std::string()});
+                if (!request.merge_mates) continue;
+                Resident& r = records.back();
+                r.seq2.assign(rec.seq2);
+                r.qual2.assign(rec.qual2);
+                if (!r.seq2.empty()) reverse_complement(r.seq2, r.qual2);
             }
             out.reads = records.size();
         }

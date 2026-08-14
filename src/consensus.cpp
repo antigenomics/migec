@@ -485,4 +485,71 @@ std::vector<Consensus> assemble_group(const std::vector<ConsensusRead>& reads,
     return out;
 }
 
+std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
+                                      const std::vector<ConsensusRead>& mates2,
+                                      const ConsensusParams& params) {
+    if (mates2.empty()) return assemble_group(mates1, params);
+
+    // Pairs enough to outvote a pair whose overlap happened to fall in an error. Eight, because
+    // the offset has one degree of freedom and a wrong vote needs `min_seed_votes` exact seeds to
+    // even be cast -- this is a tie-break, not an estimate.
+    constexpr size_t kOffsetVoteSample = 8;
+    std::unordered_map<int, int> votes;
+    const size_t sample = std::min(mates2.size(), kOffsetVoteSample);
+    for (size_t i = 0; i < sample; ++i) {
+        if (i >= mates1.size() || mates2[i].seq.empty()) continue;
+        int shift = 0;
+        // Two pairs agreeing is the answer: a vote is only cast when `min_seed_votes` exact seeds
+        // already agree within the pair, so two independent pairs saying the same thing settles a
+        // one-degree-of-freedom layout. Stopping here is most of what makes merging cheap.
+        if (seed_offset(mates1[i], mates2[i], params, shift) && ++votes[shift] >= 2) break;
+    }
+    int best = 0, best_votes = 0;
+    for (const auto& [offset, n] : votes) {
+        // Ties go to the smaller offset so the answer is the group's, never the iteration order's.
+        if (n > best_votes || (n == best_votes && offset < best)) { best_votes = n; best = offset; }
+    }
+
+    LogTables calibrated;
+    if (!params.calibration.empty()) calibrated = build_tables(params.calibration);
+    const LogTables& tables = params.calibration.empty() ? nominal_tables() : calibrated;
+
+    if (best_votes == 0) {
+        // The mates do not reach each other. Two contigs, and the bases between them are asserted
+        // by nobody -- which is the same rule `place_reads` follows and the reason this is
+        // placement rather than a merge.
+        std::vector<ConsensusRead> second;
+        second.reserve(mates2.size());
+        for (const ConsensusRead& r : mates2) {
+            if (!r.seq.empty()) second.push_back({r.seq, r.qual, 0});
+        }
+        std::vector<Consensus> out;
+        const uint32_t components = second.empty() ? 1u : 2u;
+        for (Consensus& m : assemble_component(mates1, params, tables)) {
+            m.component = 0;
+            m.components = components;
+            out.push_back(std::move(m));
+        }
+        for (Consensus& m : assemble_component(second, params, tables)) {
+            m.component = 1;
+            m.components = components;
+            out.push_back(std::move(m));
+        }
+        return out;
+    }
+
+    // One frame for the whole group: mate 1 where checkout anchored it, mate 2 at the voted
+    // offset. A negative offset means mate 2 starts first, so everything shifts to keep the frame
+    // non-negative -- `base_at` indexes from zero.
+    const int base1 = best < 0 ? -best : 0;
+    const int base2 = best < 0 ? 0 : best;
+    std::vector<ConsensusRead> placed;
+    placed.reserve(mates1.size() + mates2.size());
+    for (const ConsensusRead& r : mates1) placed.push_back({r.seq, r.qual, base1});
+    for (const ConsensusRead& r : mates2) {
+        if (!r.seq.empty()) placed.push_back({r.seq, r.qual, base2});
+    }
+    return assemble_component(placed, params, tables);
+}
+
 }  // namespace migec

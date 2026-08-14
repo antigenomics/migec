@@ -66,6 +66,40 @@ std::string write_corpus(const std::string& dir, int molecules, unsigned seed) {
     return path;
 }
 
+// The same corpus as a pair: mate 1 is the first 40 payload bases, mate 2 is the last 40 as
+// SEQUENCED, which is their reverse complement. 40 + 40 over 60 overlap by 20, so every pair
+// places into one contig. Returns {mate1, mate2}.
+std::pair<std::string, std::string> write_paired_corpus(const std::string& dir, int molecules,
+                                                        unsigned seed) {
+    const std::string p1 = dir + "/pair_1.fq", p2 = dir + "/pair_2.fq";
+    std::mt19937 rng(seed);
+    std::ofstream o1(p1), o2(p2);
+    const char* bases = "ACGT";
+    uint64_t read_id = 0;
+    for (int m = 0; m < molecules; ++m) {
+        std::string umi;
+        for (int i = 0; i < 12; ++i) umi += bases[rng() % 4];
+        std::string payload;
+        for (int i = 0; i < 60; ++i) payload += bases[rng() % 4];
+        const int depth = 1 + static_cast<int>(rng() % 9);
+        for (int r = 0; r < depth; ++r) {
+            std::string seq = payload;
+            if (rng() % 5 == 0) seq[rng() % seq.size()] = bases[rng() % 4];
+            std::string mate1 = seq.substr(0, 40);
+            std::string mate2 = seq.substr(20);
+            std::string qual2(mate2.size(), 'I');
+            reverse_complement(mate2, qual2);
+            const std::string tags = " RX:Z:" + umi + "\tQX:Z:" + std::string(12, 'I') +
+                                     "\tBC:Z:S1\n";
+            o1 << "@r" << read_id << tags << mate1 << "\n+\n" << std::string(mate1.size(), 'I')
+               << "\n";
+            o2 << "@r" << read_id << tags << mate2 << "\n+\n" << qual2 << "\n";
+            ++read_id;
+        }
+    }
+    return {p1, p2};
+}
+
 std::string slurp(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream ss;
@@ -181,6 +215,38 @@ TEST_CASE("assemble output is byte-identical at every thread count") {
         CHECK(st.molecules == reference_stats.molecules);
         CHECK(st.groups_split == reference_stats.groups_split);
         CHECK(st.mean_quality == doctest::Approx(reference_stats.mean_quality));
+    }
+}
+
+TEST_CASE("merging mates is byte-identical at every thread count") {
+    // The merge adds a second read per record and a reverse complement at bucket load, both on
+    // the workers. This is the case the thread sanitizer runs over that path.
+    const std::string dir = temp_dir_path();
+    const auto [mate1, mate2] = write_paired_corpus(dir, 400, 19);
+
+    std::string reference;
+    AssembleStats reference_stats;
+    for (int threads : {1, 3, 16}) {
+        AssembleRequest req;
+        req.input = mate1;
+        req.mate_input = mate2;
+        req.merge_mates = true;
+        req.output_dir = dir + "/merged" + std::to_string(threads);
+        req.sample_id = "S1";
+        req.threads = threads;
+        const AssembleStats st = assemble(req);
+        const std::string fastq = slurp(req.output_dir + "/S1.consensus.fq.gz");
+        REQUIRE(!fastq.empty());
+        // Every pair overlaps by 20 bases, so every group is one contig spanning all 60.
+        CHECK(st.groups_fragmented == 0);
+        if (reference.empty()) {
+            reference = fastq;
+            reference_stats = st;
+            continue;
+        }
+        CHECK(fastq == reference);
+        CHECK(st.groups == reference_stats.groups);
+        CHECK(st.molecules == reference_stats.molecules);
     }
 }
 

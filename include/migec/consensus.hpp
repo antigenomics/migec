@@ -130,6 +130,20 @@ std::vector<std::vector<ConsensusRead>> place_reads(const std::vector<ConsensusR
 std::vector<Consensus> assemble_group(const std::vector<ConsensusRead>& reads,
                                       const ConsensusParams& params);
 
+// One group of read PAIRS -> the same, with mate 2 placed against mate 1.
+//
+// `mates2[i]` is the other end of `mates1[i]`, already reverse-complemented; an empty entry is a
+// record that carried no mate. Never: the offset is a property of the MOLECULE and is voted on
+// ONCE over a sample of the group's pairs, then applied to all of them. Every pair of a group is
+// a copy of one fragment, so placing each pair separately would answer the same question n times
+// -- and placing every read against every other, which is what `place_reads` does for
+// random-primed data, is O(n^2) per group for a layout that has exactly one degree of freedom.
+// When no sample places, the mates do not overlap: the group comes back as TWO contigs, never as
+// one consensus asserting the bases between them.
+std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
+                                      const std::vector<ConsensusRead>& mates2,
+                                      const ConsensusParams& params);
+
 }  // namespace migec
 
 #endif  // MIGEC_CONSENSUS_HPP

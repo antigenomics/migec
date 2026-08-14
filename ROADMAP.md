@@ -40,11 +40,11 @@ Everything below is either open or half-open. Nothing else on this page is.
 
 | # | item | milestone | why it is next |
 |---|---|---|---|
-| 1 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
+| 1 | Bucketed correction in `refine` | M3 | the table is the last thing in the pipeline that scales with the library. `checkout`'s counters spill and correct in two passes with the key rotated; refine holds its table whole and reports its size |
+| 2 | The RT-vs-first-cycle-PCR split *inside* the floor | M3 | the sequencing/pre-amplification split now has a standard — the deep-MIG consensus residual, which is what `--pre-amp-error auto` fits (`docs/quality_floor.rst`). What is still unsplit is what MADE the floor, and that needs two chemistries to compare rather than a better estimator: the same template through an RT protocol and through a DNA one. Data, not code |
 | 3 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
 | 4 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
-| 5 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
-| 6 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
+| 5 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
 One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
 shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
@@ -150,7 +150,15 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       the flag was `--rt-error` and that name is kept as an alias, but only an RNA library has a
       reverse transcription step -- on a DNA library the same floor is library-prep damage plus the
       first PCR cycle. `auto` fits the floor, not what made it
-- [ ] R1/R2 overlap merge (as a special case of placement, not a second matcher in checkout)
+- [x] **R1/R2 overlap merge** (2026-08-14), as a special case of placement and not a second matcher
+      in checkout: `assemble --mate2 <R2>` on the FASTQ route, `--merge-mates` on the `.mig` route
+      where checkout already stored both mates in the record. Mate 2 is reverse-complemented and
+      placed; overlapping mates give one consensus spanning the insert, non-overlapping mates give
+      two contigs. Never: the offset is a property of the MOLECULE, so it is voted once per group
+      over up to eight pairs rather than placed all-against-all -- the first version cost 11x the
+      single-end path (119,820 record-pairs/s against 1,356,819), the vote costs 1,288,686 against
+      2,115,912. Never: the mates are matched by POSITION and a file that ends early is refused,
+      because pairing off what is left attaches one molecule's mate to another's
 - Gate: per-base error ≤1e-5 at coverage ≥5 Done: (`tests/synthetic/test_assemble.py`, stratified by
   depth); `ê(Q) ≤ 2·10^(−Q/10)` for every bucket with n≥1000
 

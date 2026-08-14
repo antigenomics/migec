@@ -520,18 +520,29 @@ correction is written up in `project/review-algorithms.md`.
   SECOND assembly -- the consensus sequences do not depend on the floor, only the emitted quality
   does, so a probe assembly runs and is deleted. Rewriting the qualities of the gzipped output in
   place would have saved the pass and bought a new way to write a broken file.
+- **R1/R2 overlap merge is in (2026-08-14).** `assemble --mate2 <R2>` on the FASTQ route,
+  `--merge-mates` on the `.mig` route where checkout already stored both mates in the record
+  (`seq2`/`qual2` -- assemble had simply been ignoring them). Mate 2 is rc'd once at bucket load
+  and placed; overlapping mates give one consensus over the insert, non-overlapping give two
+  contigs, and both routes agree byte for byte. Never: **the offset is a property of the MOLECULE,
+  not of the pair.** Feeding the pair into `--contig`'s all-against-all `place_reads` cost **11x**
+  the single-end path (119,820 record-pairs/s against 1,356,819); `assemble_pairs` votes once per
+  group over <= 8 pairs, stopping at two agreeing votes, for 1,288,686 against 2,115,912. Never:
+  the mates are matched by POSITION and a short file is refused -- pairing off the remainder
+  attaches one molecule's mate to another's and the consensus looks fine.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
   1. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
      `correct_umis` does it for a spilled counter. Note: refine also holds the reads for the
-     rewrite, so bounding it is not only the table.
+     rewrite, so bounding it is not only the table -- and every table it writes (cells, rank,
+     bins, umi_errors, the residual FDR) is indexed against `entries()`, so bounding the
+     correction means streaming those too.
   2. **`2026-migec-benchmark`** and the published comparisons. This is what the version number is
      waiting on, not the code.
   3. **Run the callers themselves** against the ctDNA ground truth below. It no longer has to be
      built -- only the call sets are missing.
-  4. **R1/R2 overlap merge**, as a case of `--contig`'s placement and never a second matcher.
-  5. **Splitting the fitted floor into RT and first-cycle PCR** — not an estimator problem. The
+  4. **Splitting the fitted floor into RT and first-cycle PCR** — not an estimator problem. The
      same template through both chemistries is what it needs, which is data.
-  6. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
+  5. **Bit-parallel matcher**, last and deliberately: the scan is not the bottleneck.
 - **The ctDNA ground truth was FOUND, not built (2026-08-13).** `PRJNA788522` (72 runs, cfDNA
   reference material at certified 0/0.125/0.25/1% VAF x 5/20/80 ng x 3.3/10/30x, 3 reps) and
   `PRJNA507366` (28 runs, six polymerases plus 0.031%/0.0625% VAF) both kept a **real 12 nt inline

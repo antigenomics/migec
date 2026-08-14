@@ -725,10 +725,13 @@ PYBIND11_MODULE(_core, m) {
         [](const std::string& input, const std::string& out_dir, const std::string& sample_id,
            double rt_floor, double linkage_threshold, bool contig, bool fast, uint32_t min_reads,
            int gzip_level, int bucket_bits, int threads, uint64_t limit_reads,
-           uint64_t limit_umis, const std::vector<std::string>& mig_inputs) {
+           uint64_t limit_umis, const std::vector<std::string>& mig_inputs,
+           const std::string& mate_input, bool merge_mates) {
             AssembleRequest req;
             req.input = input;
             req.mig_inputs = mig_inputs;
+            req.mate_input = mate_input;
+            req.merge_mates = merge_mates;
             req.output_dir = out_dir;
             req.sample_id = sample_id;
             req.consensus.rt_floor = rt_floor;
@@ -758,6 +761,7 @@ PYBIND11_MODULE(_core, m) {
             d["contigs"] = st.contigs;
             d["contig_mode"] = contig;
             d["fast_mode"] = fast;
+            d["merge_mates"] = merge_mates;
             d["mean_support"] = st.mean_support;
             d["groups_capped"] = st.groups_capped;
             d["reads_over_cap"] = st.reads_over_cap;
@@ -820,13 +824,17 @@ PYBIND11_MODULE(_core, m) {
         py::arg("bucket_bits") = 0, py::arg("threads") = 0,
         py::arg("limit_reads") = uint64_t{0}, py::arg("limit_umis") = uint64_t{0},
         py::arg("mig_inputs") = std::vector<std::string>(),
+        py::arg("mate_input") = std::string(), py::arg("merge_mates") = false,
         "Collapse the reads of each UMI into a consensus. Reads are range partitioned into .mig "
         "buckets and sorted one bucket at a time, so nothing scales with the library. Emitted "
         "quality is capped at -10 log10(rt_floor), the RT/first-cycle-PCR error that no consensus "
         "removes; a group is split into two molecules only when the co-segregation of its minor "
         "alleles exceeds `linkage_threshold`, which is a measured false-positive point. Given "
         "`mig_inputs` -- the buckets `checkout --mig` wrote for one sample -- the partition pass "
-        "is skipped entirely and `input` is ignored.");
+        "is skipped entirely and `input` is ignored. `merge_mates` places mate 2 against mate 1 "
+        "and consenses the pair as one molecule; `mate_input` is where mate 2 comes from on the "
+        "FASTQ route, matched by position, and is not given with `mig_inputs` because a bucket "
+        "record already carries both mates.");
 
     m.def(
         "suggest",

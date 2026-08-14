@@ -214,6 +214,37 @@ cell's full-length receptor, calling doublets and filtering contaminating chains
    above 1 and says how far, and contig mode warns when more than 5% of groups hold more than one
    molecule.
 
+Merging the mates: ``--mate2``
+------------------------------
+
+Both ends of the same fragment carry the same barcode, so a pair is two fragments of one molecule
+and the same rule applies:
+
+.. code-block:: bash
+
+   migec assemble out/S1_R1.fq.gz --mate2 out/S1_R2.fq.gz -o cons/
+   migec assemble out/S1.000.mig --merge-mates -o cons/    # the pair is already in the record
+
+Mate 2 is reverse-complemented and **placed** against mate 1. When the mates overlap the molecule
+comes back as one consensus spanning the insert; when they do not it comes back as two contigs,
+because the bases between the mates are covered by no read. This is ``--contig``'s rule, not a
+second one.
+
+The offset is a property of the **molecule**, not of the pair — every pair of a group is a copy of
+one fragment — so it is voted on once per group over up to eight pairs and then applied to all of
+them. The first version instead ran the group through ``--contig``'s all-against-all placement and
+cost **11x** the single-end path (119,820 record-pairs/s against 1,356,819 records/s); voting once
+brings it to 1,288,686 record-pairs/s against 2,115,912, which is the cost of the second read's
+bases and nothing else. ``tests/benchmark/test_assemble_speed.py`` holds the floor.
+
+.. note::
+
+   Mate 2 supplies **sequence only**. The barcode, the sample and the read name come from mate 1,
+   which is the mate ``checkout`` anchored its pattern on, and the two files are matched by
+   position — the contract checkout's ``_R1``/``_R2`` output keeps. A file that runs out before
+   the other is refused rather than paired off by position, which would attach one molecule's mate
+   to another's with a consensus that looks perfectly well formed.
+
 Output
 ------
 

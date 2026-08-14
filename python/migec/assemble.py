@@ -279,6 +279,8 @@ def run(
     linkage_threshold: float = _core.LINKAGE_THRESHOLD,
     contig: bool = False,
     fast: bool = False,
+    mate2: str | Path = "",
+    merge_mates: bool = False,
     min_reads: int = 1,
     gzip_level: int = _core.GZIP_LEVEL,
     threads: int = 0,
@@ -291,6 +293,11 @@ def run(
     holding them, or a glob -- in which case the partition pass does not run at all: the reads are
     already range-partitioned on the key this stage groups by, which is the only thing that pass
     builds. One sample's buckets, never two: a UMI repeats across samples by design.
+
+    `mate2` is the other mate of `reads` (checkout's `<sample>_R2.fq.gz`), matched by position;
+    with `.mig` buckets the pair is already in the record and `merge_mates` alone turns it on.
+    Either way mate 2 is reverse-complemented and PLACED against mate 1, so a pair whose mates
+    overlap becomes one consensus spanning the insert and a pair whose mates do not stays two.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -304,9 +311,9 @@ def run(
         probe = out / ".pre_amp_probe"
         probe_summary = run(
             reads, probe, sample_id=sample_id, rt_floor=_core.RT_FLOOR,
-            linkage_threshold=linkage_threshold, contig=contig, fast=fast, min_reads=min_reads,
-            gzip_level=gzip_level, threads=threads, limit_reads=limit_reads,
-            limit_umis=limit_umis,
+            linkage_threshold=linkage_threshold, contig=contig, fast=fast, mate2=mate2,
+            merge_mates=merge_mates, min_reads=min_reads, gzip_level=gzip_level, threads=threads,
+            limit_reads=limit_reads, limit_umis=limit_umis,
         )
         suffix = ".consensus.fq.gz" if gzip_level > 0 else ".consensus.fq"
         estimate = estimate_pre_amp_error(probe / (probe_summary["sample_id"] + suffix))
@@ -319,6 +326,7 @@ def run(
     summary = _core.assemble(
         "" if mig_inputs else str(reads), str(out), sample_id, rt_floor, linkage_threshold,
         contig, fast, min_reads, gzip_level, 0, threads, limit_reads, limit_umis, mig_inputs,
+        str(mate2), merge_mates or bool(mate2),
     )
     summary["input"] = str(reads)
     summary["mig_input"] = mig_inputs
@@ -417,6 +425,14 @@ def format_report(summary: dict) -> str:
         lines += [
             f"modal sequence carried {s['mean_support']:.1%} of the reads in the groups that "
             f"emitted one -- counting mode, so no per-base correction and no sub-clustering",
+        ]
+    if s.get("merge_mates"):
+        merged = s["groups"] - s["groups_fragmented"]
+        lines += [
+            "",
+            f"mates merged  {merged:,} of {s['groups']:,} molecules came back as ONE contig "
+            f"({_pct(merged, max(s['groups'], 1))}); the rest are pairs whose mates do not "
+            f"overlap and are emitted as separate contigs rather than bridged",
         ]
     lines += ["", f"{'MIG size':>12}{'groups':>12}{'share':>9}"]
     if s["contig_mode"]:

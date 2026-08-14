@@ -410,6 +410,21 @@ def assemble(
         "X1 measured 27.3% of 10x groups holding more than one component (docs/fragmented.rst); "
         "one consensus over those asserts sequence no read covers.",
     ),
+    mate2: Path = typer.Option(
+        None,
+        "--mate2",
+        help="The other mate, matched by position -- checkout's `<sample>_R2.fq.gz`. Mate 2 is "
+        "reverse-complemented and PLACED against mate 1, so a pair whose mates overlap gives one "
+        "consensus spanning the insert and a pair whose mates do not gives two contigs, never a "
+        "bridge across the bases neither mate covers. Not given with `.mig` buckets, where the "
+        "pair is already in the record: use --merge-mates there.",
+    ),
+    merge_mates: bool = typer.Option(
+        False,
+        "--merge-mates",
+        help="Merge the mate pair already carried by `.mig` buckets. Implied by --mate2, and "
+        "implies the placement --contig does.",
+    ),
     fast: bool = typer.Option(
         False,
         "--fast",
@@ -455,14 +470,16 @@ def assemble(
     # Refused here, on the caller's thread, rather than producing one consensus per read: two
     # fragments of one molecule are different strings by construction, so a modal vote over them
     # returns whichever fragment was seen most and silently drops the rest of the molecule.
-    if fast and contig:
+    if fast and (contig or merge_mates or mate2):
         raise typer.BadParameter(
             "--fast and --contig are incompatible. --contig places reads that TILE a molecule, "
-            "and tiling reads share no exact sequence for --fast to take a majority over"
+            "and tiling reads share no exact sequence for --fast to take a majority over. "
+            "--mate2/--merge-mates is that same placement, applied to a pair"
         )
     summary = run(
         reads, out_dir, sample_id=sample_id, rt_floor=rt_floor, contig=contig, fast=fast,
-        min_reads=min_reads, threads=threads, limit_reads=limit_read, limit_umis=limit_umi,
+        mate2=mate2 or "", merge_mates=merge_mates, min_reads=min_reads, threads=threads,
+        limit_reads=limit_read, limit_umis=limit_umi,
     )
     typer.echo(format_report(summary))
 

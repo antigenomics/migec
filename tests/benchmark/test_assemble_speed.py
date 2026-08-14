@@ -69,6 +69,48 @@ def test_throughput(corpus):
     assert rate > 20_000, f"assemble throughput collapsed to {rate:,.0f} reads/s"
 
 
+@pytest.fixture(scope="module")
+def paired_corpus(tmp_path_factory):
+    """The same shape as `corpus`, as a pair: 60 + 60 over a 90 nt insert, overlapping by 30."""
+    d = tmp_path_factory.mktemp("bench_merge")
+    p1, p2 = d / "S1_R1.fq.gz", d / "S1_R2.fq.gz"
+    rng = random.Random(1)
+    rc = str.maketrans("ACGT", "TGCA")
+    with gzip.open(p1, "wt", compresslevel=1) as f1, gzip.open(p2, "wt", compresslevel=1) as f2:
+        i = 0
+        while i < N_READS:
+            umi = "".join(rng.choice("ACGT") for _ in range(12))
+            payload = "".join(rng.choice("ACGT") for _ in range(PAYLOAD))
+            mate1, mate2 = payload[:60], payload[30:].translate(rc)[::-1]
+            for _ in range(READS_PER_UMI):
+                tags = f" RX:Z:{umi}\tQX:Z:{'I' * 12}\tBC:Z:S1"
+                f1.write(f"@r{i}{tags}\n{mate1}\n+\n{'I' * len(mate1)}\n")
+                f2.write(f"@r{i}{tags}\n{mate2}\n+\n{'I' * len(mate2)}\n")
+                i += 1
+    return d, p1, p2
+
+
+def test_merging_mates_costs_a_read_and_not_a_placement(paired_corpus):
+    """Merging places mate 2 ONCE per group, not every read against every other.
+
+    The first version ran the pair through `--contig`'s n^2 placement and cost 11x the single-end
+    path (119,820 records/s against 1,356,819). The offset is a property of the molecule, so it is
+    voted on once per group and applied to every pair: 696,208 records/s, which is the cost of the
+    second read's bases and nothing else.
+    """
+    from migec.assemble import run
+
+    d, p1, p2 = paired_corpus
+    s = run(p1, d / "merged", mate2=p2, gzip_level=1)
+    rate = s["reads"] / s["wall_seconds"]
+    print(f"\n  {rate:,.0f} record-pairs/s merged, {s['groups_fragmented']:,} groups fragmented")
+    # Every pair here overlaps by 30 bases, so nothing should come back as two contigs.
+    assert s["groups_fragmented"] == 0
+    # Half the single-end floor: a merged record carries two reads. An order of magnitude below it
+    # means the placement went quadratic again.
+    assert rate > 10_000, f"merging collapsed to {rate:,.0f} records/s"
+
+
 def _peak_rss_in_a_fresh_process(path, out, bucket_bits, threads=1):
     """peak_rss_bytes() is a process high-water mark, so two runs in one interpreter cannot be
     compared -- the second inherits the first's peak. Each configuration gets its own process."""

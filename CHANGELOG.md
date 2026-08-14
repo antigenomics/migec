@@ -6,6 +6,30 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### `--mate2`: both ends of the fragment are one molecule
+
+A read pair carries one barcode because it is one molecule, so `assemble` will take the other mate
+and place it:
+
+```bash
+migec assemble out/S1_R1.fq.gz --mate2 out/S1_R2.fq.gz -o cons/
+migec assemble out/S1.000.mig --merge-mates -o cons/     # the pair is already in the record
+```
+
+Mate 2 is reverse-complemented and placed against mate 1. Overlapping mates give one consensus
+spanning the insert; mates that do not reach each other give two contigs, because the bases between
+them are covered by no read. That is `--contig`'s rule rather than a second one, and the two output
+routes agree byte for byte.
+
+The offset is a property of the molecule, not of the pair, so it is voted on once per group over
+up to eight pairs instead of placing every read against every other. The first version did the
+latter and cost 11x the single-end path (119,820 record-pairs/s against 1,356,819); the vote costs
+1,288,686 against 2,115,912, which is the price of the second read's bases and nothing else.
+
+The mates are matched by position, which is what checkout's `_R1`/`_R2` output guarantees. A file
+that ends before the other is refused: pairing off what is left attaches one molecule's mate to
+another's, and the consensus that comes out looks perfectly well formed.
+
 ### `--pre-amp-error auto` fits the floor instead of naming it
 
 The cap on every emitted quality is the error that was already in the molecule before

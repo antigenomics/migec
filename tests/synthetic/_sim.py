@@ -60,7 +60,13 @@ class SimConfig:
     # which no barcode pattern can anchor on -- set it when the reads have to survive checkout.
     adapter: str = ""
     seed: int = 20260813
+    # Write a second FASTQ holding the other mate: mate 1 is the first `read_len` payload bases
+    # (behind the UMI and the adapter), mate 2 is the last `read_len` bases as SEQUENCED, which is
+    # their reverse complement. The two are sequenced independently, so an error in the overlap is
+    # in one mate and not the other -- which is the whole reason merging them is worth anything.
+    # `read_len` 0 means the whole payload, so the mates overlap completely.
     paired: bool = False
+    read_len: int = 0
     truth: dict = field(default_factory=dict)
 
 
@@ -79,6 +85,10 @@ def _mutate(seq: str, rate: float, rng: random.Random) -> tuple[str, int]:
             out[i] = rng.choice([x for x in BASES if x != b])
             n += 1
     return "".join(out), n
+
+
+def _revcomp(seq: str) -> str:
+    return seq.translate(str.maketrans("ACGT", "TGCA"))[::-1]
 
 
 def _draw_umi(rng: random.Random, length: int, freqs) -> str:
@@ -132,6 +142,8 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
     qual_char = chr(33 + cfg.mean_qual)
 
     reads_path = out / "reads.fq.gz"
+    reads2_path = out / "reads2.fq.gz"
+    read_len = cfg.read_len or cfg.seq_len
     truth_reads = out / "truth_reads.tsv"
     truth_mols = out / "truth_molecules.tsv"
     truth_cons = out / "truth_consensus.fa"
@@ -140,6 +152,7 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
     n_collisions = 0
     seen_umis: dict[str, int] = {}
 
+    fq2 = gzip.open(reads2_path, "wt") if cfg.paired else None
     with gzip.open(reads_path, "wt") as fq, open(truth_reads, "w") as tr, open(
         truth_mols, "w"
     ) as tm, open(truth_cons, "w") as tc:
@@ -174,13 +187,25 @@ def simulate(cfg: SimConfig, out_dir: str | Path) -> dict:
                 read_seq, n_err = _mutate(consensus_seq, cfg.seq_error, rng)
                 umi_obs, _ = _mutate(umi, cfg.umi_error, rng)
                 rid = f"r{n_reads}"
-                full = f"{umi_obs}{cfg.adapter}{read_seq}"
+                if fq2 is None:
+                    full = f"{umi_obs}{cfg.adapter}{read_seq}"
+                else:
+                    # Independent sequencing of the two ends of the same fragment.
+                    tail, _ = _mutate(consensus_seq[len(consensus_seq) - read_len:],
+                                      cfg.seq_error, rng)
+                    full = f"{umi_obs}{cfg.adapter}{read_seq[:read_len]}"
+                    mate = _revcomp(tail)
+                    fq2.write(f"@{rid} UMI:{umi_obs}\n{mate}\n+\n{qual_char * len(mate)}\n")
                 fq.write(f"@{rid} UMI:{umi_obs}\n{full}\n+\n{qual_char * len(full)}\n")
                 tr.write(f"{rid}\t{mol}\t{clone}\t{umi}\t{umi_obs}\t{n_err}\n")
                 n_reads += 1
 
+    if fq2 is not None:
+        fq2.close()
+
     return {
         "reads": str(reads_path),
+        "reads2": str(reads2_path) if cfg.paired else "",
         "truth_reads": str(truth_reads),
         "truth_molecules": str(truth_mols),
         "truth_consensus": str(truth_cons),
