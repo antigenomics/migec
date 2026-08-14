@@ -72,6 +72,7 @@ MICROMAMBA=$HOME/bin/micromamba
 # patch from a no-op into a behaviour change.
 usable_env() {
     [ -s "$UVDIR/conda-meta/history" ] || return 1
+    [ -x "$UVDIR/bin/bwa" ] || return 1
     "$UVDIR/bin/python" -c "import psutil, tqdm, msgpack, sys; sys.exit(0 if msgpack.version >= (1, 0) else 1)" 2>/dev/null
 }
 
@@ -83,7 +84,7 @@ if ! usable_env; then
     # ModuleNotFoundError from a .pyx line and not as a missing dependency. Same for `tqdm`.
     "$MICROMAMBA" create -y -p "$UVDIR" -c conda-forge -c bioconda \
         python=3.10 cython msgpack-python scipy statsmodels pysam numpy pip samtools \
-        minimap2 psutil tqdm
+        minimap2 bwa psutil tqdm
     "$UVDIR/bin/pip" install --quiet pyfasta || echo "pyfasta from pip failed"
 fi
 export PATH="$UVDIR/bin:$PATH"
@@ -122,34 +123,42 @@ if [ -d "$SRC/functions" ]; then
 fi
 ls "$SRC" | head
 
-# Never: `extract` takes a BAM OR SAM, NOT a FASTQ, and its flags are `-i`, `-f` and
-# `--umi_length | -l` -- there is no `-u` and no `-o`. It writes into `EXTRACTED/<name>/` relative
-# to the CURRENT DIRECTORY. Reading `functions/Config.py` and `functions/Extract.py` once would
-# have replaced five failed attempts; every one of them was a guess at an interface.
+# Never: `extract` takes a BAM OR SAM, NOT a FASTQ; its flags are `-i`, `-f` and
+# `--umi_length | -l` -- there is no `-u` and no `-o` -- and it writes into `EXTRACTED/<name>/`
+# relative to the CURRENT DIRECTORY. Reading `functions/Config.py` and `functions/Extract.py` once
+# would have replaced five failed guesses at an interface that is written down.
 #
-# And the interface is better than its paper suggests: `--umi_length 0` makes it read the UMI from
-# the **RX tag** instead of from the read start. So it can be given migec's own aligned reads --
-# `checkout` + `refine` output, barcode found, corrected and carried into the BAM by `minimap2 -y`
-# -- and then the ONLY difference between its row and ours is what each does with an identical
-# alignment carrying identical barcodes: its UMI-aware pileup and Poisson caller against our
-# consensus plus a standard caller. That is a cleaner isolation than re-extracting from FASTQ, and
-# it reuses the BAM `ctdna_rawreads.sbatch` already built.
+# Never: `--umi_length 0`, which the SOURCE says reads the UMI from the RX tag instead of from the
+# read start, CANNOT BE PASSED: the validator tests the value for truthiness, so 0 is
+# indistinguishable from absent and it exits with "The parameter --umi_length | -l is required but
+# missing". So the RX path is unreachable from the CLI and the tool gets the reads with the UMI
+# still at the 5' end, which is what it was written for.
+#
+# The alignment in the input BAM is not used -- `extract` reads sequences and reverts to FASTQ,
+# then realigns with bwa itself -- so an UNALIGNED bam built by `samtools import` is enough, and it
+# costs seconds instead of an alignment we would throw away.
 process() {
     local acc=$1 out=$WORK/$acc
-    local src=$ROOT/rawreads/$acc/$acc.bam
-    [ -s "$src" ] || { echo "  no aligned reads for $acc yet (run ctdna_rawreads.sbatch first)" >&2; return 1; }
+    local fq
+    fq=$(fastq_for "$acc") || { echo "  no fastq $acc" >&2; return 1; }
     mkdir -p "$out"
-    local extracted="$out/EXTRACTED/$acc/${acc}_extracted_sorted.bam"
+    local ubam="$out/$acc.raw.bam"
+    local extracted="$out/EXTRACTED/$acc.raw/$acc.raw_extracted_sorted.bam"
+
+    [ -s "$ubam" ] || samtools import -0 "$fq" -o "$ubam"
 
     if [ ! -s "$extracted" ]; then
+        # 12 nt UMI at the read start -- the same layout `migec checkout --bc-pattern '0:12'`
+        # reads. The 16 nt SiMSen-Seq spacer behind it is left in place; bwa soft-clips it, which
+        # is what this tool does with it. UMIErrorCorrect has `-sl` for the spacer and this one has
+        # no concept of it.
         ( cd "$out" && "$UVDIR/bin/python" "$SRC/umi-varcal.py" extract \
-            -i "$src" -f "$LOCALREF" -l 0 ) > "$out/extract.log" 2>&1 \
+            -i "$ubam" -f "$LOCALREF" -l 12 ) > "$out/extract.log" 2>&1 \
             || { echo "  extract failed for $acc"; tail -5 "$out/extract.log"; return 1; }
     fi
-    [ -s "$extracted" ] || { echo "  extract wrote no BAM for $acc"; ls -R "$out" | head -20; return 1; }
+    [ -s "$extracted" ] || { echo "  extract wrote no sorted BAM for $acc"; ls -R "$out/EXTRACTED" 2>/dev/null | head -10; return 1; }
 
-    if [ ! -s "$out/${acc}_extracted_sorted.vcf" ]; then
-        find "$out" -maxdepth 1 -type f ! -name '*.log' -delete
+    if [ ! -s "$out/$acc.raw_extracted_sorted.vcf" ]; then
         /usr/bin/time -f "umivarcal\t$acc\t%e\t%M" -o "$out/time.txt" \
             "$UVDIR/bin/python" "$SRC/umi-varcal.py" call -i "$extracted" -b "$PANEL" \
             -f "$LOCALREF" -o "$out" -c "$THREADS" > "$out/call.log" 2>&1 \
