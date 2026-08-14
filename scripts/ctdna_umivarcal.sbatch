@@ -49,8 +49,12 @@ echo "host=$(hostname) job=${SLURM_JOB_ID:-local} threads=$THREADS"
 
 export MAMBA_ROOT_PREFIX=$ROOT/mamba
 MICROMAMBA=$HOME/bin/micromamba
-if [ ! -x "$UVDIR/bin/python" ]; then
+# Never: test for `conda-meta/history`, not for `bin/python`. A half-deleted prefix still has a
+# python and micromamba no longer calls it an environment, so a `bin/python` guard skips the
+# rebuild and every later `install -p` fails with "Expected environment not found at prefix".
+if [ ! -s "$UVDIR/conda-meta/history" ]; then
     echo "=== creating the UMI-VarCal environment ==="
+    rm -rf "$UVDIR"
     # Never: `psutil` is NOT in its README's requirements list and the tool does not start without
     # it -- the import is inside the compiled `functions.pyx`, so it surfaces as a
     # ModuleNotFoundError from a .pyx line and not as a missing dependency. Same for `tqdm`.
