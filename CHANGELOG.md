@@ -4,7 +4,14 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.4.0 — 2026-08-14
+
+**Nothing in the pipeline scales with the library any more**, and the comparisons the version
+number was waiting on have started landing: MIGEC 1.2.9, UMI-tools and fgbio are all run end to
+end and scored.
+
+Note: 2.3.0 was written up but never tagged or published — the last wheel on PyPI is 2.2.1 — so
+this release carries its changes too. Its section below still describes them.
 
 ### MIGEC 1.2.9, head to head
 
