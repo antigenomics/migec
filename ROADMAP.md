@@ -37,8 +37,7 @@ Everything below is either open or half-open. Nothing else on this page is.
 
 | # | item | milestone | why it is next |
 |---|---|---|---|
-| 1 | `.mig` bucket output from `checkout` | M2 | the **only** unbounded allocation left: the UMI counters are 8.8 GB at NovaSeq scale, held in one piece, and this is what bounds them. `checkout` warns past 1 GB and that is a warning, not a fix |
-| 2 | Bucketed correction, two passes with the key rotated | M3 | same problem one stage on. `refine` holds the whole barcode table; a plain range partition splits a barcode from its neighbour for the top b/2 positions, so the rotation is the fix and it is understood, not designed |
+| 1+2 | **Bucketed correction, two passes with the key rotated** — then switch the spill on | M2/M3 | **these are one item, not two.** `UmiCounts` can now bound itself: `enable_spill()` range-partitions to disk and `for_each()` streams a bucket at a time, so `histogram()`, `composition()` and `distinct()` no longer need the library resident. What blocks *using* it in `checkout` is that the bindings run `correct_umis` on the same counters, and correction walks each barcode's 3L neighbourhood — which a plain range partition splits whenever the substitution lands in the partitioned bits. So the rotation has to come first: bound the memory before correction is bucketed and `checkout` would silently stop correcting. The call site is written and commented out in `src/checkout.cpp` |
 | 3 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
 | 4 | `--rt-error auto` | M1 | falls straight out of (3). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
 | 5 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
@@ -180,7 +179,13 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       anchor at 0. Presets for the eight chemistries with names, each carrying a citable source
 - [x] **A run that matches nothing reports the declaration error** instead of three statistics
       computed from reads that never arrived
-- [ ] `.mig` bucket output, which is also what bounds the UMI counters
+- [x] **The counter can bound itself** (2026-08-14): `UmiCounts::enable_spill()` range-partitions
+      to disk past a byte budget and `for_each()` streams one bucket at a time, reducing on read.
+      A spilled counter gives byte-identical histograms, compositions and distinct counts to a
+      resident one; `entries()`, `find()` and `merge()` throw rather than answer from the fragment
+      that happens to still be in RAM
+- [ ] Switch it on in `checkout` — blocked on bucketed correction, see item 1+2 above
+- [ ] `.mig` bucket output, which is the other half of the same partition
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8
   threads ; >1 M reads/s at 16 threads

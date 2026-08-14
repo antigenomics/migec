@@ -513,6 +513,14 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
             stats.umi_counts.emplace_back(patterns.umi_length(i));
+            // Note: this is where `enable_spill` goes, and it is deliberately NOT called yet.
+            // `UmiCounts` can now bound itself with a range partition on disk, but a spilled
+            // counter cannot serve `entries()` -- and `correct_umis`, which the bindings run on
+            // these counters, needs every entry resident to walk each barcode's 3L neighbourhood.
+            // A plain range partition splits a barcode from its neighbour whenever the
+            // substitution falls in the partitioned bits, so correction has to become two passes
+            // with the key rotated (ROADMAP item 2) before this line can be switched on.
+            // Turning it on first would bound the memory and silently stop correcting.
         } else {
             file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
             // The rows would otherwise write UMIs of two lengths into one counter, and the

@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <random>
 #include <string>
 
@@ -489,4 +490,95 @@ TEST_CASE("barcode base quality sharpens the error prior") {
     };
     CHECK_FALSE(merged_with(1e-6f));  // a confident base is not a miscall
     CHECK(merged_with(0.3f));         // Q5 at exactly the base that differs
+}
+
+// --- spilling: the range partition that bounds the counters (roadmap item 1) -----------------
+
+TEST_CASE("a spilled counter answers exactly as a resident one") {
+    // The whole claim: partitioning changes the memory, never the numbers. Both counters see the
+    // same adds in the same order; one is forced to spill many times over.
+    std::mt19937_64 rng(12345);
+    std::vector<std::pair<uint64_t, uint32_t>> adds;
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s += "ACGT"[rng() % 4];
+        adds.emplace_back(umi(s), static_cast<uint32_t>(1 + rng() % 5));
+    }
+
+    UmiCounts resident(8);
+    UmiCounts spilling(8);
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_test").string();
+    std::filesystem::remove_all(dir);
+    // A tiny budget so it spills repeatedly: a key ends up written to its bucket many times over,
+    // which is the case reduction-on-read has to get right.
+    spilling.enable_spill(dir, 4096, 4);
+    for (const auto& a : adds) {
+        resident.add(a.first, a.second);
+        spilling.add(a.first, a.second);
+    }
+
+    CHECK(spilling.spilled());
+    CHECK(spilling.total() == resident.total());
+    CHECK(spilling.distinct() == resident.distinct());
+
+    const CoverageHistogram hr = resident.histogram();
+    const CoverageHistogram hs = spilling.histogram();
+    CHECK(hs.reads == hr.reads);
+    CHECK(hs.units == hr.units);
+    CHECK(hs.mean_reads_per_umi() == doctest::Approx(hr.mean_reads_per_umi()));
+
+    const UmiComposition cr = resident.composition(false);
+    const UmiComposition cs = spilling.composition(false);
+    REQUIRE(cs.length == cr.length);
+    for (int j = 0; j < cr.length; ++j) {
+        for (int b = 0; b < 4; ++b) {
+            CHECK(cs.freq[static_cast<size_t>(j)][static_cast<size_t>(b)] ==
+                  doctest::Approx(cr.freq[static_cast<size_t>(j)][static_cast<size_t>(b)]));
+        }
+    }
+    CHECK(cs.effective_length() == doctest::Approx(cr.effective_length()));
+
+    // for_each must still deliver ascending keys, each exactly once: the range partition is
+    // ordered by construction and everything downstream assumes it.
+    std::vector<uint64_t> keys;
+    spilling.for_each([&keys](const UmiCounts::Entry& e) { keys.push_back(e.key); });
+    CHECK(keys.size() == resident.distinct());
+    CHECK(std::is_sorted(keys.begin(), keys.end()));
+    CHECK(std::adjacent_find(keys.begin(), keys.end()) == keys.end());
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a spilled counter refuses the accessors that need every entry") {
+    // Never: silently returning the resident remainder would be a wrong answer wearing the shape
+    // of a right one -- `find()` would report "absent" for a barcode that is merely spilled.
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_refuse").string();
+    std::filesystem::remove_all(dir);
+    UmiCounts c(8);
+    c.enable_spill(dir, 64, 3);
+    // Past the internal flush threshold: a spill happens on flush, so a handful of adds sit in the
+    // buffer and never reach the partition at all.
+    std::mt19937_64 rng(7);
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s += "ACGT"[rng() % 4];
+        c.add(umi(s), 1);
+    }
+    c.distinct();  // forces the flush, and with it the spill
+    REQUIRE(c.spilled());
+    CHECK_THROWS_AS(c.entries(), MigecError);
+    CHECK_THROWS_AS(c.find(umi("AAAAAAAA")), MigecError);
+    // ...but the streaming ones still work, which is the point.
+    CHECK(c.distinct() > 0);
+    CHECK(c.histogram().units[0] > 0);
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("enable_spill validates its arguments where they are attributable") {
+    UmiCounts c(4);
+    CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 1024, 0), MigecError);
+    CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 1024, 21), MigecError);
+    CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 0, 4), MigecError);
 }

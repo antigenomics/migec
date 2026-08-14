@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <string>
 #include <vector>
 
 namespace migec {
@@ -189,13 +191,20 @@ public:
     // depend on the order the threads finished in.
     void merge(const UmiCounts& other);
 
-    size_t distinct() const { flush(); return entries_.size(); }
+    // Streams when spilled, so this is O(spilled bytes) the first time and cached afterwards.
+    size_t distinct() const;
     uint64_t total() const { return total_; }
     int length() const { return length_; }
 
     // Sorted by key, ascending. Flushes first, so it is O(n log n) on the first call after adds
-    // and free afterwards.
-    const std::vector<Entry>& entries() const { flush(); return entries_; }
+    // and free afterwards. Throws if the counter has spilled -- use `for_each` instead.
+    // Never: flush BEFORE the residency check. A pending buffer can be what tips the counter over
+    // its budget, so checking first would hand back an array that is about to become a fragment.
+    const std::vector<Entry>& entries() const {
+        flush();
+        require_resident("entries()");
+        return entries_;
+    }
 
     // Read count for a packed barcode, or nullptr. Binary search over the sorted array: the top
     // levels stay resident, which is why this beats a hash probe here despite the log factor.
@@ -204,6 +213,30 @@ public:
     // Resident bytes actually held by this counter, buffer included.
     size_t memory_bytes() const;
 
+    // Bound the resident set by spilling to a range partition on disk.
+    //
+    // Without this the counter holds one sorted (key, count) array over the whole library: ~22 B
+    // per distinct barcode, 8.8 GB at NovaSeq scale, in one piece. With it, whenever the array
+    // exceeds `budget_bytes` it is split on the TOP `bits` of the key into one append-only file
+    // per bucket and dropped, so the resident set is the budget rather than the library.
+    //
+    // Never: RANGE, never hash. The same rule as `assemble`'s partition and for the same reason --
+    // a barcode and its 1-substitution neighbours have to be able to meet. Nothing here needs that
+    // yet (a histogram and a composition are per-barcode), but a hash would make the correction
+    // pass impossible to add later, and correction is the whole reason these counts exist.
+    //
+    // Never: a spilled counter can no longer serve `entries()`, because the whole point is that
+    // the entries are not all resident. `histogram()`, `composition()` and `distinct()` stream and
+    // still work; `entries()`, `find()` and everything built on them throw. `refine` does not
+    // spill -- it needs the whole table for the neighbourhood scan, and bounding THAT is a
+    // separate item with a different fix (two passes with the key rotated).
+    //
+    // Note: the same key may be written to a bucket many times, once per spill. Reduction happens
+    // when the bucket is read back, so a spill is O(1) per entry and correctness does not depend
+    // on how many times it happened.
+    void enable_spill(const std::string& directory, size_t budget_bytes, int bits);
+    bool spilled() const { return !spill_paths_.empty(); }
+
     CoverageHistogram histogram() const;
     // `weight_by_reads` draws the composition MIGEC calls `pwm.txt` (each UMI counted once per
     // read); false gives `pwm-units.txt` (each distinct UMI counted once). The unit-weighted one
@@ -211,9 +244,20 @@ public:
     // the composition.
     UmiComposition composition(bool weight_by_reads = false) const;
 
+    // Visit every (key, count) in ascending key order, exactly once per distinct key, without
+    // requiring them all to be resident. Resident counters walk the sorted array; spilled ones
+    // load one bucket at a time, reduce it, hand it over and free it -- so peak memory is the
+    // largest bucket, not the library.
+    //
+    // This is what `histogram()`, `composition()` and `distinct()` are written against, and it is
+    // why they keep working after a spill.
+    void for_each(const std::function<void(const Entry&)>& fn) const;
+
 private:
     // const because every accessor needs it and none of them change what the object *means*.
     void flush() const;
+    void spill() const;
+    void require_resident(const char* what) const;
 
     static constexpr size_t kMinBuffer = 4096;
 
@@ -223,6 +267,15 @@ private:
     uint64_t total_ = 0;
     mutable std::vector<Entry> buf_;
     mutable std::vector<Entry> entries_;
+
+    // Spill state. Empty `spill_paths_` means "never spilled", which is the resident case and the
+    // only one `refine` ever sees.
+    std::string spill_dir_;
+    size_t spill_budget_ = 0;
+    int spill_bits_ = 0;
+    mutable std::vector<std::string> spill_paths_;
+    mutable uint64_t distinct_cache_ = 0;
+    mutable bool distinct_known_ = false;
 };
 
 struct CorrectionParams {

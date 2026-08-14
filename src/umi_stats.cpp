@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <numeric>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -186,15 +189,127 @@ void UmiCounts::flush() const {
     }
     buf_.clear();
     set_next_flush();
+    if (spill_budget_ && entries_.size() * sizeof(Entry) > spill_budget_) spill();
+}
+
+void UmiCounts::enable_spill(const std::string& directory, size_t budget_bytes, int bits) {
+    if (bits < 1 || bits > 20) {
+        throw MigecError("UmiCounts::enable_spill: bits must be in 1..20, got " +
+                         std::to_string(bits));
+    }
+    if (budget_bytes == 0) throw MigecError("UmiCounts::enable_spill: budget must be positive");
+    spill_dir_ = directory;
+    spill_budget_ = budget_bytes;
+    spill_bits_ = bits;
+    std::filesystem::create_directories(directory);
+}
+
+void UmiCounts::require_resident(const char* what) const {
+    if (!spill_paths_.empty()) {
+        throw MigecError(std::string("UmiCounts: ") + what +
+                         " needs every entry resident, but this counter has spilled to a range "
+                         "partition -- that is the point of spilling. Use for_each(), which "
+                         "streams one bucket at a time.");
+    }
+}
+
+// The top `spill_bits_` bits of the key decide the bucket, so buckets are key-ordered ranges and
+// concatenating them in index order is ascending key order.
+void UmiCounts::spill() const {
+    if (entries_.empty()) return;
+    const size_t n_buckets = size_t{1} << spill_bits_;
+    if (spill_paths_.empty()) {
+        spill_paths_.resize(n_buckets);
+        for (size_t b = 0; b < n_buckets; ++b) {
+            spill_paths_[b] =
+                (std::filesystem::path(spill_dir_) / ("umi_" + std::to_string(b) + ".bin")).string();
+        }
+    }
+    // entries_ is already sorted, so each bucket is one contiguous run: find the boundaries and
+    // append each run in one write rather than per entry.
+    const int shift = 64 - spill_bits_;
+    size_t i = 0;
+    while (i < entries_.size()) {
+        const uint64_t b = entries_[i].key >> shift;
+        size_t j = i;
+        while (j < entries_.size() && (entries_[j].key >> shift) == b) ++j;
+        std::ofstream out(spill_paths_[static_cast<size_t>(b)],
+                          std::ios::binary | std::ios::app);
+        if (!out) throw MigecError("UmiCounts: cannot write spill file " + spill_paths_[static_cast<size_t>(b)]);
+        out.write(reinterpret_cast<const char*>(entries_.data() + i),
+                  static_cast<std::streamsize>((j - i) * sizeof(Entry)));
+        if (!out) throw MigecError("UmiCounts: short write to " + spill_paths_[static_cast<size_t>(b)]);
+        i = j;
+    }
+    // Release the capacity, not just the size: shrinking to zero size while holding the array is
+    // exactly the allocation being bounded.
+    std::vector<Entry>().swap(entries_);
+    distinct_known_ = false;
+}
+
+void UmiCounts::for_each(const std::function<void(const Entry&)>& fn) const {
+    flush();
+    if (spill_paths_.empty()) {
+        for (const Entry& e : entries_) fn(e);
+        return;
+    }
+    // Anything added since the last spill is still resident and belongs in its bucket.
+    const int shift = 64 - spill_bits_;
+    std::vector<Entry> bucket;
+    for (size_t b = 0; b < spill_paths_.size(); ++b) {
+        bucket.clear();
+        std::ifstream in(spill_paths_[b], std::ios::binary);
+        if (in) {
+            in.seekg(0, std::ios::end);
+            const std::streamoff bytes = in.tellg();
+            in.seekg(0, std::ios::beg);
+            if (bytes > 0) {
+                bucket.resize(static_cast<size_t>(bytes) / sizeof(Entry));
+                in.read(reinterpret_cast<char*>(bucket.data()), bytes);
+                if (!in) throw MigecError("UmiCounts: short read from " + spill_paths_[b]);
+            }
+        }
+        for (const Entry& e : entries_) {
+            if ((e.key >> shift) == b) bucket.push_back(e);
+        }
+        if (bucket.empty()) continue;
+        // A key can appear once per spill plus once resident, so reduction happens HERE rather
+        // than at spill time -- which is what makes a spill O(1) per entry.
+        std::sort(bucket.begin(), bucket.end(),
+                  [](const Entry& a, const Entry& c) { return a.key < c.key; });
+        size_t w = 0;
+        for (size_t r = 0; r < bucket.size(); ++r) {
+            if (w > 0 && bucket[w - 1].key == bucket[r].key) {
+                bucket[w - 1].count += bucket[r].count;
+            } else {
+                bucket[w++] = bucket[r];
+            }
+        }
+        for (size_t k = 0; k < w; ++k) fn(bucket[k]);
+    }
+}
+
+size_t UmiCounts::distinct() const {
+    flush();
+    if (spill_paths_.empty()) return entries_.size();
+    if (!distinct_known_) {
+        uint64_t n = 0;
+        for_each([&n](const Entry&) { ++n; });
+        distinct_cache_ = n;
+        distinct_known_ = true;
+    }
+    return static_cast<size_t>(distinct_cache_);
 }
 
 void UmiCounts::merge(const UmiCounts& other) {
     other.flush();
+    other.require_resident("merge()");
     for (const Entry& e : other.entries_) add(e.key, e.count);
 }
 
 const uint32_t* UmiCounts::find(uint64_t key) const {
     flush();
+    require_resident("find()");
     auto it = std::lower_bound(entries_.begin(), entries_.end(), key,
                                [](const Entry& e, uint64_t k) { return e.key < k; });
     if (it == entries_.end() || it->key != key) return nullptr;
@@ -215,11 +330,11 @@ size_t index_of(const UmiCounts& counts, uint64_t key) {
 
 CoverageHistogram UmiCounts::histogram() const {
     CoverageHistogram h;
-    for (const Entry& e : entries()) {
+    for_each([&h](const Entry& e) {
         const int b = log2_bin(e.count);
         h.reads[static_cast<size_t>(b)] += e.count;
         h.units[static_cast<size_t>(b)] += 1;
-    }
+    });
     return h;
 }
 
@@ -228,14 +343,15 @@ UmiComposition UmiCounts::composition(bool weight_by_reads) const {
     c.length = length_;
     c.freq.assign(static_cast<size_t>(length_), {0.0, 0.0, 0.0, 0.0});
     double total = 0.0;
-    for (const Entry& e : entries()) {
+    const int L = length_;
+    for_each([&](const Entry& e) {
         const double w = weight_by_reads ? static_cast<double>(e.count) : 1.0;
-        for (int j = 0; j < length_; ++j) {
+        for (int j = 0; j < L; ++j) {
             const uint8_t code = static_cast<uint8_t>((e.key >> (62 - 2 * j)) & 3u);
             c.freq[static_cast<size_t>(j)][code] += w;
         }
         total += w;
-    }
+    });
     if (total > 0.0) {
         for (auto& row : c.freq) {
             for (double& v : row) v /= total;
