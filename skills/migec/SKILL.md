@@ -461,10 +461,15 @@ all CPU samples across every thread, on one instruction, because sixteen cores w
 one cache line. Items are claimed in batches now. Anything that spreads per-read work should be
 checked against the same trap.
 
-**Note: The UMI counters are the allocation that scales with the library** — ~22 bytes per distinct
-UMI (a sorted `(key, count)` array; a hash map is ~48). They are **not yet partitioned**, so a
-NovaSeq-scale run holds ~8.8 GB in one piece. checkout warns past 1 GB. The fix is the range
-partition with `.mig` bucket output (M2), not a smaller struct.
+**Note: The UMI counters scale with the library, and bound themselves past a budget** — ~22 bytes
+per distinct UMI (a sorted `(key, count)` array; a hash map is ~48), which is ~8.8 GB at NovaSeq
+scale. Past `umi_budget_bytes` (a `checkout.run()` kwarg, 1 GB per run, `0` disables) they
+range-partition into `<out_dir>/.umi_spill`, which is removed once the summary is written, and every
+statistic over them streams a bucket at a time. `umi_spilled` in the summary says whether it fired;
+it costs ~2.2x the wall clock when it does. Never: **correction runs twice, the second pass on keys
+rotated by the width of the partitioned prefix.** A single pass would bound the memory and silently
+stop correcting every error that landed in the prefix — a third of them — while reporting the
+smaller merge count as if the library were cleaner.
 
 ## Comparing grouping accuracy
 

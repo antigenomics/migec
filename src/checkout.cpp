@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -513,14 +514,6 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
             file_of[i] = static_cast<uint32_t>(stats.sample_ids.size());
             stats.sample_ids.push_back(ids[i]);
             stats.umi_counts.emplace_back(patterns.umi_length(i));
-            // Note: this is where `enable_spill` goes, and it is deliberately NOT called yet.
-            // `UmiCounts` can now bound itself with a range partition on disk, but a spilled
-            // counter cannot serve `entries()` -- and `correct_umis`, which the bindings run on
-            // these counters, needs every entry resident to walk each barcode's 3L neighbourhood.
-            // A plain range partition splits a barcode from its neighbour whenever the
-            // substitution falls in the partitioned bits, so correction has to become two passes
-            // with the key rotated (ROADMAP item 2) before this line can be switched on.
-            // Turning it on first would bound the memory and silently stop correcting.
         } else {
             file_of[i] = static_cast<uint32_t>(it - stats.sample_ids.begin());
             // The rows would otherwise write UMIs of two lengths into one counter, and the
@@ -532,6 +525,35 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         }
     }
     const size_t n_files = stats.sample_ids.size();
+
+    // Bound the counters. Past the budget each one range-partitions to disk and everything that
+    // reads it -- the histogram, the composition, the correction -- streams a bucket at a time.
+    //
+    // Note: the budget is for the RUN and is divided by the samples, because a 96-plex sheet holds
+    // 96 counters. The 16 MB floor is where partitioning stops paying for itself: a counter that
+    // small is cheaper to hold than to write out and read back.
+    //
+    // Note: the partition is on the top bits of the key, so it is capped at half the barcode --
+    // correction runs a second pass on keys rotated by the width of the prefix, and the two
+    // prefixes have to be disjoint. A barcode too short to hold two prefixes is also too short to
+    // produce a counter worth partitioning.
+    if (request.umi_budget_bytes) {
+        const std::string dir = request.umi_spill_dir.empty()
+                                    ? request.out_prefix + ".umi_spill"
+                                    : request.umi_spill_dir;
+        stats.umi_spill = std::make_shared<UmiSpillDir>(UmiSpillDir{dir});
+        // Never: the floor is capped by the budget itself. A fixed 16 MB floor silently overrode a
+        // caller who asked for less, which makes the budget untestable at any corpus small enough
+        // to run -- and a budget that only applies above 16 MB is not the property being claimed.
+        const size_t floor = std::min<size_t>(size_t{16} << 20, request.umi_budget_bytes);
+        const size_t per_counter = std::max(floor, request.umi_budget_bytes / n_files);
+        for (size_t f = 0; f < n_files; ++f) {
+            const int L = stats.umi_counts[f].length();
+            const int bits = std::min(8, (L / 2) * 2);
+            if (bits < 1) continue;
+            stats.umi_counts[f].enable_spill(dir + "/" + stats.sample_ids[f], per_counter, bits);
+        }
+    }
 
     const std::string suffix1 = paired ? "_R1.fq.gz" : ".fq.gz";
     const std::string suffix2 = "_R2.fq.gz";
@@ -655,8 +677,19 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
         stats.wall_seconds > 0.0 ? static_cast<double>(stats.counters.total) / stats.wall_seconds
                                  : 0.0;
     stats.peak_rss_bytes = peak_rss_bytes();
-    for (const UmiCounts& u : stats.umi_counts) stats.umi_memory_bytes += u.memory_bytes();
+    for (const UmiCounts& u : stats.umi_counts) {
+        stats.umi_memory_bytes += u.memory_bytes();
+        stats.umi_spilled = stats.umi_spilled || u.spilled();
+    }
     return stats;
+}
+
+UmiSpillDir::~UmiSpillDir() {
+    // Best effort: a temp directory that outlived its readers is not worth an exception out of a
+    // destructor, and the alternative -- leaving gigabytes of buckets behind after a failed run --
+    // is what this exists to prevent.
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
 }
 
 }  // namespace migec

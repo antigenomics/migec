@@ -21,7 +21,9 @@ and merging reported separately.
 checkout 1.55 M reads/s end to end (1.70 M matching), refine 1.55 M, assemble 2.47 M, all at 16
 threads; ~22 bytes per distinct UMI against a hash map's ~48. Verified under the thread sanitizer
 as well as by comparison at 1..16 threads.
-The counters are not yet partitioned, which is the open memory item and lands with `.mig` buckets.
+The UMI counters range-partition themselves past a 1 GB budget, and correction follows them into
+the partition in two passes with the key rotated, so nothing in `checkout` scales with the library
+any more. `.mig` bucket output is the other half of that partition and is still open.
 
 **QC**: twenty gnuplot panels over the tables the stages write, including the four figures a user
 already knows how to read -- Cell Ranger's barcode rank plot on unique UMIs, the MIG size spectrum
@@ -37,14 +39,14 @@ Everything below is either open or half-open. Nothing else on this page is.
 
 | # | item | milestone | why it is next |
 |---|---|---|---|
-| 1+2 | **Bucketed correction, two passes with the key rotated** — then switch the spill on | M2/M3 | **these are one item, not two.** `UmiCounts` can now bound itself: `enable_spill()` range-partitions to disk and `for_each()` streams a bucket at a time, so `histogram()`, `composition()` and `distinct()` no longer need the library resident. What blocks *using* it in `checkout` is that the bindings run `correct_umis` on the same counters, and correction walks each barcode's 3L neighbourhood — which a plain range partition splits whenever the substitution lands in the partitioned bits. So the rotation has to come first: bound the memory before correction is bucketed and `checkout` would silently stop correcting. The call site is written and commented out in `src/checkout.cpp` |
-| 3 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
-| 4 | `--rt-error auto` | M1 | falls straight out of (3). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
-| 5 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
-| 6 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
-| 7 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
-| 8 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
-| 9 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
+| 1 | **`.mig` bucket output from `checkout`** | M2 | the other half of the partition the UMI counters now use. Correction is bucketed and the counters bound themselves (2026-08-14), so what is left is writing the reads into the same buckets rather than one FASTQ per sample -- which is what lets `assemble` skip its own partition pass |
+| 2 | The template's own error split | M3 | the pattern's constant bases calibrate the **primer**, not the polymerase — the fitted intercept is a synthesis defect rate. Separating sequencing from RT/PCR error needs a different standard, and until it exists `--rt-error` is a named class rather than a measurement |
+| 3 | `--rt-error auto` | M1 | falls straight out of (2). The floor is a property of the enzyme and the cycle count, so fitting it per dataset is the honest default once there is something to fit against |
+| 4 | i7xi5 contingency table | M2 | the only way index hopping is actually estimable, and it needs nothing that is not already in the headers |
+| 5 | `2026-migec-benchmark`, the published comparisons | M5 | MIGEC v1, MAGERI, UMI-tools, Calib, fgbio, Cell Ranger, UMI-VarCal, UMIErrorCorrect. This is what the version number is waiting on, not the code |
+| 6 | The other three callers on the ctDNA arms | M5 | the ground truth is **found and scored**: `PRJNA788522` / `PRJNA507366`, certified VAF, real 12 nt inline UMI, and LoFreq is run end to end against it (reliable to 0.25%). What is open is Mutect2, UMI-VarCal and UMIErrorCorrect on the *same* consensus, so the comparison isolates the caller. Also open: re-running with adapter trimming, which is diagnosed but not measured |
+| 7 | R1/R2 overlap merge | M1 | a special case of `--contig`'s placement, never a second matcher in `checkout` |
+| 8 | Bit-parallel matcher | M2 | last, deliberately: the scan is O(offsets x pattern) and is **not** the bottleneck. It goes in when a benchmark says so |
 
 One thing is still blocked on data rather than on work: **Britanova et al aging** (bulk TCR,
 shallow -- the real 1-3 reads/UMI dataset) lives on aldan3 and has not been pulled. The ctDNA
@@ -184,7 +186,15 @@ structure instead of trusting the published claim that none exists (`scripts/sra
       A spilled counter gives byte-identical histograms, compositions and distinct counts to a
       resident one; `entries()`, `find()` and `merge()` throw rather than answer from the fragment
       that happens to still be in RAM
-- [ ] Switch it on in `checkout` — blocked on bucketed correction, see item 1+2 above
+- [x] **Bucketed correction, and the spill switched on in `checkout`** (2026-08-14). Correction
+      follows the counters into the partition: pass 1 over the buckets as they stand owns the
+      barcode positions the prefix does not touch, pass 2 over a rotated copy owns exactly the ones
+      it hides, and every pair is weighed in one pass and only one. A bucketed run answers with the
+      scalars -- `root`/`corrected` are indexed against `entries()`, which is the array being
+      bounded -- and every one of them matches the resident answer field for field, on a simulated
+      library with injected barcode errors and on a 500,000-read corpus. `umi_budget_bytes`
+      defaults to 1 GB for the run; it costs ~2.2x the wall clock when it fires, and nothing when
+      it does not
 - [ ] `.mig` bucket output, which is the other half of the same partition
 - [ ] i7×i5 contingency table — the only way index hopping is actually estimable
 - Gate: per-sample counts within 2% of MIGEC v1.2.9 on the spike-ins; identical output at 1 and 8

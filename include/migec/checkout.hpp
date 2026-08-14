@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -211,6 +212,32 @@ struct CheckoutRequest {
     // -t rather than with the library. 8192 x threads reads in flight costs ~5 MB per thread and
     // leaves the thread-spawn overhead per round under a tenth of a percent.
     size_t chunk_reads = 8192;
+    // Resident bytes the UMI counters may hold between them before they range-partition to disk.
+    // This was the last allocation in the pipeline that grew with the library rather than with the
+    // chunk: ~22 B per distinct barcode in one piece, 8.8 GB at NovaSeq scale. Past the budget the
+    // counters spill and everything downstream of them streams instead.
+    //
+    // Note: it is a whole-run budget and is divided by the number of samples, because a 96-plex
+    // sheet holds 96 of these. The floor keeps a heavily multiplexed run from spilling a counter
+    // small enough to be free to hold.
+    //
+    // Note: 0 disables spilling. The counters then grow without bound and `umi_memory_bytes` is
+    // the only thing that says so, which is where this was before the partition existed.
+    size_t umi_budget_bytes = size_t{1} << 30;
+    // Where the partition goes. Empty puts it next to the output, in `<out_prefix>.umi_spill`, and
+    // it is removed when the statistics that read it are done with it.
+    std::string umi_spill_dir;
+};
+
+// Owns a directory of spilled UMI buckets for as long as anything can still read it.
+//
+// Never: the spill files outlive `run_checkout`. The per-sample statistics -- histogram,
+// composition, correction -- stream the partition *after* the run returns, so deleting it at the
+// end of the run would leave every counter pointing at nothing. It dies with the last copy of the
+// stats instead, which is the object those readers hold.
+struct UmiSpillDir {
+    std::string path;
+    ~UmiSpillDir();
 };
 
 struct CheckoutStats {
@@ -228,6 +255,8 @@ struct CheckoutStats {
     double reads_per_second = 0.0;
     size_t peak_rss_bytes = 0;
     size_t umi_memory_bytes = 0;  // the part of the above that is the UMI counters
+    bool umi_spilled = false;     // at least one counter went past the budget and partitioned
+    std::shared_ptr<UmiSpillDir> umi_spill;  // keeps the partition readable; see UmiSpillDir
     int threads = 1;
 };
 

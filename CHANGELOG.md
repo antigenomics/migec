@@ -4,6 +4,52 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+### The UMI counters bound themselves, and correction follows them
+
+This is roadmap items 1 and 2, which turned out to be one item. `checkout`'s UMI counters were the
+last allocation in the pipeline that grew with the library rather than with the chunk: ~22 bytes per
+distinct barcode held in one piece, 8.8 GB at NovaSeq scale, with a warning past 1 GB standing in
+for a fix.
+
+They now range-partition to disk past `umi_budget_bytes` (1 GB for the whole run, divided by the
+samples, `0` to keep everything resident). The buckets go in `<out_dir>/.umi_spill` and are removed
+once the summary has been written; `umi_spilled` in the summary says whether it happened. The
+histogram, the composition, the distinct count, the distance-1 census and the correction all stream
+one bucket at a time. Not a CLI flag: 1 GB is where a counter becomes a problem on any machine, and
+nothing below it changes.
+
+Never: **a range partition on its own would have bounded the memory and silently stopped
+correcting.** The bucket is the top bits of the key, so a barcode whose error landed in the first
+few positions sits in a different bucket from its parent and the two can never meet — and a third
+of all barcode errors are in those positions. Correction therefore runs twice: once over the
+buckets as they stand, owning the positions the prefix does not touch, and once over a copy whose
+keys are rotated left by the width of the prefix, owning exactly the ones it hides. Every pair is
+weighed in one pass and only one, so `umis_merged` stays a count of barcodes rather than of
+opportunities to look at them. Checked field for field against the resident answer, on a simulated
+library with injected barcode errors and on a 500,000-read corpus: identical, including the
+estimated error rate.
+
+Never: a bucketed run reports the **scalars**. `root` and `corrected` are indexed against
+`entries()`, which is the array being bounded, so they come back empty rather than wrong, and
+`BarcodeEvidence` — indexed the same way — is refused rather than ignored. The stage that rewrites
+reads is `refine`, and `refine` does not spill.
+
+Two bugs found on the way, both by tests written to state the property rather than the number:
+
+- The **first** flush of a counter swaps the append buffer in wholesale and returned before the
+  budget check, so a counter whose whole library arrived in one buffer's worth never partitioned at
+  all — the bound switched itself off on exactly the small case, and reported a resident answer
+  that happened to be right.
+- The bucketed driver reported the census's `0.0` for a clean library where the resident path
+  reports the 1e-4 floor it actually corrects at. The rate quoted has to be the rate used; it feeds
+  the error budget, which divides by it.
+
+Cost: about 2.2x the wall clock when it fires (718,000 reads/s against 333,000 on the benchmark
+corpus), because the partition is read back four times. Nothing when it does not fire — 217,000
+reads/s single-threaded and 23.7 B per distinct UMI, both unchanged.
+
 ## 2.2.1 — 2026-08-14
 
 Documentation, pipelines and tooling. Note: **the wheel is unchanged from 2.2.0** — no command,

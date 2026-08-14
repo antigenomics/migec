@@ -226,16 +226,29 @@ public:
     // pass impossible to add later, and correction is the whole reason these counts exist.
     //
     // Never: a spilled counter can no longer serve `entries()`, because the whole point is that
-    // the entries are not all resident. `histogram()`, `composition()` and `distinct()` stream and
-    // still work; `entries()`, `find()` and everything built on them throw. `refine` does not
-    // spill -- it needs the whole table for the neighbourhood scan, and bounding THAT is a
-    // separate item with a different fix (two passes with the key rotated).
+    // the entries are not all resident. `histogram()`, `composition()`, `distinct()` and
+    // `correct_umis()` stream and still work; `entries()`, `find()`, `merge()` and
+    // `estimate_umi_error()` throw. `refine` does not spill -- it needs the whole table for the
+    // neighbourhood scan *and* for the read rewrite, and bounding THAT is a separate item.
+    //
+    // Never: `bits` must leave room for the rotation. Correction runs two passes, the second on
+    // keys rotated by the width of the partitioned prefix, and the two prefixes have to be
+    // disjoint or a substitution in the first prefix is invisible to both. The prefix is
+    // `(bits + 1) / 2` bases, so `bits` is refused past `umi_length` bases of room -- here, at
+    // the call, rather than as a wrong merge count later.
     //
     // Note: the same key may be written to a bucket many times, once per spill. Reduction happens
     // when the bucket is read back, so a spill is O(1) per entry and correctness does not depend
     // on how many times it happened.
     void enable_spill(const std::string& directory, size_t budget_bytes, int bits);
     bool spilled() const { return !spill_paths_.empty(); }
+    // Spill configuration, so a bucketed algorithm can partition a derived counter the same way.
+    const std::string& spill_dir() const { return spill_dir_; }
+    size_t spill_budget() const { return spill_budget_; }
+    int spill_bits() const { return spill_bits_; }
+    // Barcode positions the bucket prefix can touch: a substitution at a position at or past this
+    // one leaves the key in its own bucket, which is exactly the set of pairs one pass can see.
+    int spill_prefix_bases() const { return (spill_bits_ + 1) / 2; }
 
     CoverageHistogram histogram() const;
     // `weight_by_reads` draws the composition MIGEC calls `pwm.txt` (each UMI counted once per
@@ -252,6 +265,12 @@ public:
     // This is what `histogram()`, `composition()` and `distinct()` are written against, and it is
     // why they keep working after a spill.
     void for_each(const std::function<void(const Entry&)>& fn) const;
+
+    // The same stream, one whole bucket at a time: a sorted, reduced array of the barcodes sharing
+    // a key prefix. A resident counter hands over its single array once. This is what a *pairwise*
+    // algorithm needs -- a barcode and its 1-substitution neighbour are in the same array whenever
+    // the substitution misses the partitioned prefix -- and `for_each` is written on top of it.
+    void for_each_bucket(const std::function<void(const std::vector<Entry>&)>& fn) const;
 
 private:
     // const because every accessor needs it and none of them change what the object *means*.
@@ -312,6 +331,24 @@ struct CorrectionParams {
     // before. Splitting the apply as well would be a different algorithm: merges chain, and which
     // root a child lands on depends on which merges happened before it.
     int threads = 0;
+
+    // ------------------------------------------------------------------ bucketed runs
+    //
+    // Everything below is set by the bucketed driver and left at its default everywhere else. A
+    // single range-partition bucket cannot compute these for itself: its barcodes all share a key
+    // prefix, so its composition is degenerate and its size is a fraction of the library the
+    // independent-molecule hypothesis is about. Zero means "the table you were handed IS the
+    // library", which is the resident case and the only one `refine` ever sees.
+    size_t library_distinct = 0;     // distinct barcodes in the whole library
+    double library_collision = 0.0;  // Prod_j m_j over the whole library
+    double library_space = 0.0;      // its effective barcode space
+    // Barcode positions this pass owns, as a half-open range; a negative `scan_to` means "to the
+    // end". Never: this is what stops the two passes double counting, and it is not a dedup pass
+    // after the fact. Pass 1 sees exactly the pairs whose substitution misses the partitioned
+    // prefix and pass 2, on rotated keys, exactly the ones it hides, so every pair is weighed once
+    // and `merged` is a count of barcodes rather than of opportunities to look at them.
+    int scan_from = 0;
+    int scan_to = -1;
 };
 
 // What a barcode's own reads say about it, beyond how many there are. Both fields are optional
@@ -377,8 +414,26 @@ struct CorrectionResult {
 // `threads` only spreads the distance-1 census, which is 3L binary searches per barcode and was
 // the largest serial block left in both checkout and refine. It is a sum of integers over a
 // read-only table, so the answer does not depend on it.
+//
+// Needs the whole table resident and throws on a spilled counter. `correct_umis` does the same
+// census bucket by bucket and reports the answer in `estimated_error`; take it from there rather
+// than making this one work on a partition, because the census is where the two-pass split lives.
 double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, int threads = 1);
 
+// Folds barcodes that are sequencing or early-PCR children of a neighbouring barcode into it.
+//
+// Works whether or not the counter has spilled. A spilled counter is corrected bucket by bucket,
+// in two passes with the key rotated by the width of the partitioned prefix, so a substitution in
+// the prefix -- which the partition would otherwise hide forever -- is seen by the second pass.
+// Never: a bucketed run answers with the SCALARS only. `root` and `corrected` are per-entry
+// arrays indexed against `entries()`, which a spilled counter does not have and whose whole
+// purpose is to not be resident, so they come back empty; `merged`, `merged_reads`,
+// `molecules_observed`, `molecules_corrected`, `estimated_error` and `saturated` are all defined
+// library-wide and are what `checkout` reports. The stage that rewrites reads is `refine`, and
+// `refine` does not spill.
+// Never: `evidence` is indexed against `entries()` too, so it is refused rather than ignored on a
+// spilled counter -- silently dropping the payload term would report a merge count from a weaker
+// model as if it came from the full one.
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params = {},
                               const BarcodeEvidence& evidence = {});
 

@@ -165,9 +165,22 @@ correction is written up in `project/review-algorithms.md`.
   output at any `-t`** (1.06 M reads/s end to end, 1.68 M matching, at 16 threads;
   `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists and
   dual-end barcodes are done; `.mig` bucket output from checkout is still open.
-- **Note: The UMI counters are not partitioned yet.** ~22 B per distinct UMI is 8.8 GB at NovaSeq
-  scale, held in one piece. The fix is the range partition (M2, with `.mig` bucket output), not a
-  smaller struct. Until then checkout warns past 1 GB.
+- **The UMI counters bound themselves and correction follows them (2026-08-14).** Past
+  `umi_budget_bytes` (1 GB per run, divided by the samples; a `checkout.run()` kwarg, never a CLI
+  flag) each counter range-partitions into `<out>/.umi_spill`, removed when the summary is written,
+  and the histogram, composition, distinct count, distance-1 census and correction all stream a
+  bucket at a time. Never: **a partition alone bounds the memory and silently stops correcting** --
+  the bucket is the top bits of the key, so an error in the first `(bits+1)/2` positions puts a
+  barcode in a different bucket from its parent forever. Correction runs **two passes**: over the
+  buckets as they stand owning positions `[pb, L)`, then over a copy with keys rotated left by `pb`
+  owning `[L-pb, L)`, so every pair is weighed once and `merged` counts barcodes, not opportunities.
+  Never: a bucketed run answers with the SCALARS -- `root`/`corrected` are indexed against
+  `entries()`, which is the array being bounded, and `BarcodeEvidence` is refused rather than
+  ignored. Verified field for field against the resident run on a simulated library and a 500 k
+  corpus. Costs ~2.2x wall when it fires (718 k -> 333 k reads/s), nothing when it does not. Two
+  bugs it found: the FIRST flush swapped the buffer in and returned before the budget check, so a
+  library arriving in one buffer never partitioned at all; and the driver reported the census's 0.0
+  where the resident path reports the 1e-4 floor it actually corrects at.
 - **Note: The per-sample statistics are the serial tail.** Histogram, composition and `correct_umis`
   run once at the end on one thread, ~1.5–2 µs per distinct UMI, so at 16 threads they are a larger
   wall than the gzip reader. `correct_umis` in particular is O(n · 3L · log n) and arguably belongs
@@ -454,11 +467,12 @@ correction is written up in `project/review-algorithms.md`.
   absent, so a per-sample `contig: false` against `params.migec_contig = true` silently meant its
   opposite -- the one direction a per-sample override exists to make possible.
 - **Next, in order. `ROADMAP.md` has the same list with the reasoning; this is the short form.**
-  1. **`.mig` bucket output from `checkout`** — the only unbounded allocation left. The UMI
-     counters are 8.8 GB at NovaSeq scale held in one piece; checkout warns past 1 GB and a warning
-     is not a fix.
-  2. **Bucketed correction in `refine`**, two passes with the key rotated. Same problem one stage
-     on, and the fix is understood rather than still to be designed.
+  1. **`.mig` bucket output from `checkout`** — the other half of the partition the counters
+     already use. Writing reads into the same buckets is what lets `assemble` skip its own
+     partition pass.
+  2. **Bucketed correction in `refine`**, the same two passes with the key rotated, now that
+     `correct_umis` does it for a spilled counter. Note: refine also holds the reads for the
+     rewrite, so bounding it is not only the table.
   3. **The template's own error split** — the pattern's constant bases calibrate the PRIMER, not
      the polymerase, so the RT/PCR separation needs a different standard.
   4. **`--rt-error auto`**, which falls out of 3 and not before it.

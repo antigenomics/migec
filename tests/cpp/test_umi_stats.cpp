@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <string>
 
@@ -581,4 +582,128 @@ TEST_CASE("enable_spill validates its arguments where they are attributable") {
     CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 1024, 0), MigecError);
     CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 1024, 21), MigecError);
     CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 0, 4), MigecError);
+    // The rotated second correction pass needs a second prefix's worth of barcode, so a partition
+    // wider than half the barcode is refused where the number is attributable -- not later, as a
+    // merge count that is quietly short.
+    CHECK_THROWS_AS(c.enable_spill("/tmp/migec_bad", 1024, 5), MigecError);
+    UmiCounts wide(12);
+    wide.enable_spill((std::filesystem::temp_directory_path() / "migec_bits_ok").string(), 1024, 8);
+}
+
+// --- bucketed correction: the rotated second pass (roadmap item 2) ---------------------------
+
+TEST_CASE("rotate_barcode is a rotation of the barcode, not of the word") {
+    const uint64_t k = pack_barcode("ACGTACGA");
+    CHECK(unpack_barcode(rotate_barcode(k, 8, 3), 8) == "TACGAACG");
+    CHECK(rotate_barcode(k, 8, 0) == k);
+    CHECK(rotate_barcode(k, 8, 8) == k);
+    CHECK(rotate_barcode(rotate_barcode(k, 8, 3), 8, 5) == k);
+    // A full-width barcode has no unused tail to shift into, which is the case that overflows a
+    // mask written for the general one.
+    std::string full;
+    for (int i = 0; i < 32; ++i) full += "ACGT"[i % 4];
+    const uint64_t f = pack_barcode(full);
+    CHECK(unpack_barcode(rotate_barcode(f, 32, 1), 32) == full.substr(1) + full.substr(0, 1));
+}
+
+TEST_CASE("a spilled counter corrects to the same answer as a resident one") {
+    // The claim roadmap items 1 and 2 are one item for: a range partition splits a barcode from
+    // its neighbour whenever the substitution lands in the partitioned prefix, so a bucketed
+    // correction that took one pass would silently stop correcting exactly those children. Here
+    // every position carries children, including the two the 8-bit partition cuts on.
+    std::mt19937_64 rng(99);
+    const int L = 12;
+    std::vector<std::pair<uint64_t, uint32_t>> adds;
+    for (int i = 0; i < 4000; ++i) {
+        std::string s;
+        for (int j = 0; j < L; ++j) s += "ACGT"[rng() % 4];
+        const uint64_t parent = umi(s);
+        adds.emplace_back(parent, 30);
+        // One child per parent, at a position that cycles over the whole barcode: a quarter of
+        // them land in the partitioned prefix and are invisible to the first pass.
+        const size_t j = static_cast<size_t>(i % L);
+        std::string child = s;
+        const std::string others = std::string("ACGT").erase(
+            std::string("ACGT").find(s[j]), 1);
+        child[j] = others[rng() % 3];
+        adds.emplace_back(umi(child), 1);
+    }
+
+    UmiCounts resident(L);
+    UmiCounts spilling(L);
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_correct").string();
+    std::filesystem::remove_all(dir);
+    spilling.enable_spill(dir, 1 << 14, 8);  // 8 bits = a 4-base prefix, spilled many times over
+    for (const auto& a : adds) {
+        resident.add(a.first, a.second);
+        spilling.add(a.first, a.second);
+    }
+    REQUIRE(spilling.spilled());
+    REQUIRE(spilling.distinct() == resident.distinct());
+
+    CorrectionParams p;
+    p.threads = 1;
+    const CorrectionResult r = correct_umis(resident, p);
+    const CorrectionResult s = correct_umis(spilling, p);
+
+    REQUIRE(r.merged > 3000);  // the resident answer is the thing being reproduced
+    CHECK(s.merged == r.merged);
+    CHECK(s.merged_reads == r.merged_reads);
+    CHECK(s.molecules_observed == r.molecules_observed);
+    CHECK(s.molecules_corrected == doctest::Approx(r.molecules_corrected).epsilon(0.01));
+    CHECK(s.estimated_error == doctest::Approx(r.estimated_error).epsilon(0.05));
+    // Never: the scalars are the answer, and the per-entry arrays are absent rather than wrong --
+    // they are indexed against entries(), which is the array being bounded.
+    CHECK(s.root.empty());
+    CHECK(s.corrected.empty());
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("a bucket left by a dead run is not read back as part of the next one") {
+    // Never: a spill appends. A stale bucket is a well-formed bucket, so its counts would be added
+    // to this library and nothing would say so.
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_stale").string();
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream junk(dir + "/umi_0.bin", std::ios::binary);
+        const UmiCounts::Entry ghost{umi("AAAAAAAA"), 424242};
+        junk.write(reinterpret_cast<const char*>(&ghost), sizeof(ghost));
+    }
+    UmiCounts c(8);
+    c.enable_spill(dir, 4096, 4);
+    std::mt19937_64 rng(11);
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s += "ACGT"[rng() % 4];
+        c.add(umi(s), 1);
+    }
+    REQUIRE(c.spilled());
+    uint64_t reads = 0;
+    c.for_each([&reads](const UmiCounts::Entry& e) { reads += e.count; });
+    CHECK(reads == 20000);  // 424242 would be hard to miss
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("bucketed correction refuses evidence it cannot index") {
+    const std::string dir =
+        (std::filesystem::temp_directory_path() / "migec_spill_evidence").string();
+    std::filesystem::remove_all(dir);
+    UmiCounts c(8);
+    c.enable_spill(dir, 64, 4);
+    std::mt19937_64 rng(5);
+    for (int i = 0; i < 20000; ++i) {
+        std::string s;
+        for (int j = 0; j < 8; ++j) s += "ACGT"[rng() % 4];
+        c.add(umi(s), 1);
+    }
+    REQUIRE(c.distinct() > 0);
+    REQUIRE(c.spilled());
+    BarcodeEvidence ev;
+    ev.payload_width = 4;
+    ev.payload.assign(4 * c.distinct(), 'A');
+    CHECK_THROWS_AS(correct_umis(c, CorrectionParams{}, ev), MigecError);
+    std::filesystem::remove_all(dir);
 }
