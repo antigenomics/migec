@@ -3,7 +3,9 @@
 #SBATCH --partition=medium
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=20:00:00
+# Never: `medium` tops out at 16 hours and a job asking for more sits at PENDING
+# (PartitionTimeLimit) for ever rather than being rejected. The bwa index is ~1 h of this.
+#SBATCH --time=15:00:00
 #SBATCH --output=/projects/tcr_bcr_rnaseq/migec_ctdna/logs/%x_%j.out
 #SBATCH --error=/projects/tcr_bcr_rnaseq/migec_ctdna/logs/%x_%j.err
 #
