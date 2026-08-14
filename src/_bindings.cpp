@@ -566,6 +566,7 @@ PYBIND11_MODULE(_core, m) {
             }
             d["examples"] = examples;
             d["wall_seconds"] = st.wall_seconds;
+            d["peak_rss_bytes"] = st.peak_rss_bytes;
             return d;
         },
         py::arg("input"), py::arg("output"), py::arg("per_10k") = 100u,

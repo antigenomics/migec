@@ -4,7 +4,15 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.3.0 — 2026-08-14
+
+**The intermediate is a partition now, end to end**, and the `.mig` format is at v2 (a reader takes
+v1 and v2, so an intermediate written by 2.2.1 still reads). Nothing in `checkout` scales with the
+library any more, `refine` and `assemble` both take buckets, and an adversarial audit of all of it
+found three bugs that destroyed or invented data -- fixed, each with the test that reproduces it.
+
+Upgrading: nothing changes unless you pass `--mig`. FASTQ is still the default at every stage, the
+CLI has one new flag, and every number a 2.2.1 run produced is the number a 2.3.0 run produces.
 
 ### `checkout --mig` writes the partition `assemble` was building for itself
 
@@ -42,6 +50,67 @@ Never: **only buckets `assemble` wrote are deleted after they are consumed.** Pa
 bucket as it finishes with it, which is right for its own temporaries and catastrophic for
 checkout's output -- the first run through `--mig` ate three of the four samples' partitions, and
 a second `assemble` over an eaten one would report a smaller library with nothing to say why.
+
+### refine reads and writes buckets, and the format carries the barcode's own quality
+
+`checkout --mig` -> `refine` -> `assemble` runs on buckets end to end. refine's output is
+**re-partitioned on the corrected barcode**: a corrected barcode is a different key and a key
+decides its bucket, so copying a bucket through unchanged would stop it being a partition, and the
+reads whose barcode was corrected across a boundary would be grouped with strangers by the next
+stage. Every number matches the FASTQ route -- reads, barcodes, merges, molecules, the estimated
+error to nine digits, the barcode table byte for byte, and the consensus FASTQ byte for byte.
+
+`.mig` **v2** adds the BARCODE's own quality, one Phred per base, as two fixed-width columns. v1
+stored the minimum over the barcode, which is not what the correction posterior wants: it weighs
+the reported quality AT THE POSITION THAT DIFFERS, and a minimum says every position is as bad as
+the worst one -- overstating the error everywhere, which makes merges easier, which is the wrong
+direction. A v1 file still reads and falls back to the global rate, exactly as a FASTQ with no
+`QX:Z:` tag does.
+
+Note: the audit trail on the bucket route is `<sample>.barcodes.tsv`, every barcode with its
+parent. A `.mig` record has no room for the pre-correction barcode the way a FASTQ comment has
+`OX:Z:`, and two `u64` per READ to carry what is one row per BARCODE is the wrong trade.
+
+### Three data-integrity bugs, found by attacking the new code
+
+All three reproduced before they were fixed, and all three are in the `.mig` work above.
+
+- **refine wrote its output buckets over its input.** Same names on both sides, and `MigWriter`
+  opens `"wb"`, which truncates. Pointed at its own input directory the run destroyed the reads it
+  was halfway through reading. Refused now, on the resolved path, before a writer is opened.
+- **refine's `.mig` rewrite ignored `--limit-read`/`--limit-umi`.** It wrote reads the table was
+  never built from -- uncorrected, beside corrected ones, with nothing saying which was which.
+- **The sample id went into every output path unvalidated**, and in `assemble` and `refine` it comes
+  from the DATA (the `BC:Z:` tag of the first read), so a crafted tag wrote outside the output
+  directory. `validate_sample_id` refuses path separators, `..`, a leading `-` and control
+  characters.
+
+### ...and six more from the same audit
+
+A truncated spill file was read into an undersized buffer (a 15-byte heap overrun; trigger is a run
+killed mid-spill). A `.mig` header's `bucket_bits`/`bucket_index` went unvalidated into a shift and
+a vector index. A block's `n_records` was `memcpy`'d before it was bounded by the payload. `assemble`
+left its whole temp partition behind on the error path and leaked the per-bucket table handle on a
+throw. `fclose` was unchecked in four writers, so a disk that filled during the final flush was
+reported as a successful run. A failed thread SPAWN unwound over joinable threads, which is
+`std::terminate`.
+
+Two usability bugs went with them: a barcode **sheet** could not use the positional spellings that
+work through `--bc-pattern`, and an **empty input** printed statistics computed from no reads and
+exited 0.
+
+### Tests and docs
+
+`tests/realworld/` exists now -- it was an empty `__init__.py` -- and runs the two public CI
+fixtures through the stages they can support. `tests/unit/test_error_paths.py` covers empty,
+truncated and malformed input into every stage. Paired-end flows past `checkout` for the first time
+in a test, and the four-stage chain is asserted as one invariant. `.github/workflows/benchmark.yml`
+runs the benchmark and realworld tiers nightly and on dispatch, never on the PR path.
+
+README.md went from 809 lines to 206 -- install, where the barcode is, the five commands, what comes
+out, and a documentation table -- with every fact moved into a docs page rather than deleted, and
+`docs/assays.rst` is a new home for the per-assay settings table that was buried in a 762-line ctDNA
+page.
 
 ### The UMI counters bound themselves, and correction follows them
 
@@ -583,7 +652,7 @@ and the published benchmark comparisons. Install with `pip install --pre migec`.
 
 Everything below was developed before this tag.
 
-## Unreleased
+## 2.0.0a1 and earlier
 
 ### Cell barcodes, whitelists, cell calling, dual-end barcodes, and what the Phred is worth
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from migec import _core
-from migec.checkout import _dur, _pct
+from migec.checkout import _bytes, _dur, _pct
 
 
 def run(
@@ -52,7 +52,9 @@ def format_report(summary: dict) -> str:
             "      (five kept barcodes in key order, not the first five seen: first-seen "
             "order is a sample of the deep MIGs and of nothing else)"
         )
-    lines.append(f"{_dur(s['wall_seconds'])}")
+    lines.append(
+        f"{_dur(s['wall_seconds'])}, peak RSS {_bytes(s.get('peak_rss_bytes', 0))}"
+    )
     if s["reads_without_umi"]:
         lines.append(
             f"warning: {s['reads_without_umi']:,} reads carried no RX tag and were dropped"

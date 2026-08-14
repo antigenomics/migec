@@ -147,12 +147,16 @@ correction is written up in `project/review-algorithms.md`.
 - **Note: Do not reproduce MIGEC v1's bugs.** Quality must be indexed at the *match offset*, not the
   read start; low-quality mismatches must actually be counted (v1's dangling `else` meant they
   never were).
-- Done: The version string is duplicated in `pyproject.toml`, `include/migec/version.hpp` and
-  `python/migec/__init__.py`. `__init__.py` asserts the last two agree and CI prints all three.
+- Done: The version string is in FOUR places -- `pyproject.toml`, `include/migec/version.hpp`,
+  `python/migec/__init__.py` and `docs/conf.py`. `__init__.py` asserts the middle two agree and CI
+  prints all three; nothing checks `docs/conf.py`, which is how it sat at `2.0.0.dev0` for three
+  releases while every published page showed it.
 
 ## Release process
 
-1. Bump the version in all three places above; add a `CHANGELOG.md` section.
+1. Bump the version in all FOUR places above; add a `CHANGELOG.md` section. Then check the README:
+   it is the PyPI long description, so a repo-relative image or link is broken from the moment the
+   wheel lands.
 2. Branch `release/<version>` → PR → CI and docs green.
 3. `gh release create v<version>`.
 4. `publish.yml` builds wheels and publishes via OIDC to the `pypi` environment. Never: Do not rename
@@ -163,8 +167,8 @@ correction is written up in `project/review-algorithms.md`.
 - M0 done. `migec checkout` works: patterns, trimming, header transfer, UMI statistics, count
   correction, **paired input with strand normalisation**, and **multi-core with byte-identical
   output at any `-t`** (1.06 M reads/s end to end, 1.68 M matching, at 16 threads;
-  `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists and
-  dual-end barcodes are done; `.mig` bucket output from checkout is still open.
+  `scripts/benchmark_threads.py` writes the table the figure is drawn from). Whitelists,
+  dual-end barcodes and `.mig` bucket output are all done.
 - **The UMI counters bound themselves and correction follows them (2026-08-14).** Past
   `umi_budget_bytes` (1 GB per run, divided by the samples; a `checkout.run()` kwarg, never a CLI
   flag) each counter range-partitions into `<out>/.umi_spill`, removed when the summary is written,

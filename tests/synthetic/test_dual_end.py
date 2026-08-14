@@ -12,6 +12,12 @@ import random
 
 import pytest
 
+# Never: BEFORE the `migec` imports below, and not `pytestmark` alone. A module-scope
+# import of a package whose extension is missing raises at COLLECTION, which pytest
+# reports as an error rather than a skip -- so a machine without the built extension
+# fails the suite instead of saying it cannot run it.
+pytest.importorskip("migec._core", reason="the C++ extension is not built: run `bash setup.sh`")
+
 from migec.checkout import run
 
 from tests.conftest import requires_core

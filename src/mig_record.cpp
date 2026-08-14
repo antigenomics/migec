@@ -83,6 +83,9 @@ public:
     }
     long offset() { return std::ftell(f_); }
     std::FILE* f() { return f_; }
+    // Every corruption message names the file. A partition is up to 256 of them and a stage reads
+    // them in a loop, so "corrupt file" without a name sends the user looking through all of them.
+    const std::string& path() const { return path_; }
 
 private:
     std::string path_;
@@ -254,9 +257,11 @@ struct MigReader::Impl {
         size_t got = std::fread(&bh, 1, sizeof(bh), r->f());
         if (got == 0) {
             // No footer at all: the writer never closed. That is a truncation, not an EOF.
-            throw MigecError("mig_reader: file ends without a footer (writer did not close)");
+            throw MigecError("mig_reader: " + r->path() + " ends without a footer (the writer did not close -- the run that produced it did not finish)");
         }
-        if (got != sizeof(bh)) throw MigecError("mig_reader: truncated block header");
+        if (got != sizeof(bh)) {
+            throw MigecError("mig_reader: truncated block header in " + r->path());
+        }
         if (bh.n_records == 0) {  // terminator
             uint64_t n = 0;
             char magic[4] = {0, 0, 0, 0};
@@ -264,7 +269,7 @@ struct MigReader::Impl {
                 std::memcmp(magic, kMigMagic, 4) == 0) {
                 declared = n;
             } else {
-                throw MigecError("mig_reader: corrupt footer");
+                throw MigecError("mig_reader: corrupt footer in " + r->path());
             }
             eof = true;
             return false;
@@ -272,7 +277,7 @@ struct MigReader::Impl {
 
         std::string stored(bh.stored_bytes, '\0');
         if (std::fread(stored.data(), 1, bh.stored_bytes, r->f()) != bh.stored_bytes) {
-            throw MigecError("mig_reader: truncated block payload (declared " +
+            throw MigecError("mig_reader: truncated block payload in " + r->path() + " (declared " +
                              std::to_string(bh.stored_bytes) + " bytes)");
         }
         raw.assign(bh.raw_bytes, '\0');
@@ -282,16 +287,19 @@ struct MigReader::Impl {
                                 reinterpret_cast<const Bytef*>(stored.data()),
                                 static_cast<uLong>(bh.stored_bytes));
             if (rc != Z_OK || out_len != bh.raw_bytes) {
-                throw MigecError("mig_reader: block decompression failed");
+                throw MigecError("mig_reader: block decompression failed in " + r->path());
             }
         } else if (bh.codec == kCodecNone) {
             raw = stored;
         } else {
-            throw MigecError("mig_reader: unknown block codec " + std::to_string(bh.codec));
+            throw MigecError("mig_reader: unknown block codec " + std::to_string(bh.codec) + " in " + r->path());
         }
         uint32_t crc = static_cast<uint32_t>(
             crc32(0L, reinterpret_cast<const Bytef*>(raw.data()), static_cast<uInt>(raw.size())));
-        if (crc != bh.crc32) throw MigecError("mig_reader: block CRC mismatch (corrupt file)");
+        if (crc != bh.crc32) {
+            throw MigecError("mig_reader: block CRC mismatch in " + r->path() +
+                             " -- the file is corrupt");
+        }
 
         // Never: BEFORE the memcpy. `n_records` is a u32 out of the file and the CRC above only
         // proves the payload is what the writer wrote -- a crafted header declaring more records
@@ -314,7 +322,7 @@ struct MigReader::Impl {
         const size_t bq = header.barcode_quality ? bh.n_records : 0;
         off_qcell = off_qumi + bq * header.umi_len;
         if (off_qcell + bq * header.cell_len != raw.size()) {
-            throw MigecError("mig_reader: block size inconsistent");
+            throw MigecError("mig_reader: block size inconsistent in " + r->path());
         }
         pos = 0;
         return true;

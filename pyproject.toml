@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "migec"
-version = "2.2.1"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
+version = "2.3.0"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
 description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,9 +14,20 @@ license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Mikhail Shugay", email = "mikhail.shugay@gmail.com" }]
 keywords = ["umi", "barcode", "consensus", "airr", "repseq", "single-cell", "sequencing"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Programming Language :: Python :: 3",
+    # One row per interpreter the wheels are actually built for (publish.yml's cibuildwheel
+    # matrix). PyPI's sidebar filters on these, so a package that ships four and declares none
+    # looks like it supports nothing.
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: C++",
 ]
 # typer and nothing else. Every stage writes its tables with the standard library, and the plots
