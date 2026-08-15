@@ -209,9 +209,16 @@ AssembleStats assemble(const AssembleRequest& in) {
         // memory peak, which breaks the property that a finer partition costs less, not more.
         // `test_shallow_memory_is_still_bounded_by_the_bucket` is the guard, and it does not fail
         // at 64 k on a 500 k-read corpus -- the objection is one of scale, not one the test tier
-        // can see, which is exactly why the constant is written down here with its number. The
-        // upgrade path is a persistent worker pool rather than a bigger chunk: with the threads
-        // started once for the whole pass, chunk size stops buying anything and can stay small.
+        // can see, which is exactly why the constant is written down here with its number.
+        //
+        // Never: the persistent worker pool this note used to name as the upgrade path CANNOT buy
+        // the 32%, and the claim was never measured. `parallel_for`'s whole per-call cost -- spawn,
+        // join and all -- is ~140 us at 16 threads and is FLAT in the item count, so it is the
+        // call count that pays it: 488 calls at 8 k costs 0.069 s against 61 calls at 64 k costing
+        // 0.009 s. That 0.060 s is 14% of the 0.42 s the chunk change is worth on 4 M reads, i.e.
+        // ~3% of the run, and a pool removes exactly that term and nothing else. The other 86% is
+        // the serial read and the barrier tail, which a pool does not touch. Measure the helper
+        // before rewriting it: this is the same lesson as the stale comment in `consensus.cpp`.
         constexpr size_t kChunkReads = 8192;
         // What the parallel scan extracts from a record. No strings: the serial pass that follows
         // only validates and counts, so it must not have to touch the comment again.

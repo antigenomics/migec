@@ -327,26 +327,37 @@ struct OffsetUnion {
 // The modal offset between two reads, by exact seed votes. Returns false when the evidence is too
 // thin -- no offset at all is the right answer for two reads of the same molecule that simply do
 // not overlap, and inventing one is what glues a contig across a gap.
-bool seed_offset(const ConsensusRead& a, const ConsensusRead& b, const ConsensusParams& params,
-                 int& shift) {
+// Seed -> first position in read `a`. Held by the caller so it can be built once per `a` and
+// reused against every `b`, which is what `place_reads` does; the string_views point into a.seq,
+// so it must not outlive the read it indexes.
+//
+// ponytail: still a plain hash map, and the ceiling is named. It was rebuilt PER PAIR until the
+// measurement below; the two remaining moves are a rolling hash instead of `string_view` keys and
+// a suffix automaton instead of a map, and neither has a benchmark asking for it -- after the
+// union-find short-circuit and this reuse, a 500-read group spends its time in the vote loop
+// rather than in construction. Revisit if a group ever holds thousands of components.
+using SeedIndex = std::unordered_map<std::string_view, int>;
+
+void build_seeds(const ConsensusRead& a, const ConsensusParams& params, SeedIndex& seeds) {
     const int k = params.seed_length;
-    const int la = read_length(a), lb = read_length(b);
-    if (la < k || lb < k) return false;
-    // ponytail: a plain map of seed -> first position, rebuilt per pair. The comment here used to
-    // say the quadratic was "over single digits" because X1 found only 1.5% of 10x groups hold
-    // more than one read -- that is true of ALL groups and false of the ones contig mode is run
-    // on. Measured on `sc5p_v2_hs_PBMC_1k` at `--min-reads 30`: 47,584 molecules averaging 110
-    // reads, the deepest 802. The named ceiling was reached, so the upgrade path was taken -- but
-    // in `place_reads`, by not asking about pairs union-find has already joined, which is exact
-    // and was worth 19.7x. Indexing the group once is the remaining move and is NOT taken: after
-    // the short-circuit the seed scan runs O(components) times per group, not O(reads^2), so
-    // there is no longer a benchmark that justifies it.
-    std::unordered_map<std::string_view, int> seeds;
+    const int la = read_length(a);
+    seeds.clear();
+    if (la < k) return;
     seeds.reserve(static_cast<size_t>(la - k + 1));
     for (int i = 0; i <= la - k; ++i) {
         seeds.emplace(a.seq.substr(static_cast<size_t>(i), static_cast<size_t>(k)), i);
     }
-    std::unordered_map<int, int> votes;
+}
+
+// The voting half, against an index the caller already built. `votes` is the caller's scratch for
+// the same reason the index is: it is cleared, not reallocated, once per pair.
+bool seed_offset_indexed(const SeedIndex& seeds, int la, const ConsensusRead& b,
+                         const ConsensusParams& params, std::unordered_map<int, int>& votes,
+                         int& shift) {
+    const int k = params.seed_length;
+    const int lb = read_length(b);
+    if (la < k || lb < k) return false;
+    votes.clear();
     for (int j = 0; j <= lb - k; ++j) {
         auto it = seeds.find(b.seq.substr(static_cast<size_t>(j), static_cast<size_t>(k)));
         if (it != seeds.end()) ++votes[it->second - j];
@@ -359,6 +370,14 @@ bool seed_offset(const ConsensusRead& a, const ConsensusRead& b, const Consensus
     // The implied overlap has to be long enough to be evidence rather than a repeat.
     const int overlap = std::min(shift + la, lb) - std::max(shift, 0);
     return overlap >= params.min_overlap;
+}
+
+bool seed_offset(const ConsensusRead& a, const ConsensusRead& b, const ConsensusParams& params,
+                 int& shift) {
+    SeedIndex seeds;
+    std::unordered_map<int, int> votes;
+    build_seeds(a, params, seeds);
+    return seed_offset_indexed(seeds, read_length(a), b, params, votes, shift);
 }
 
 }  // namespace
@@ -380,13 +399,27 @@ std::vector<std::vector<ConsensusRead>> place_reads(const std::vector<ConsensusR
     // exact, and was measured at 33.4 s against 32.6 -- nothing, because what remains after the
     // short-circuit is path-compressed `find` calls at a few ns. Not taken; the ceiling it would
     // bound is a single group at the 10,000-read cap, and no benchmark asks for it.
+    //
+    // Never: read i's seed index is built ONCE per i, not once per pair, and lazily so a pile that
+    // skips every j never builds one at all. The short-circuit above left the scan count at
+    // O(reads x components) rather than O(reads^2) -- and 8% of 10x reads are NOT co-terminal, so
+    // a 500-read group carries ~40 components and i=0 alone was rebuilding the same map 40 times.
+    // Indexing per i is exactly the same computation with the rebuild removed, so the partition,
+    // the offsets and the output are identical.
+    SeedIndex seeds;
+    std::unordered_map<int, int> votes;
     for (size_t i = 0; i < reads.size(); ++i) {
+        bool indexed = false;
         for (size_t j = i + 1; j < reads.size(); ++j) {
             int oi = 0, oj = 0;
             if (uf.find(static_cast<int>(i), oi) == uf.find(static_cast<int>(j), oj)) continue;
+            if (!indexed) {
+                build_seeds(reads[i], params, seeds);
+                indexed = true;
+            }
             int shift = 0;
             // seed_offset returns offset(j) - offset(i), so join(j, i, shift).
-            if (seed_offset(reads[i], reads[j], params, shift)) {
+            if (seed_offset_indexed(seeds, read_length(reads[i]), reads[j], params, votes, shift)) {
                 uf.join(static_cast<int>(j), static_cast<int>(i), shift);
             }
         }

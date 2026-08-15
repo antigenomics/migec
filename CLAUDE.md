@@ -510,8 +510,15 @@ rebuild the old tag.
   because `parallel_for` starts and joins its threads per call and 4 M reads at 8 k pays ~15,000
   thread creations. Not taken: 16 MB of resident chunk makes **pass 1** the memory peak on a finely
   partitioned shallow library, breaking "a finer partition costs less, not more" --
-  `test_shallow_memory_is_still_bounded_by_the_bucket` is what caught it. The upgrade path is a
-  persistent worker pool, not a bigger chunk.
+  `test_shallow_memory_is_still_bounded_by_the_bucket` is what caught it.
+- **Never: the persistent worker pool this file used to name as that upgrade path CANNOT pay for
+  it, and the claim had never been measured (2026-08-15).** `parallel_for`'s entire per-call cost
+  -- spawn, join and all -- is **~140 us at 16 threads and FLAT in the item count**, so only the
+  call count pays it: 488 calls at 8 k costs 0.069 s against 61 calls at 64 k costing 0.009 s.
+  That **0.060 s is 14% of the 0.42 s** the chunk change is worth on 4 M reads, i.e. ~3% of the
+  run, and a pool removes that term and nothing else -- the other 86% is the serial read and the
+  barrier tail. Measure the helper before rewriting it; the number is in `src/assemble.cpp` beside
+  `kChunkReads`.
 - **`subsample` reports what it kept (2.0.0a4)**: median and deepest reads per kept barcode next to
   the mean, plus five example barcodes with their depths. Never: **in key order, not first-seen
   order** -- a 100-read barcode appears early ~100x more often than a singleton, so the head of a
