@@ -255,8 +255,9 @@ Until the v2 paper exists, cite the original methods:
   (2014). doi:10.1038/nmeth.2960
 - Shugay M *et al.* MAGERI: Computational pipeline for molecular-barcoded targeted resequencing.
   *PLoS Comput Biol* 13(5):e1005480 (2017). doi:10.1371/journal.pcbi.1005480
+- Turchaninova MA *et al.* High-quality full-length immunoglobulin profiling with unique molecular 
+  barcoding. *Nat Protoc* 11(9):1599-616 (2016). doi: 10.1038/nprot.2016.093
 
 ## License
 
-GPL-3.0-or-later. The archived v1 code on `legacy-v1` remains under its original MiLaboratory
-non-commercial license.
+GPL-3.0-or-later. 
