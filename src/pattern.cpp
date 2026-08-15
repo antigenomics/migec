@@ -118,6 +118,21 @@ BarcodePattern BarcodePattern::compile(std::string_view spec) {
                          " nt cell barcode; the packed representation holds " +
                          std::to_string(kMaxBarcodeLen));
     }
+    // Never: the two lengths are checked TOGETHER as well as apart, because the key a molecule is
+    // grouped on is cell + UMI -- 20 and 16 each clear their own check and their 36 nt sum does
+    // not fit the 64-bit key at all. Two molecules sharing their first 32 bases and differing past
+    // them then pack to the SAME key and merge, which is the error nothing downstream can detect;
+    // measured before this guard, a 20+16 layout counted 1 distinct barcode where there were 2.
+    // `refine` and `assemble` already refuse the sum when they read it back off a tag, so without
+    // this the FASTQ route was the one door left open. It also keeps the shift in `process_chunk`
+    // defined: a 32 nt cell would shift a 64-bit key by 64, which is UB rather than zero.
+    if (p.cell_length_ + p.umi_length_ > kMaxBarcodeLen) {
+        throw MigecError("pattern: \"" + std::string(spec) + "\" captures a " +
+                         std::to_string(p.cell_length_) + " nt cell barcode and a " +
+                         std::to_string(p.umi_length_) + " nt UMI; a molecule is grouped on both, " +
+                         "and the packed representation holds " + std::to_string(kMaxBarcodeLen) +
+                         " bases in total");
+    }
     return p;
 }
 
@@ -287,6 +302,20 @@ void PatternSet::add(std::string sample_id, std::string_view spec, std::string_v
     } else {
         slave_of_.push_back(static_cast<int>(slaves_.size()));
         slaves_.push_back(BarcodePattern::compile(slave));
+    }
+    // `compile` checks one pattern against the key, and a dual-end sample is TWO -- the slave
+    // extends the UMI on the other mate, so the total a molecule is grouped on is the master's
+    // cell plus both UMIs, and no single compile call can see it. Checked here, where the row is
+    // still the unit and the sample id can be named; by `run_checkout` the rows have been folded
+    // by sample id and the attribution is gone.
+    const size_t i = patterns_.size() - 1;
+    if (cell_length(i) + umi_length(i) > kMaxBarcodeLen) {
+        throw MigecError("checkout: sample '" + samples_.back() + "' captures " +
+                         std::to_string(cell_length(i)) + " nt of cell barcode and " +
+                         std::to_string(umi_length(i)) +
+                         " nt of UMI across both mates; a molecule is grouped on both, and the "
+                         "packed representation holds " +
+                         std::to_string(kMaxBarcodeLen) + " bases in total");
     }
 }
 

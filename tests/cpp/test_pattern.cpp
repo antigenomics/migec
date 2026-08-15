@@ -271,3 +271,28 @@ TEST_CASE("a slave pattern extends the UMI rather than starting a new one") {
     CHECK_FALSE(plain.has_slave(0));
     CHECK(plain.umi_length(0) == 12);
 }
+
+TEST_CASE("the cell and UMI lengths are checked together, not only apart") {
+    // 20 and 16 each clear their own bound and their 36 nt sum does not fit the 64-bit key at
+    // all. A molecule is grouped on cell + UMI, so before this guard two molecules sharing their
+    // first 32 bases packed to the same key and merged: measured, 1 distinct barcode where there
+    // were 2, which is the error nothing downstream can detect.
+    CHECK_THROWS_AS(BarcodePattern::compile(std::string(20, 'X') + std::string(16, 'N')),
+                    MigecError);
+    // The legal layouts are untouched, including the one that exactly fills the key.
+    CHECK_NOTHROW(BarcodePattern::compile(std::string(16, 'X') + std::string(10, 'N')));
+    CHECK_NOTHROW(BarcodePattern::compile(std::string(16, 'X') + std::string(16, 'N')));
+}
+
+TEST_CASE("a dual-end sample is checked across BOTH mates") {
+    // The slave extends the UMI on the other mate, so no single compile call can see the total.
+    // 16 nt cell + 12 + 12 = 40, and each of the three parts is individually legal.
+    PatternSet set;
+    CHECK_THROWS_AS(set.add("S1", std::string(16, 'X') + std::string(12, 'N'),
+                            std::string(12, 'N')),
+                    MigecError);
+    // ...and a dual-end sample that fits is still accepted, at exactly the bound.
+    PatternSet ok;
+    CHECK_NOTHROW(ok.add("S2", std::string(8, 'X') + std::string(12, 'N'), std::string(12, 'N')));
+    CHECK(ok.cell_length(0) + ok.umi_length(0) == 32);
+}

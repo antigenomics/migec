@@ -6,6 +6,42 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+### A barcode too long for the key is refused, and the shift that packs it is guarded
+
+`checkout` validated the cell and UMI lengths **apart** and grouped molecules on their **sum**.
+20 nt of cell and 16 of UMI each clear their own 32-base bound; their 36 nt total does not fit the
+64-bit key at all, so two molecules sharing their first 32 bases packed identically and merged.
+Measured before the guard: **1 distinct barcode where there were 2** — the error nothing
+downstream can detect. Refused now when the pattern compiles, where the offending row of the
+barcode table can still be named.
+
+Never: **a dual-end sample is checked across both mates.** The slave pattern extends the UMI on
+the other mate, so no single `compile` call can see the total; 16 + 12 + 12 = 40 is three
+individually legal parts. The check is in `PatternSet::add`, the last place the row is still the
+unit.
+
+Never: **`>> 64` on a 64-bit key is undefined, not zero.** x86 masks the shift count to 6 bits, so
+it becomes `>> 0` and the UMI is ORed back on top of the cell barcode instead of below it. A 32 nt
+cell barcode with no UMI reaches it, and the length check above permits that layout because 32 + 0
+fits exactly. Confirmed under UBSan that the old expression is flagged and returns a *different*
+value from the guarded one.
+
+### `place_reads` builds each read's seed index once, not once per pair
+
+**40,786 -> 150,152 reads/s (3.7x) on 60 groups of 500 reads, with the consensus FASTQ and
+`mig.tsv` MD5-identical.** The union-find short-circuit released in 2.5.0 cut the scan count from
+O(reads²) to O(reads x components) — but 8% of 10x reads are not co-terminal, so a 500-read group
+carries ~40 components and read 0 was rebuilding its own seed map once for each of them. The index
+is now built once per read and lazily, so a pure pile never builds one at all. Same computation,
+cached; the partition and the offsets are unchanged.
+
+Never: **the persistent worker pool named as `kChunkReads`' upgrade path cannot deliver the 32%,
+and that claim had never been measured.** `parallel_for`'s whole per-call cost is ~140 us at 16
+threads and is flat in the item count, so only the call count pays it: 0.069 s at 8 k chunks
+against 0.009 s at 64 k. That 0.060 s is **14% of the 0.42 s** the chunk change is worth on 4 M
+reads — about 3% of the run — and a pool removes exactly that term and nothing else. The rest is
+the serial read and the barrier tail. The measurement is written down beside the constant.
+
 ## 2.5.0 — 2026-08-15
 
 ### The knee is Kneedle, and it now refuses to answer when there is no knee

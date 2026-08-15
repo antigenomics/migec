@@ -558,8 +558,15 @@ void process_chunk(const Chunk& c, bool paired, bool write_unmatched, int gzip_l
         // `pack_barcode` puts base 0 in the top bits, so shifting the UMI down by the cell's width
         // lands it exactly where `pack_barcode(cell + umi)` would -- without the concatenation,
         // which would be an allocation per read.
-        const uint64_t mol_key =
-            r.cell.empty() ? umi_key : (cell_key | (umi_key >> (2 * r.cell.size())));
+        //
+        // Never: the shift is guarded rather than assumed in range. `>> 64` on a 64-bit key is
+        // UNDEFINED, not zero -- x86 masks the count to 6 bits, so it becomes `>> 0` and the UMI
+        // lands back on top of the cell barcode instead of below it. A 32 nt cell barcode with no
+        // UMI reaches it, which the length check above permits (32 + 0 fits the key exactly).
+        const unsigned shift = 2u * static_cast<unsigned>(r.cell.size());
+        const uint64_t mol_key = r.cell.empty() ? umi_key
+                                 : shift >= 64u ? cell_key
+                                                : (cell_key | (umi_key >> shift));
         if (mig.on) {
             MigStaged st;
             st.cell = cell_key;

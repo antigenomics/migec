@@ -159,6 +159,45 @@ def test_the_skew_warning_is_weighed_against_the_barcode_not_the_umi(tmp_path):
     assert "barcode is 26 nt but only" in report
 
 
+def test_a_cell_that_fills_the_key_on_its_own_does_not_shift_by_64(tmp_path):
+    """32 nt of cell and no UMI: the one layout that reaches a 64-bit shift of a 64-bit key.
+
+    `>> 64` is undefined, not zero -- the count is masked to 6 bits on x86, so it becomes `>> 0`
+    and the UMI is ORed back on top of the cell barcode instead of below it. Verified under UBSan
+    that the unguarded expression is flagged and returns a different value from the guarded one.
+    The length check permits this layout (32 + 0 fits the key exactly), so the guard is what makes
+    it defined: with no UMI the molecule key is the cell key, which is what these ten reads say.
+    """
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        for i in range(10):
+            f1.write(f"@r{i}\n{'ACGT' * 8}\n+\n{'I' * 32}\n")
+            f2.write(f"@r{i}\n{'A' * 90}\n+\n{'I' * 90}\n")
+    (tmp_path / "bc.txt").write_text(f"P\t{'X' * 32}\n")
+
+    s = run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz", max_offset=0)["samples"][0]
+    assert (s["cell_length"], s["umi_length"], s["barcode_length"]) == (32, 0, 32)
+    assert s["reads"] == 10
+    assert s["umis"] == 1, "ten reads of one cell barcode are one key, not ten"
+
+
+def test_a_barcode_too_long_for_the_key_is_refused_by_name(tmp_path):
+    """20 nt of cell and 16 of UMI clear their own bounds and their 36 nt sum does not fit at all.
+
+    Before the guard this counted 1 distinct barcode where there were 2: the key holds 32 bases,
+    so two molecules sharing their first 32 and differing past them packed identically and merged.
+    That is the error nothing downstream can detect, which is why it is refused rather than warned
+    about -- and refused when the pattern compiles, where the offending row can still be named.
+    """
+    (tmp_path / "bc.txt").write_text(f"P\t{'X' * 20}{'N' * 16}\n")
+    with gzip.open(tmp_path / "r1.fq.gz", "wt") as f1, gzip.open(tmp_path / "r2.fq.gz", "wt") as f2:
+        f1.write(f"@r0\n{'ACGT' * 9}\n+\n{'I' * 36}\n")
+        f2.write(f"@r0\n{'A' * 90}\n+\n{'I' * 90}\n")
+    with pytest.raises(RuntimeError, match="32 bases in total"):
+        run(tmp_path / "r1.fq.gz", tmp_path / "bc.txt", tmp_path / "out",
+            reads2=tmp_path / "r2.fq.gz", max_offset=0)
+
+
 def test_a_positional_pattern_is_refused_by_a_free_scan(tmp_path):
     """No anchor means nothing to search for. Saying so beats matching everywhere.
 
