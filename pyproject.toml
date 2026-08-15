@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "migec"
-version = "2.5.0"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
+version = "2.5.1"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
 description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
 readme = "README.md"
 requires-python = ">=3.10"

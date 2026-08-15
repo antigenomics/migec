@@ -40,10 +40,17 @@ Two summary numbers are reported per sample:
 Base composition, entropy and information
 -----------------------------------------
 
-``checkout.umi_composition.tsv`` has one row per UMI position::
+``checkout.umi_composition.tsv`` has one row per barcode position::
 
-   sample_id	position	A	C	G	T	entropy_bits	information_bits	collision
-   S1	0	0.220000	0.306667	0.300000	0.173333	1.962861	0.037139	0.262489
+   sample_id	position	segment	A	C	G	T	entropy_bits	information_bits	collision
+   S1	0	umi	0.220000	0.306667	0.300000	0.173333	1.962861	0.037139	0.262489
+
+``segment``
+   ``cell`` or ``umi``. The table spans the **whole barcode**, cell then UMI, because that is what
+   the counters are keyed on — a molecule is sample + cell + UMI. The two halves are read
+   differently: a cell position is drawn from a whitelist and its skew is the whitelist's, while a
+   UMI position is a free synthesiser mix and its skew is a defect you are paying for. On a bulk
+   library every row is ``umi``.
 
 ``entropy_bits``
    Shannon entropy :math:`H_j = -\sum_a p_j(a)\log_2 p_j(a)`. 2.0 for a uniform position.

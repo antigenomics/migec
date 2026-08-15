@@ -18,7 +18,7 @@ set title "Posterior error of the consensus, before the floor is added"
 set xlabel "reads in the molecule"
 set ylabel "mean posterior error"
 set logscale xy
-set format y "10^{{%%T}}"
+set format y "10^{%T}"
 set key inside top right
 plot "/Users/mikesh/vcs/code/migec/assets/SRR1763769.mig.tsv" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7      lc rgb "#d95f02" title "mean per depth"
 

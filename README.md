@@ -147,6 +147,26 @@ migec plot cons/          # twenty QC panels with gnuplot, straight off those TS
 
 <p align="center"><img alt="barcode rank plot" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/cell_rank.svg" width="60%"></p>
 
+**How deeply was each molecule sequenced, and is the barcode any good?** Two panels answer the
+questions you ask first, both drawn straight off `checkout`'s own tables on a real 10x library
+(`sc5p_v2_hs_PBMC_1k` VDJ-T, 3.16 M read pairs, 311,421 molecules):
+
+<p align="center">
+<img alt="MIG size distribution" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/coverage.svg" width="49%">
+<img alt="barcode base composition" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/umi_pwm.PBMC.svg" width="49%">
+</p>
+
+Left, **MIG size in doubling bins** — bars are molecules, the line is the reads inside them. Most
+molecules are seen once or twice while most *reads* pile onto a few very deep ones, which is the
+distribution that decides whether a consensus is worth assembling at all.
+
+Right, **the barcode's own PWM**, every position of cell barcode and UMI against the 1/4 a free
+synthesiser mix would give. The two halves read differently on purpose: the 16 cell positions
+(marked on the axis) swing between 0.198 and 0.305 because they are drawn from 10x's whitelist,
+while the 10 UMI positions sit tight around 1/4. A UMI position that wandered like a cell position
+would be a synthesis defect, and `effective_length` in `checkout.summary.tsv` is what it costs you
+— 25.85 usable bases of 26 here.
+
 Each of these was run against real output ([downstream](https://antigenomics.github.io/migec/downstream.html)):
 
 ```bash
