@@ -483,6 +483,20 @@ and `fastq-dump` exits 3.
 | Provenance | **derived (simulated)** -- never presented as a measurement. `assets/SRR1763769.mig.tsv` beside it is experimental; see the Primer ID entry |
 | Storage | the TSVs are committed, the FASTQ is not (`--keep` writes it locally) |
 
+### MIG size and barcode PWM figures in `assets/` (the two README panels)
+
+| Item | Value |
+|---|---|
+| Use | `assets/coverage.svg` and `assets/umi_pwm.PBMC.svg`, the two panels the README embeds under the barcode rank plot |
+| Tables | `assets/checkout.coverage.tsv`, `assets/checkout.umi_composition.tsv` |
+| Source data | `sc5p_v2_hs_PBMC_1k` VDJ-T, **lane 1 only** (`..._S1_L001_R1/R2_001.fastq.gz`), the same library as the Cell Ranger comparison above |
+| Regenerate | `migec checkout R1 R2 --preset 10x-v2 --sample PBMC -o co/ -t 8`, copy `co/checkout.{coverage,umi_composition}.tsv` into `assets/`, then `migec plot assets -o assets` |
+| Measured | 3,155,166 read pairs, 100% assigned, 311,421 molecules, 10.13 reads/UMI, effective length 25.85 of 26 nt |
+| Provenance | **experimental** -- 10x's own published FASTQ, not simulated. Contrast the entry above, which is simulated and says so |
+| Why this library | the PWM needs a barcode with a cell half and a UMI half to show that the two behave differently: the 16 whitelist positions span 0.198-0.305 against 1/4 while the 10 UMI positions stay near it. A bulk library draws one flat run and makes the point invisible |
+| Never | the composition table spans the WHOLE barcode, cell then UMI, because that is what the counters are keyed on. Its `segment` column is what says which is which, and `effective_length` must be read against `barcode_length`, never `umi_length` |
+| Storage | the two TSVs are committed (13 KB); the 220 MB FASTQ pair is not -- fetch it with the command in the Cell Ranger entry |
+
 ### minibwa (github.com/lh3/minibwa)
 
 | Item | Value |

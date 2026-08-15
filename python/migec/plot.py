@@ -65,15 +65,24 @@ PANELS = [
         source="checkout.umi_composition.tsv",
         per_sample=True,
         script="""
-set title "UMI base composition -- {sample}"
-set xlabel "barcode position"
+set title "Barcode base composition -- {sample}"
+set xlabel "barcode position (cell barcode, then UMI)"
 set ylabel "base frequency"
-set yrange [0:1]
+# Never: [0:*], not [0:1]. A well-made barcode sits at 1/4 everywhere, so a fixed unit axis spends
+# three quarters of the panel on emptiness and flattens the only thing the figure is for -- the
+# departures from 1/4. Anchored at 0 so the bar heights stay honest, and the 1/4 rule stays drawn.
+set yrange [0:*]
+# One row at the top, over headroom made for it. Five entries stacked at the right sat on the
+# curves, because an autoscaled composition fills its own panel and leaves no empty corner.
+set key inside top center horizontal maxrows 1
+set offsets 0, 0, 0.045, 0
 set arrow from graph 0, first 0.25 to graph 1, first 0.25 nohead dt 2 lc rgb "#999999"
 set label "1/4" at graph 1.01, first 0.25 tc rgb "#999999"
-plot for [i=3:6] "{src}" using (strcol(1) eq "{sample}" ? $2 : 1/0):i with linespoints \
-     lw 2 pt 7 ps 0.5 lc rgb word("#1b9e77 #d95f02 #7570b3 #e7298a", i - 2) \
-     title word("A C G T", i - 2)
+plot for [i=4:7] "{src}" using (strcol(1) eq "{sample}" ? $2 : 1/0):i with linespoints \
+     lw 2 pt 7 ps 0.5 lc rgb word("#1b9e77 #d95f02 #7570b3 #e7298a", i - 3) \
+     title word("A C G T", i - 3), \
+     "" using (strcol(1) eq "{sample}" && strcol(3) eq "cell" ? $2 : 1/0):(0) \
+     with points pt 7 ps 0.9 lc rgb "#666666" title "cell barcode positions"
 """,
     ),
     Panel(
@@ -82,16 +91,16 @@ plot for [i=3:6] "{src}" using (strcol(1) eq "{sample}" ? $2 : 1/0):i with lines
         per_sample=True,
         script="""
 set title "What each barcode position is worth -- {sample}"
-set xlabel "barcode position"
+set xlabel "barcode position (cell barcode, then UMI)"
 set ylabel "bits"
 set yrange [0:2]
 set boxwidth 0.7
 set arrow from graph 0, first 2 to graph 1, first 2 nohead dt 2 lc rgb "#999999"
 set label "2 bits = a position the synthesiser mixed evenly" at graph 0.02, first 1.9 \
      tc rgb "#999999"
-plot "{src}" using (strcol(1) eq "{sample}" ? $2 : 1/0):8 with boxes lc rgb "#1b9e77" \
+plot "{src}" using (strcol(1) eq "{sample}" ? $2 : 1/0):9 with boxes lc rgb "#1b9e77" \
      title "information", \
-     "" using (strcol(1) eq "{sample}" ? $2 : 1/0):7 with linespoints lw 2 pt 7 ps 0.5 \
+     "" using (strcol(1) eq "{sample}" ? $2 : 1/0):8 with linespoints lw 2 pt 7 ps 0.5 \
      lc rgb "#7570b3" title "Shannon entropy"
 """,
     ),
@@ -115,8 +124,8 @@ set title "What the reported Phred is worth, measured on the pattern's constant 
 set xlabel "reported Phred"
 set ylabel "error probability"
 set logscale y
-set format y "10^{{%%T}}"
-plot "{src}" using 1:5 with lines lw 2 dt 2 lc rgb "#666666" title "nominal 10^{{-q/10}}", \
+set format y "10^{%T}"
+plot "{src}" using 1:5 with lines lw 2 dt 2 lc rgb "#666666" title "nominal 10^{-q/10}", \
      "" using 1:4 with points pt 7 ps 1.2 lc rgb "#d95f02" title "observed", \
      "" using 1:6 with lines lw 2 lc rgb "#1b9e77" title "calibrated"
 """,
@@ -126,9 +135,17 @@ plot "{src}" using 1:5 with lines lw 2 dt 2 lc rgb "#666666" title "nominal 10^{
         source="checkout.coverage.tsv",
         script="""
 set title "MIG size distribution -- how many reads each molecule was seen with"
-set xlabel "reads per UMI"
+set xlabel "reads per UMI (log2 bins)"
 set ylabel "UMIs"
-set logscale xy
+# Base 2 on x because the BINS are powers of two: `checkout.coverage.tsv` is written in MIGEC's
+# own doubling bins, so a base-10 axis puts the tick marks somewhere other than the data.
+set logscale x 2
+set logscale y
+set format x "2^{%L}"
+set format y "10^{%T}"
+# Top left: the distribution falls to the right, so the default bottom-right key sits on the
+# deepest bins, which are the ones an over-sequencing question is actually about.
+set key inside top left
 set boxwidth 0.8 relative
 plot "{src}" using 2:4 with boxes lc rgb "#1b9e77" title "UMIs", \
      "" using 2:3 with linespoints lw 2 pt 7 ps 0.6 lc rgb "#d95f02" title "reads in them"
@@ -397,7 +414,7 @@ set title "Posterior error of the consensus, before the floor is added"
 set xlabel "reads in the molecule"
 set ylabel "mean posterior error"
 set logscale xy
-set format y "10^{{%%T}}"
+set format y "10^{%T}"
 set key inside top right
 plot "{src}" using 6:($10 > 0 ? $10 : 1/0) smooth unique with linespoints lw 2.5 pt 7 ps 0.7 \
      lc rgb "#d95f02" title "mean per depth"

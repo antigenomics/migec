@@ -6,6 +6,37 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+## 2.5.1 — 2026-08-15
+
+### The composition table says which half of the barcode a position is in, and two axes stop lying
+
+`checkout.umi_composition.tsv` gains a **`segment`** column, `cell` or `umi`. The table has spanned
+the whole barcode since 2.5.0 keyed the counters on cell + UMI, and without this it is one
+anonymous run of 26 positions. The two halves are read differently and that is the point: a cell
+position is drawn from a whitelist so its skew is the whitelist's, a UMI position is a free
+synthesiser mix so its skew is a defect you are paying for.
+
+Never: **`set format` in a panel script needs a single brace and a single percent.** The panel
+scripts are substituted with `str.replace`, not `str.format` — only `_PREAMBLE` is an f-string — so
+`"10^{{%%T}}"` reached gnuplot verbatim and **every y tick of the committed `consensus_error.svg`
+read a literal `10%T`**. The axis spanned 10^0 to 10^-250 and no tick said so. Three panels were
+affected: `consensus_error`, `quality_calibration`, `coverage`.
+
+The `coverage` panel is now **log2 on x**, because `checkout.coverage.tsv` is written in MIGEC's own
+doubling bins and a base-10 axis puts the ticks somewhere other than the data. The `umi_pwm` panel
+autoscales y instead of pinning [0:1]: a well-made barcode sits at 1/4 everywhere, so a fixed unit
+axis spent three quarters of the panel on emptiness and flattened the only thing the figure is for.
+
+### Two README panels, on a real library
+
+`assets/coverage.svg` and `assets/umi_pwm.PBMC.svg`, drawn off `checkout`'s own tables on
+`sc5p_v2_hs_PBMC_1k` VDJ-T lane 1 — 3,155,166 read pairs, 100% assigned, 311,421 molecules,
+effective length 25.85 of 26 nt. **Experimental, not simulated**, and `SOURCES.md` says so next to
+the simulated panels it sits beside.
+
+The PWM is the case for the `segment` column: the 16 cell positions swing between **0.198 and
+0.305** while the 10 UMI positions sit tight around 1/4.
+
 ### A barcode too long for the key is refused, and the shift that packs it is guarded
 
 `checkout` validated the cell and UMI lengths **apart** and grouped molecules on their **sum**.

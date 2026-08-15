@@ -274,6 +274,12 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         for (int j = 0; j < comp.length; ++j) {
             py::dict d;
             d["position"] = j;
+            // Which half of the barcode this position is. The composition spans cell + UMI, and
+            // the two are read completely differently: a cell position is drawn from a whitelist
+            // of a few hundred thousand and its skew is the whitelist's, a UMI position is a free
+            // synthesiser mix and its skew is a defect. Without this the PWM is one anonymous run
+            // of 26 positions and the reader cannot tell which is which.
+            d["segment"] = j < cell_len ? "cell" : "umi";
             d["A"] = comp.freq[static_cast<size_t>(j)][0];
             d["C"] = comp.freq[static_cast<size_t>(j)][1];
             d["G"] = comp.freq[static_cast<size_t>(j)][2];

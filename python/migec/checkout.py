@@ -242,11 +242,17 @@ def _write_tables(out: Path, summary: dict) -> None:
 
     # Per-position base usage and information content -- the numbers a sequence logo draws.
     with open(out / "checkout.umi_composition.tsv", "w") as fh:
-        fh.write("sample_id\tposition\tA\tC\tG\tT\tentropy_bits\tinformation_bits\tcollision\n")
+        # `segment` says whether a position is cell barcode or UMI: the table spans both, and a
+        # skewed cell position is the whitelist's doing where a skewed UMI position is a defect.
+        fh.write(
+            "sample_id\tposition\tsegment\tA\tC\tG\tT\tentropy_bits\tinformation_bits\t"
+            "collision\n"
+        )
         for s in summary["samples"]:
             for p in s["composition"]:
                 fh.write(
-                    f"{s['sample_id']}\t{p['position']}\t{p['A']:.6f}\t{p['C']:.6f}\t"
+                    f"{s['sample_id']}\t{p['position']}\t{p['segment']}\t"
+                    f"{p['A']:.6f}\t{p['C']:.6f}\t"
                     f"{p['G']:.6f}\t{p['T']:.6f}\t{p['entropy']:.6f}\t{p['information']:.6f}\t"
                     f"{p['collision']:.6f}\n"
                 )
