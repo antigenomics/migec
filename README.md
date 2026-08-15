@@ -1,4 +1,4 @@
-> MIGEC is free for academic use. This is a legacy version, the software is no longer supported, if you need similar software solutions please visit [MiLaboratory](https://milaboratory.ru/).
+> Deprecated. This is the legacy version, kept on the [`legacy-v1`](https://github.com/antigenomics/migec/tree/legacy-v1) branch and no longer supported; use the latest version at [antigenomics/migec](https://github.com/antigenomics/migec).
 
 [![JitPack](https://jitpack.io/v/mikessh/migec.svg)](https://jitpack.io/#mikessh/migec)
 
