@@ -8,6 +8,17 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## 2.5.1 — 2026-08-15
 
+### An empty table is skipped, not failed
+
+Never: **a purely positional pattern has no constant bases, so `checkout.quality_calibration.tsv`
+is written with a header and no rows** — the calibration is measured against the pattern's own
+constant bases and 10x has none. `migec plot` handed that to gnuplot, which answered `x range is
+invalid`, and the run reported a *failure*. A chemistry with nothing to calibrate against is not a
+broken run. Found on the real `sc5p_v2_hs_PBMC_1k` run that drew the new README panels.
+
+Empty and missing are reported apart, because the advice differs: a missing table means run the
+stage that writes it, an empty one means the stage ran and had nothing to put in it.
+
 ### The composition table says which half of the barcode a position is in, and two axes stop lying
 
 `checkout.umi_composition.tsv` gains a **`segment`** column, `cell` or `umi`. The table has spanned

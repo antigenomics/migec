@@ -471,6 +471,13 @@ plot "{src}" using 2:4 with boxes lc rgb "#1b9e77"
 ]
 
 
+def _has_rows(path: Path) -> bool:
+    """True if the table has a data row under its header. Blank lines do not count."""
+    with open(path) as fh:
+        next(fh, None)
+        return any(line.strip() for line in fh)
+
+
 def _samples(path: Path) -> list[str]:
     """The distinct values of column 1, in file order. One figure per sample."""
     seen: list[str] = []
@@ -510,12 +517,22 @@ def run(
 
     drawn: list[str] = []
     skipped: list[str] = []
+    empty: list[str] = []
     failed: list[str] = []
     for panel in PANELS:
         matches = sorted(src_dir.glob(panel.source))
-        if not matches:
-            skipped.append(panel.name)
+        # A table with a header and no rows is the same case as no table at all, and it is a real
+        # one rather than a corner: a purely positional pattern (10x) has no constant bases, so
+        # `checkout.quality_calibration.tsv` is written empty and there is nothing to calibrate
+        # against. Feeding that to gnuplot got "x range is invalid" on stderr and a failure row in
+        # the report, which reads as a broken run rather than a chemistry without an anchor.
+        present = [m for m in matches if _has_rows(m)]
+        if not present:
+            # Reported apart, because the advice differs: a missing table means run the stage, an
+            # empty one means the stage ran and had nothing to put in it.
+            (empty if matches else skipped).append(panel.name)
             continue
+        matches = present
         for src in matches:
             stem = panel.name if len(matches) == 1 else f"{panel.name}.{src.name.split('.')[0]}"
             for sample in _samples(src) if panel.per_sample else [""]:
@@ -547,6 +564,7 @@ def run(
         "gnuplot": exe or "",
         "drawn": drawn,
         "skipped": skipped,
+        "empty": empty,
         "failed": failed,
         "scripts": sorted(p.name for p in out.glob("*.gp")),
     }
@@ -571,5 +589,11 @@ def format_report(summary: dict) -> str:
         lines.append("")
         lines.append(
             f"no table for: {', '.join(summary['skipped'])} -- run the stage that writes it"
+        )
+    if summary.get("empty"):
+        lines.append("")
+        lines.append(
+            f"nothing to draw for: {', '.join(summary['empty'])} -- the stage ran and wrote an "
+            f"empty table. A purely positional pattern has no constant bases to calibrate against"
         )
     return "\n".join(lines)

@@ -12,11 +12,12 @@ import pytest
 
 from migec.plot import PANELS, format_report, run
 
-COMPOSITION = """sample_id\tposition\tA\tC\tG\tT\tentropy_bits\tinformation_bits\tcollision
-S1\t0\t0.25\t0.25\t0.25\t0.25\t2.000000\t0.000000\t0.250000
-S1\t1\t0.40\t0.20\t0.20\t0.20\t1.921928\t0.078072\t0.280000
-S2\t0\t0.10\t0.30\t0.30\t0.30\t1.895462\t0.104538\t0.280000
-"""
+COMPOSITION = (
+    "sample_id\tposition\tsegment\tA\tC\tG\tT\tentropy_bits\tinformation_bits\tcollision\n"
+    "S1\t0\tcell\t0.25\t0.25\t0.25\t0.25\t2.000000\t0.000000\t0.250000\n"
+    "S1\t1\tumi\t0.40\t0.20\t0.20\t0.20\t1.921928\t0.078072\t0.280000\n"
+    "S2\t0\tumi\t0.10\t0.30\t0.30\t0.30\t1.895462\t0.104538\t0.280000\n"
+)
 
 COVERAGE = """sample_id\tmig_size\treads\tunits
 S1\t1\t100\t100
@@ -147,3 +148,30 @@ def test_gnuplot_renders_the_familiar_panels(tmp_path):
     svg = (tmp_path / "plots" / "cell_rank.svg").read_text()
     assert 'width="760"' in svg
     assert 'fill="none"' in svg              # the canvas rect, unfilled
+
+
+def test_a_table_with_a_header_and_no_rows_is_skipped_not_failed(tmp_path):
+    """A purely positional pattern (10x) has no constant bases, so `checkout` writes an EMPTY
+    calibration table -- header, no rows. Handing that to gnuplot got "x range is invalid" on
+    stderr and a failure row in the report, which reads as a broken run rather than as a chemistry
+    with nothing to calibrate against. Measured on the real `sc5p_v2_hs_PBMC_1k` run.
+
+    The two cases are reported apart because the advice differs: a missing table means run the
+    stage, an empty one means the stage ran and had nothing to put in it.
+    """
+    (tmp_path / "checkout.quality_calibration.tsv").write_text(
+        "phred\tbases\tmismatches\tobserved\tnominal\tcalibrated\n"
+    )
+    (tmp_path / "checkout.umi_composition.tsv").write_text(COMPOSITION)
+
+    summary = run(tmp_path, tmp_path / "out", gnuplot="")
+    assert "quality_calibration" in summary["empty"]
+    assert "quality_calibration" not in summary["skipped"]
+    assert not summary["failed"]
+    # ...and no script is written for it either: there is nothing for it to draw.
+    assert not (tmp_path / "out" / "quality_calibration.gp").exists()
+
+    report = format_report(summary)
+    assert "nothing to draw for: quality_calibration" in report
+    # The missing-table advice must not be attached to it -- the stage did run.
+    assert "quality_calibration" not in report.split("no table for:")[1].split("\n")[0]
