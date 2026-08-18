@@ -1,4 +1,9 @@
-# migec
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/antigenomics/migec/master/assets/migec_dark.png">
+    <img alt="migec" src="https://raw.githubusercontent.com/antigenomics/migec/master/assets/migec_light.png" width="340">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://pypi.org/project/migec/"><img alt="PyPI" src="https://img.shields.io/pypi/v/migec"></a>
