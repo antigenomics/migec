@@ -504,8 +504,10 @@ AssembleStats assemble(const AssembleRequest& in) {
                 if (level >= kQualityLevels) level = kQualityLevels - 1;
                 ++out.quality_grid[depth_bin][level];
             }
-            // The name carries everything a downstream tool needs even when it drops the comment
-            // -- dnaio does, so arda only ever sees the name.
+            // The name carries everything a downstream tool needs even when it drops the
+            // comment. (Corrected 2026-09-24: dnaio does NOT drop it -- SequenceRecord.comment
+            // holds the whole tag string. arda drops it, by reading rec.id. So the name is still
+            // what must be self-sufficient, but cD:i: is reachable if a consumer wants depth.)
             std::string name = stats.sample_id + "." +
                                (cell.empty() ? std::string() : cell + ".") + umi;
             if (c.components > 1) name += ".c" + std::to_string(c.component + 1);
