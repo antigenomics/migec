@@ -5,4 +5,4 @@ channels:
 dependencies:
   - pip
   - pip:
-      - arda
+      - arda-mapper>=2.36.2
