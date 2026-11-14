@@ -353,15 +353,17 @@ RefineStats refine(const RefineRequest& request) {
     // ...and what is actually held while it runs, which is the budget rather than the library once
     // the partition fires. The pair is the point: one is what it would cost, the other what it did.
     stats.table_resident_bytes = counts.memory_bytes();
-    // The whole barcode: cell then UMI. Correction walks its 3L neighbourhood, so a substitution
-    // in either part is found and neither is corrected across the other.
+    // The whole key is cell then UMI. Keep the assay context beside it: cell identity
+    // must not be interpreted as additional random UMI sequence by the wider model.
     const int L = stats.umi_length + stats.cell_length;
     stats.table_seconds = phase.seconds();
 
     // ---------------------------------------------------------------- correct
     phase = Stopwatch();
     stats.threads = worker_count(request.correction.threads, stats.barcodes);
-    const CorrectionResult correction = correct_umis(counts, request.correction);
+    CorrectionParams correction_params = request.correction;
+    correction_params.cell_length = stats.cell_length;
+    const CorrectionResult correction = correct_umis(counts, correction_params);
     stats.correct_seconds = phase.seconds();
     phase = Stopwatch();
     stats.merged = correction.merged;

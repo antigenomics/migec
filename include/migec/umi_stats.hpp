@@ -436,6 +436,9 @@ struct CorrectionParams {
     // the barcodes in it share a key prefix, and what payload agreement is worth is a property of
     // the library. 0 means "measure it from the array you were handed", the resident case.
     double library_clonality = 0.0;
+    // Assay context supplied by refine, never a CLI tuning parameter. Composite cell keys
+    // retain the released radius until a cell-conditioned multi-substitution model is verified.
+    int cell_length = 0;
 };
 
 struct CorrectionResult {

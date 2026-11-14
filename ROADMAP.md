@@ -27,6 +27,10 @@ justify a universal distance-one limit.
 - [x] Inspect appendix and native callers; make seqtree required and remove the optional-search rationale.
 - [x] Replace duplicate one-mismatch candidate kernels with pinned seqtree native batch APIs.
 - [x] Recover quality-supported two-substitution children in 14 nt UMIs while protecting true neighbours.
+- [ ] Implement and verify the conditional multi-substitution model for cell-tagged cohorts.
+  Development handoffs retain their released single-substitution path. Treating cell identity
+  as extra random UMI sequence produced two false class merges in the controlled regression;
+  it must not be enabled as the wider null. Bulk UMIs use the verified radius-two extension.
 - [ ] Support homopolymer indel errors through extraction, barcode representation and correction;
   distinguish genuine length changes from fixed-window boundary shifts.
 - [x] Verify complete two-substitution candidate retrieval across disk partitions, count conservation

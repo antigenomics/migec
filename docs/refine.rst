@@ -34,6 +34,16 @@ one row per barcode rather than two ``u64`` per read.
 Both routes produce the same numbers, down to the estimated error rate and the consensus that comes
 out the far end; ``tests/synthetic/test_mig_chain.py`` asserts exactly that.
 
+Development scope
+-----------------
+
+The verified two-substitution extension currently applies to bulk UMIs. Cell-tagged inputs retain
+the released single-substitution correction model: cell identity is not extra random UMI sequence,
+and the wider model needs a background conditioned on the cell. A regression check protects
+genuine cell/UMI classes from the unconditioned extension. This is an active development limit,
+not an optional seqtree dependency or a user-adjustable search flag. Homopolymer indels and the
+cell-conditioned extension remain required before the full follow-up release.
+
 What the evidence is
 --------------------
 

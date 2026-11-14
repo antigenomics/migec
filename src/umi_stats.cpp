@@ -1299,7 +1299,10 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
             best_parent = cand_idx;
         }
     };
-    supplied->consume(2, params.threads, [&](size_t, size_t, seqtree::CountBuffer&& block) {
+    // The verified development extension applies to bulk UMI cohorts. Preserve the
+    // released cell-tagged model until its conditional background is implemented.
+    const int substitutions = params.cell_length ? 1 : 2;
+    supplied->consume(substitutions, params.threads, [&](size_t, size_t, seqtree::CountBuffer&& block) {
         // seqtree serializes consumer callbacks within its one native worker pool.
         // Every query's complete candidate set is consumed; only O(queries) decisions survive.
         for (size_t row = 0; row < block.data.size(); row += 6) {
@@ -1629,6 +1632,8 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
 
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params,
                               const BarcodeEvidence& evidence) {
+    if (params.cell_length < 0 || params.cell_length > counts.length())
+        throw MigecError("correct_umis: cell length is outside the composite barcode");
     if (counts.spilled()) {
         if (evidence.has_quality() || evidence.has_payload()) {
             throw MigecError(

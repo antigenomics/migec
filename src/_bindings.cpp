@@ -311,7 +311,10 @@ py::dict py_run_checkout(const std::string& in_path, const std::string& in_path2
         s["payload_lengths"] = lens;
         s["mean_payload_length"] = len_n ? len_sum / len_n : 0.0;
 
-        const CorrectionResult cr = correct_umis(umi_counts[i]);
+        CorrectionParams correction_params;
+        correction_params.cell_length = cell_len;
+        correction_params.threads = stats.threads;
+        const CorrectionResult cr = correct_umis(umi_counts[i], correction_params);
         s["umi_error_rate"] = cr.estimated_error;
 
         // The barcode space, as the birthday problem sees it: how full it is, how many molecules
