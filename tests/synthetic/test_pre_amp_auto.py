@@ -101,3 +101,27 @@ def test_a_shallow_library_is_refused_because_the_curve_never_flattens(tmp_path)
     assert not e["ok"] and e["molecules_deep"] == 0
     assert "20 reads or more" in e["reason"]
     assert summary["rt_floor"] == 1e-4
+
+
+def test_a_named_fidelity_class_does_not_silently_fit_a_different_floor(tmp_path):
+    reads = tmp_path / "tagged.fq"
+    sequence = "ACGT" * 20
+    reads.write_text("".join(
+        f"@r{i} RX:Z:ACGTACGTACGT\tBC:Z:S1\n{sequence}\n+\n{'I' * len(sequence)}\n"
+        for i in range(2)))
+    outputs = []
+    for name, floor in [("numeric", 1e-6), ("named", "high")]:
+        out = tmp_path / name
+        summary = run(reads, out, rt_floor=floor)
+        assert summary["rt_floor"] == 1e-6
+        assert "pre_amp_estimate" not in summary
+        outputs.append((out / "S1.consensus.fq.gz").read_bytes())
+    assert outputs[0] == outputs[1]
+
+
+@pytest.mark.parametrize("floor", ["unknown", 0.0, -1.0, float("nan"), float("inf")])
+def test_invalid_library_floor_is_rejected_before_processing(tmp_path, floor):
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="neither a fidelity class|per-base error rate"):
+        run(tmp_path / "missing.fq", out, rt_floor=floor)
+    assert not out.exists()

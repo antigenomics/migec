@@ -104,7 +104,7 @@ def checkout(
         0,
         "--threads",
         "-t",
-        help="Worker threads; 0 uses one per core. Output is byte-identical whatever this is.",
+        help="Worker threads; 0 uses the usable CPU allocation, positive requests are capped to it. Output is byte-identical whatever this is.",
     ),
     trim: str = typer.Option(
         "pattern",
@@ -347,7 +347,7 @@ def refine(
     threads: int = typer.Option(
         0, "--threads", "-t",
         help="Worker threads for the neighbourhood scan, the error-rate estimate, the residual-FDR "
-        "scan and the read rewrite; 0 uses one per core. The output is byte-identical whatever "
+        "scan and the read rewrite; 0 uses the usable CPU allocation; positive requests are capped. The output is byte-identical whatever "
         "this is: all four are pure functions of the barcode table, and the merges the scan finds "
         "are applied serially afterwards.",
     ),
@@ -453,7 +453,7 @@ def assemble(
     ),
     threads: int = typer.Option(
         0, "--threads", "-t",
-        help="Workers for the consensus pass; 0 uses one per core. Buckets are the unit of work "
+        help="Workers for the consensus pass; 0 uses the usable CPU allocation; positive requests are capped. Buckets are the unit of work "
         "and there are always at least 16 of them, so the output is byte-identical whatever this "
         "is -- bucket order is barcode order, and the bucket count does not depend on -t.",
     ),

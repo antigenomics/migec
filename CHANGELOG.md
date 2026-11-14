@@ -6,6 +6,12 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## 2.6.0 — 2026-11-14
 
+- Honor scheduler and available CPU limits in all stages, including default and
+  oversized worker requests; reject negative counts. Preserve thread-invariant output.
+- Parse library pre-amplification floors with the same fidelity-class/rate parser as
+  the CLI. Named classes no longer trigger automatic fitting; invalid rates fail
+  before processing. Automatic fitting remains explicit.
+
 - Use one physical-pair collision partition for both ends, including nonoverlapping
   mates. Separate observed contigs retain a shared molecule identity and branch index.
 - Add count schema 2: explicit consensus-record and molecule-group counts, with

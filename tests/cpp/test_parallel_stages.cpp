@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <random>
 #include <set>
@@ -110,6 +111,19 @@ std::string slurp(const std::string& path) {
 }  // namespace
 
 TEST_SUITE("parallel") {
+
+TEST_CASE("worker budgets honor the allocation and reject negative requests") {
+    const char* prior = std::getenv("SLURM_CPUS_PER_TASK");
+    const bool existed = prior != nullptr;
+    const std::string saved = prior ? prior : "";
+    REQUIRE(::setenv("SLURM_CPUS_PER_TASK", "1", 1) == 0);
+    CHECK(worker_count(0, 64) == 1);
+    CHECK(worker_count(1000000, 64) == 1);
+    CHECK(worker_count(1, 64) == 1);
+    CHECK_THROWS_AS(worker_count(-1, 64), MigecError);
+    if (existed) ::setenv("SLURM_CPUS_PER_TASK", saved.c_str(), 1);
+    else ::unsetenv("SLURM_CPUS_PER_TASK");
+}
 
 TEST_CASE("parallel_for runs every item exactly once") {
     for (int threads : {1, 2, 4, 9}) {

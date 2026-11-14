@@ -627,9 +627,7 @@ CheckoutStats run_checkout(const PatternSet& patterns, const CheckoutParams& par
     const size_t n_samples = patterns.size();
     if (n_samples == 0) throw MigecError("checkout: no barcode patterns");
 
-    int nthreads = request.threads > 0 ? request.threads
-                                       : static_cast<int>(hardware_threads());
-    if (nthreads < 1) nthreads = 1;
+    const int nthreads = worker_count(request.threads, 0);
     const size_t chunk = request.chunk_reads ? request.chunk_reads : 16384;
 
     const std::vector<std::string>& ids = patterns.samples();

@@ -21,14 +21,16 @@
 #include <vector>
 
 #include "migec/resource.hpp"
+#include "migec/types.hpp"
 
 namespace migec {
 
 // Threads to use for `items` units of work: `requested`, or one per core when it is 0, never more
-// than there is work for and never fewer than one.
+// than the usable allocation or there is work for, and never fewer than one.
 inline int worker_count(int requested, size_t items) {
-    int n = requested > 0 ? requested : static_cast<int>(hardware_threads());
-    if (n < 1) n = 1;
+    if (requested < 0) throw MigecError("threads must be non-negative (0 selects the allocation)");
+    const int available = static_cast<int>(hardware_threads());
+    int n = requested > 0 ? std::min(requested, available) : available;
     if (items && static_cast<size_t>(n) > items) n = static_cast<int>(items);
     return n;
 }

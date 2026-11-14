@@ -303,6 +303,7 @@ def run(
     file supplies both mates, so `mate2` must not also be given: the merge would then be against
     the wrong file and the mismatch would look like a library with no overlap.
     """
+    rt_floor = parse_rt_error(str(rt_floor))
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     if bam.is_alignment(reads):

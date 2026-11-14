@@ -31,7 +31,11 @@ throughput figure that stopped at the driver would be measuring the matcher rath
 Threads
 -------
 
-``--threads/-t`` defaults to one per core. **The output is byte-identical whatever it is set to.**
+``--threads/-t`` defaults to the usable CPU allocation. Positive requests are capped
+by detected affinity, visible cgroup quota and scheduler limits; negative requests
+are rejected. Smaller explicit budgets are honored. Cgroup detection covers the
+standard root paths; affinity or scheduler limits are needed where a nested quota
+is not visible there. **Changing the worker budget leaves output byte-identical.**
 Reads are matched in fixed-size chunks and the chunks are written back in input order, so ``-t``
 changes the wall clock and nothing else — a demultiplexer whose output depended on its thread count
 would produce results that could not be compared between runs.

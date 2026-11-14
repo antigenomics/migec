@@ -2,6 +2,13 @@
 
 ## Current release gate: molecule correctness and dependencies
 
+Retain the counting defaults: keep singletons, count physical support without
+capping abundance, and preserve separate observed mate contigs without bridging
+gaps. Resolve worker requests within the actual allocation and verify exact output
+invariance across budgets. Library fidelity classes and numeric rates use the same
+parser as the CLI; automatic fitting is explicit. No scientific threshold tuning
+is required for these resource/parameter repairs.
+
 Preserve physical-pair support, real supported collision branches, singletons and
 count provenance. Verify that paired contigs share molecule identities without
 inventing sequence across gaps. Finish the ARDA integration against its verified
