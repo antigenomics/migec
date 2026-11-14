@@ -216,3 +216,9 @@ The optional ARDA module installs ``arda-mapper>=2.36.2`` and calls
 have built through ``params.arda_container``; the module has no default image.
 The ARDA preset is for targeted consensus reads. Pass resource counts through
 Nextflow task CPUs rather than starting a worker pool around each sequence.
+
+AIRR ``sequence_id`` identifies a consensus record and retains its contig suffix.
+A pair with nonoverlapping ends contributes two records for one molecule group.
+Do not interpret native record abundance (including ``duplicate_count``) as
+physical molecule abundance. Use qualified sample/cell/UMI/collision identities
+and count shared contigs once, following :doc:`formats` count schema 2.
