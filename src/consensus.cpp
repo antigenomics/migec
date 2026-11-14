@@ -468,14 +468,22 @@ namespace {
 // One overlap component -> one or two molecules. Split before consensus, never after.
 std::vector<Consensus> assemble_component(const std::vector<ConsensusRead>& reads,
                                           const ConsensusParams& params,
-                                          const LogTables& tables) {
+                                          const LogTables& tables,
+                                          const std::vector<ConsensusRead>* observations = nullptr,
+                                          const std::vector<size_t>* owners = nullptr) {
     std::vector<Consensus> out;
+    const auto& evidence = observations ? *observations : reads;
+    auto physical_count = [&](const std::vector<size_t>& indices) {
+        std::vector<bool> seen(evidence.size(), false);
+        for (size_t i : indices) seen[owners ? (*owners)[i] : i] = true;
+        return static_cast<uint32_t>(std::count(seen.begin(), seen.end(), true));
+    };
 
     double score = 0.0;
-    if (reads.size() >= params.min_split_reads) {
-        const std::vector<MinorColumn> cols = minor_columns(reads, params);
+    if (evidence.size() >= params.min_split_reads) {
+        const std::vector<MinorColumn> cols = minor_columns(evidence, params);
         if (cols.size() >= 2) {
-            const std::vector<uint32_t> rows = minor_matrix(reads, cols);
+            const std::vector<uint32_t> rows = minor_matrix(evidence, cols);
             const BestPair pair = best_linked_pair(rows, cols.size());
             score = pair.score;
             if (pair.score > params.linkage_threshold) {
@@ -485,14 +493,19 @@ std::vector<Consensus> assemble_component(const std::vector<ConsensusRead>& read
                 std::vector<ConsensusRead> minor, major;
                 const uint32_t mask = (1u << pair.x) | (1u << pair.y);
                 const uint32_t want = pair.flip ? (1u << pair.x) : mask;
+                std::vector<size_t> minor_ids, major_ids;
                 for (size_t i = 0; i < reads.size(); ++i) {
-                    ((rows[i] & mask) == want ? minor : major).push_back(reads[i]);
+                    const size_t row = owners ? (*owners)[i] : i;
+                    const bool is_minor = (rows[row] & mask) == want;
+                    (is_minor ? minor : major).push_back(reads[i]);
+                    (is_minor ? minor_ids : major_ids).push_back(i);
                 }
-                if (minor.size() >= params.min_subclone_reads &&
-                    major.size() >= params.min_subclone_reads) {
+                if (physical_count(minor_ids) >= params.min_subclone_reads &&
+                    physical_count(major_ids) >= params.min_subclone_reads) {
                     for (const std::vector<ConsensusRead>* part : {&major, &minor}) {
                         Consensus c = call_consensus(*part, params, tables);
                         c.linkage = pair.score;
+                        c.reads = physical_count(part == &major ? major_ids : minor_ids);
                         out.push_back(std::move(c));
                     }
                     return out;
@@ -502,6 +515,7 @@ std::vector<Consensus> assemble_component(const std::vector<ConsensusRead>& read
     }
     Consensus c = call_consensus(reads, params, tables);
     c.linkage = score;
+    if (observations) c.reads = static_cast<uint32_t>(observations->size());
     out.push_back(std::move(c));
     return out;
 }
@@ -543,6 +557,8 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
                                       const std::vector<ConsensusRead>& mates2,
                                       const ConsensusParams& params) {
     if (mates2.empty()) return assemble_group(mates1, params);
+    if (mates1.size() != mates2.size())
+        throw MigecError("paired consensus needs matching mate counts");
 
     // Pairs enough to outvote a pair whose overlap happened to fall in an error. Eight, because
     // the offset has one degree of freedom and a wrong vote needs `min_seed_votes` exact seeds to
@@ -603,7 +619,39 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
     for (const ConsensusRead& r : mates2) {
         if (!r.seq.empty()) placed.push_back({r.seq, r.qual, base2});
     }
-    return assemble_component(placed, params, tables);
+    // Linkage is measured once per physical pair, not once per mate. Base
+    // calling still uses both original measurements. Overlap disagreement at
+    // equal quality is uncalled rather than fabricated evidence for a split.
+    std::vector<std::string> seqs(mates1.size()), quals(mates1.size());
+    std::vector<ConsensusRead> observations;
+    std::vector<size_t> owners;
+    observations.reserve(mates1.size());
+    for (size_t i = 0; i < mates1.size(); ++i) {
+        const int width = std::max(base1 + read_length(mates1[i]),
+            i < mates2.size() ? base2 + read_length(mates2[i]) : 0);
+        seqs[i].assign(static_cast<size_t>(width), 'N');
+        quals[i].assign(static_cast<size_t>(width), '!');
+        auto add = [&](const ConsensusRead& r, int offset) {
+            for (int j = 0; j < read_length(r); ++j) {
+                const size_t k = static_cast<size_t>(offset + j);
+                const char b = r.seq[static_cast<size_t>(j)];
+                const char q = r.qual[static_cast<size_t>(j)];
+                if (base_code(b) == kInvalidBase) continue;
+                if (seqs[i][k] == 'N' || q > quals[i][k]) {
+                    seqs[i][k] = b; quals[i][k] = q;
+                } else if (q == quals[i][k] && b != seqs[i][k]) {
+                    seqs[i][k] = 'N';
+                }
+            }
+        };
+        add(mates1[i], base1);
+        if (i < mates2.size()) add(mates2[i], base2);
+        observations.push_back({seqs[i], quals[i], 0});
+        owners.push_back(i);
+    }
+    for (size_t i = 0; i < mates2.size(); ++i)
+        if (!mates2[i].seq.empty()) owners.push_back(i);
+    return assemble_component(placed, params, tables, &observations, &owners);
 }
 
 }  // namespace migec

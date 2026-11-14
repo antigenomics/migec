@@ -6,6 +6,13 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+- Count physical pairs once in collision-linkage tests and split molecule depth;
+  overlapping mates no longer inflate evidence for splitting one molecule.
+  Both original mate measurements still contribute to consensus base calls.
+- Update the optional seqtree dependency floor to 1.3.4.
+
+- Repair the optional ARDA Nextflow module: install the published `arda-mapper` distribution, pass `--organism`, and require an explicit image when using a container profile.
+
 ## 2.5.1 — 2026-08-15
 
 ### An empty table is skipped, not failed

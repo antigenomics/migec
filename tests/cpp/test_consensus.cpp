@@ -255,3 +255,35 @@ TEST_CASE("a contig column is judged on the reads that reach it") {
     CHECK(out[0].seq.size() == molecule.size() - (molecule.size() - 90) % 60);
     CHECK(out[0].seq == molecule.substr(0, out[0].seq.size()));
 }
+
+TEST_CASE("overlapping mates do not double collision linkage evidence") {
+    ConsensusParams p;
+    const std::string major = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTGATCGTAGCTAGCATGCTAGC";
+    std::string minor = major;
+    minor[30] = minor[30] == 'A' ? 'C' : 'A';
+    minor[40] = minor[40] == 'A' ? 'C' : 'A';
+    std::vector<std::string> seqs(10, major);
+    seqs.insert(seqs.end(), 10, minor);
+    auto reads = group(seqs);
+    const auto single = assemble_group(reads, p);
+    const auto paired = assemble_pairs(reads, reads, p);
+    REQUIRE(single.size() == 1);
+    CHECK(paired.size() == single.size());
+    CHECK(paired[0].reads == reads.size());
+}
+
+TEST_CASE("supported paired collisions retain physical read counts") {
+    ConsensusParams p;
+    const std::string major = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTGATCGTAGCTAGCATGCTAGC";
+    std::string minor = major;
+    minor[30] = minor[30] == 'A' ? 'C' : 'A';
+    minor[40] = minor[40] == 'A' ? 'C' : 'A';
+    std::vector<std::string> seqs(20, major);
+    seqs.insert(seqs.end(), 20, minor);
+    auto reads = group(seqs);
+    const auto paired = assemble_pairs(reads, reads, p);
+    REQUIRE(paired.size() == 2);
+    CHECK(paired[0].reads == 20);
+    CHECK(paired[1].reads == 20);
+    CHECK_THROWS_AS(assemble_pairs(reads, group({major}), p), MigecError);
+}

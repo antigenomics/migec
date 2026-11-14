@@ -14,7 +14,7 @@ process DOWNSTREAM_ARDA {
     label 'process_medium'
 
     conda "${moduleDir}/environment.yml"
-    container params.getOrDefault('arda_container', 'arda:latest')
+    container params.getOrDefault('arda_container', null)
 
     input:
     tuple val(meta), path(consensus)
@@ -33,7 +33,7 @@ process DOWNSTREAM_ARDA {
     """
     arda amplicon \\
         --r1 ${consensus} \\
-        --species ${species} \\
+        --organism ${species} \\
         --threads ${task.cpus} \\
         ${args} \\
         -p ${prefix}
