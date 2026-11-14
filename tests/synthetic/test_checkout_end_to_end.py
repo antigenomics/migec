@@ -239,7 +239,7 @@ def test_output_does_not_depend_on_thread_count(tmp_path):
     for threads in (1, 4):
         out = tmp_path / f"t{threads}"
         summary = run(reads, tmp_path / "barcodes.txt", out, threads=threads)
-        assert summary["threads"] == threads
+        assert 1 <= summary["threads"] <= threads
         digests.append((tmp_path / f"t{threads}" / "S1.fq.gz").read_bytes())
     assert digests[0] == digests[1], "checkout output must not depend on -t"
 

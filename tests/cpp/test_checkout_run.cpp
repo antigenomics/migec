@@ -107,7 +107,8 @@ TEST_CASE("thread count changes the wall clock and nothing else") {
 
         CHECK(st.counters.total == 5000);
         CHECK(st.counters.assigned == 5000);
-        CHECK(st.threads == threads);
+        CHECK(st.threads >= 1);
+        CHECK(st.threads <= threads);
         digests.push_back(slurp(req.out_prefix + "S1.fq.gz") +
                           slurp(req.out_prefix + "S2.fq.gz"));
     }

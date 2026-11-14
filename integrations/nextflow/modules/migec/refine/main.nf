@@ -16,7 +16,7 @@ process MIGEC_REFINE {
     conda "${moduleDir}/../environment.yml"
     // One place, so a release bumps one line rather than four. Override with
     // `--migec_container` when you build your own image.
-    container params.getOrDefault('migec_container', 'migec:2.3.0')
+    container params.getOrDefault('migec_container', null)
 
     input:
     tuple val(meta), path(reads)

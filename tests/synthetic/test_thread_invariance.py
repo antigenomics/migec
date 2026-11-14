@@ -58,7 +58,7 @@ def test_checkout_is_byte_identical_at_every_thread_count(library):
     for t in THREADS:
         summary = checkout_run(sim["reads"], d / "bc.txt", d / f"co{t}", threads=t)
         seen[t] = digest(d / f"co{t}" / "S1.fq.gz")
-        assert summary["threads"] == t
+        assert 1 <= summary["threads"] <= t
     assert len(set(seen.values())) == 1, seen
 
 
@@ -133,3 +133,18 @@ def test_the_whole_pipeline_agrees_with_itself_at_sixteen_threads(library):
     assert digest(d / "e2e_co" / "S1.fq.gz") == digest(d / "co1" / "S1.fq.gz")
     assert digest(d / "e2e_rf" / "S1.fq.gz") == digest(d / "rf1" / "S1.fq.gz")
     assert digest(d / "e2e_as" / "S1.consensus.fq.gz") == digest(d / "as1" / "S1.consensus.fq.gz")
+
+
+def test_all_stages_clamp_to_the_allocation_without_changing_outputs(library, monkeypatch):
+    d, sim = library
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "1")
+    outputs = []
+    for requested in (0, 1, 1_000_000):
+        co, rf, asm = [d / f"budget_{requested}_{stage}" for stage in ("co", "rf", "asm")]
+        checked = checkout_run(sim["reads"], d / "bc.txt", co, threads=requested)
+        refined = refine_run(co / "S1.fq.gz", rf, threads=requested)
+        assembled = assemble_run(rf / "S1.fq.gz", asm, threads=requested)
+        assert checked["threads"] == refined["threads"] == assembled["threads"] == 1
+        outputs.append(tuple(digest(p) for p in [
+            co / "S1.fq.gz", rf / "S1.fq.gz", asm / "S1.consensus.fq.gz", asm / "S1.mig.tsv"]))
+    assert len(set(outputs)) == 1

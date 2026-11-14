@@ -36,6 +36,11 @@ Nextflow
 
    nextflow run integrations/nextflow --mode airr --input 'data/*_R{1,2}.fq.gz' --preset migec
 
+The MIGEC conda environment pins ``migec==2.6.0``. Container execution requires
+an image you have built containing that release, supplied through
+``params.migec_container``. No default MIGEC container image is published by this
+repository. The ARDA module has its own ``params.arda_container`` setting.
+
 Or include a subworkflow in a pipeline of your own:
 
 .. code-block:: groovy
@@ -202,3 +207,18 @@ answer out of a 400 GB run in a minute.
    The SLURM templates are the opposite case: they *have* been run end to end here, as ordinary
    bash, producing a consensus and its figures, and their error paths were exercised too. Between
    the two, the migec commands themselves are covered either way -- both call the same three.
+
+ARDA downstream annotation
+--------------------------
+
+The optional ARDA module installs ``arda-mapper>=2.36.2`` and calls
+``arda amplicon --organism``. Use the Conda profile, or supply an image that you
+have built through ``params.arda_container``; the module has no default image.
+The ARDA preset is for targeted consensus reads. Pass resource counts through
+Nextflow task CPUs rather than starting a worker pool around each sequence.
+
+AIRR ``sequence_id`` identifies a consensus record and retains its contig suffix.
+A pair with nonoverlapping ends contributes two records for one molecule group.
+Do not interpret native record abundance (including ``duplicate_count``) as
+physical molecule abundance. Use qualified sample/cell/UMI/collision identities
+and count shared contigs once, following :doc:`formats` count schema 2.

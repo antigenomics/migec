@@ -102,6 +102,8 @@ struct Consensus {
     // molecules, which is why contig mode reports the occupancy it was run at.
     uint32_t component = 0;
     uint32_t components = 1;
+    // Shared across paired contigs; independently placed single-end components stay ambiguous.
+    uint32_t molecule = 0;
     // -log10 of the strongest co-segregation found in this group, after it was split. Reported so
     // that a borderline call is visible rather than being silently resolved by the threshold.
     double linkage = 0.0;

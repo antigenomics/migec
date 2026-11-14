@@ -13,7 +13,7 @@ namespace migec {
 // Peak resident set size of this process in bytes. 0 when the platform will not say.
 size_t peak_rss_bytes();
 
-// Number of hardware threads, never 0.
+// Usable CPU allocation (hardware, affinity, visible quota and scheduler limits), never 0.
 unsigned hardware_threads();
 
 class Stopwatch {

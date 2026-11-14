@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "migec"
-version = "2.5.1"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
+version = "2.6.0"  # keep in sync with include/migec/version.hpp and python/migec/__init__.py
 description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,7 +42,7 @@ dependencies = [
 # substitution, where enumerating the 3L neighbours in a hash table beats a trie by orders of
 # magnitude. seqtree earns its place only for whitelist lookup at >=2 substitutions, N-wildcard
 # barcodes, and k-mer adapter discovery in `migec suggest` -- all opt-in.
-seqtree = ["seqtree>=0.6"]
+seqtree = ["seqtree>=1.3.4"]
 # `migec plot` shells out to gnuplot, which is not a python package. These are what the marimo
 # notebooks under notebooks/ import.
 notebooks = ["polars>=1.0", "marimo", "matplotlib>=3.8"]

@@ -465,44 +465,60 @@ double linkage_score(const std::vector<ConsensusRead>& reads, const ConsensusPar
 
 namespace {
 
+struct CollisionPartition {
+    std::vector<bool> minor;
+    double score = 0.0;
+    bool split = false;
+};
+
+CollisionPartition collision_partition(const std::vector<ConsensusRead>& evidence,
+                                       const ConsensusParams& params) {
+    CollisionPartition result;
+    result.minor.assign(evidence.size(), false);
+    if (evidence.size() < params.min_split_reads) return result;
+    const auto cols = minor_columns(evidence, params);
+    if (cols.size() < 2) return result;
+    const auto rows = minor_matrix(evidence, cols);
+    const auto pair = best_linked_pair(rows, cols.size());
+    result.score = pair.score;
+    if (pair.score <= params.linkage_threshold) return result;
+    const uint32_t mask = (1u << pair.x) | (1u << pair.y);
+    const uint32_t want = pair.flip ? (1u << pair.x) : mask;
+    size_t minor_count = 0;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        result.minor[i] = (rows[i] & mask) == want;
+        minor_count += result.minor[i];
+    }
+    result.split = minor_count >= params.min_subclone_reads &&
+        evidence.size() - minor_count >= params.min_subclone_reads;
+    return result;
+}
+
 // One overlap component -> one or two molecules. Split before consensus, never after.
 std::vector<Consensus> assemble_component(const std::vector<ConsensusRead>& reads,
                                           const ConsensusParams& params,
-                                          const LogTables& tables) {
+                                          const LogTables& tables,
+                                          const std::vector<ConsensusRead>* observations = nullptr,
+                                          const std::vector<size_t>* owners = nullptr) {
+    const auto& evidence = observations ? *observations : reads;
+    const auto partition = collision_partition(evidence, params);
     std::vector<Consensus> out;
-
-    double score = 0.0;
-    if (reads.size() >= params.min_split_reads) {
-        const std::vector<MinorColumn> cols = minor_columns(reads, params);
-        if (cols.size() >= 2) {
-            const std::vector<uint32_t> rows = minor_matrix(reads, cols);
-            const BestPair pair = best_linked_pair(rows, cols.size());
-            score = pair.score;
-            if (pair.score > params.linkage_threshold) {
-                // ponytail: one split level. A MIG holding three molecules is rare enough that
-                // recursing is not worth the extra false-positive surface; recurse here if a
-                // benchmark ever shows otherwise.
-                std::vector<ConsensusRead> minor, major;
-                const uint32_t mask = (1u << pair.x) | (1u << pair.y);
-                const uint32_t want = pair.flip ? (1u << pair.x) : mask;
-                for (size_t i = 0; i < reads.size(); ++i) {
-                    ((rows[i] & mask) == want ? minor : major).push_back(reads[i]);
-                }
-                if (minor.size() >= params.min_subclone_reads &&
-                    major.size() >= params.min_subclone_reads) {
-                    for (const std::vector<ConsensusRead>* part : {&major, &minor}) {
-                        Consensus c = call_consensus(*part, params, tables);
-                        c.linkage = pair.score;
-                        out.push_back(std::move(c));
-                    }
-                    return out;
-                }
-            }
+    const size_t count = partition.split ? 2 : 1;
+    for (size_t molecule = 0; molecule < count; ++molecule) {
+        std::vector<ConsensusRead> part;
+        std::vector<bool> seen(evidence.size(), false);
+        for (size_t i = 0; i < reads.size(); ++i) {
+            const size_t owner = owners ? (*owners)[i] : i;
+            if (partition.split && partition.minor[owner] != (molecule == 1)) continue;
+            part.push_back(reads[i]);
+            seen[owner] = true;
         }
+        Consensus c = call_consensus(part, params, tables);
+        c.linkage = partition.score;
+        c.molecule = static_cast<uint32_t>(molecule);
+        c.reads = static_cast<uint32_t>(std::count(seen.begin(), seen.end(), true));
+        out.push_back(std::move(c));
     }
-    Consensus c = call_consensus(reads, params, tables);
-    c.linkage = score;
-    out.push_back(std::move(c));
     return out;
 }
 
@@ -543,6 +559,8 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
                                       const std::vector<ConsensusRead>& mates2,
                                       const ConsensusParams& params) {
     if (mates2.empty()) return assemble_group(mates1, params);
+    if (mates1.size() != mates2.size())
+        throw MigecError("paired consensus needs matching mate counts");
 
     // Pairs enough to outvote a pair whose overlap happened to fall in an error. Eight, because
     // the offset has one degree of freedom and a wrong vote needs `min_seed_votes` exact seeds to
@@ -569,25 +587,46 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
     const LogTables& tables = params.calibration.empty() ? nominal_tables() : calibrated;
 
     if (best_votes == 0) {
-        // The mates do not reach each other. Two contigs, and the bases between them are asserted
-        // by nobody -- which is the same rule `place_reads` follows and the reason this is
-        // placement rather than a merge.
-        std::vector<ConsensusRead> second;
-        second.reserve(mates2.size());
-        for (const ConsensusRead& r : mates2) {
-            if (!r.seq.empty()) second.push_back({r.seq, r.qual, 0});
+        // Mate identity links the two observed ends even when their genomic distance is
+        // unknown. Concatenation below is only a column matrix for linkage, NEVER sequence
+        // output. One physical partition owns both independently called contigs.
+        size_t first_width = 0;
+        for (const auto& r : mates1)
+            first_width = std::max(first_width, static_cast<size_t>(read_length(r)));
+        std::vector<std::string> seqs(mates1.size()), quals(mates1.size());
+        std::vector<ConsensusRead> evidence;
+        for (size_t i = 0; i < mates1.size(); ++i) {
+            const size_t n1 = static_cast<size_t>(read_length(mates1[i]));
+            const size_t n2 = static_cast<size_t>(read_length(mates2[i]));
+            seqs[i] = std::string(mates1[i].seq.substr(0, n1));
+            quals[i] = std::string(mates1[i].qual.substr(0, n1));
+            seqs[i].resize(first_width, 'N'); quals[i].resize(first_width, '!');
+            seqs[i] += mates2[i].seq.substr(0, n2);
+            quals[i] += mates2[i].qual.substr(0, n2);
+            evidence.push_back({seqs[i], quals[i], 0});
         }
+        const auto partition = collision_partition(evidence, params);
+        const bool has_second = std::any_of(mates2.begin(), mates2.end(),
+            [](const ConsensusRead& r) { return !r.seq.empty(); });
+        const uint32_t components = has_second ? 2u : 1u;
         std::vector<Consensus> out;
-        const uint32_t components = second.empty() ? 1u : 2u;
-        for (Consensus& m : assemble_component(mates1, params, tables)) {
-            m.component = 0;
-            m.components = components;
-            out.push_back(std::move(m));
-        }
-        for (Consensus& m : assemble_component(second, params, tables)) {
-            m.component = 1;
-            m.components = components;
-            out.push_back(std::move(m));
+        for (uint32_t component = 0; component < components; ++component) {
+            const auto& mates = component == 0 ? mates1 : mates2;
+            for (uint32_t molecule = 0; molecule < (partition.split ? 2u : 1u); ++molecule) {
+                std::vector<ConsensusRead> part;
+                for (size_t i = 0; i < mates.size(); ++i) {
+                    if (mates[i].seq.empty() ||
+                        (partition.split && partition.minor[i] != (molecule == 1))) continue;
+                    part.push_back({mates[i].seq, mates[i].qual, 0});
+                }
+                if (part.empty()) continue;
+                Consensus c = call_consensus(part, params, tables);
+                c.linkage = partition.score;
+                c.molecule = molecule;
+                c.component = component;
+                c.components = components;
+                out.push_back(std::move(c));
+            }
         }
         return out;
     }
@@ -603,7 +642,39 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
     for (const ConsensusRead& r : mates2) {
         if (!r.seq.empty()) placed.push_back({r.seq, r.qual, base2});
     }
-    return assemble_component(placed, params, tables);
+    // Linkage is measured once per physical pair, not once per mate. Base
+    // calling still uses both original measurements. Overlap disagreement at
+    // equal quality is uncalled rather than fabricated evidence for a split.
+    std::vector<std::string> seqs(mates1.size()), quals(mates1.size());
+    std::vector<ConsensusRead> observations;
+    std::vector<size_t> owners;
+    observations.reserve(mates1.size());
+    for (size_t i = 0; i < mates1.size(); ++i) {
+        const int width = std::max(base1 + read_length(mates1[i]),
+            i < mates2.size() ? base2 + read_length(mates2[i]) : 0);
+        seqs[i].assign(static_cast<size_t>(width), 'N');
+        quals[i].assign(static_cast<size_t>(width), '!');
+        auto add = [&](const ConsensusRead& r, int offset) {
+            for (int j = 0; j < read_length(r); ++j) {
+                const size_t k = static_cast<size_t>(offset + j);
+                const char b = r.seq[static_cast<size_t>(j)];
+                const char q = r.qual[static_cast<size_t>(j)];
+                if (base_code(b) == kInvalidBase) continue;
+                if (seqs[i][k] == 'N' || q > quals[i][k]) {
+                    seqs[i][k] = b; quals[i][k] = q;
+                } else if (q == quals[i][k] && b != seqs[i][k]) {
+                    seqs[i][k] = 'N';
+                }
+            }
+        };
+        add(mates1[i], base1);
+        if (i < mates2.size()) add(mates2[i], base2);
+        observations.push_back({seqs[i], quals[i], 0});
+        owners.push_back(i);
+    }
+    for (size_t i = 0; i < mates2.size(); ++i)
+        if (!mates2[i].seq.empty()) owners.push_back(i);
+    return assemble_component(placed, params, tables, &observations, &owners);
 }
 
 }  // namespace migec

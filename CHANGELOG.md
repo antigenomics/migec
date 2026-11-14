@@ -4,7 +4,27 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.6.0 — 2026-11-14
+
+- Honor scheduler and available CPU limits in all stages, including default and
+  oversized worker requests; reject negative counts. Preserve thread-invariant output.
+- Parse library pre-amplification floors with the same fidelity-class/rate parser as
+  the CLI. Named classes no longer trigger automatic fitting; invalid rates fail
+  before processing. Automatic fitting remains explicit.
+
+- Use one physical-pair collision partition for both ends, including nonoverlapping
+  mates. Separate observed contigs retain a shared molecule identity and branch index.
+- Add count schema 2: explicit consensus-record and molecule-group counts, with
+  unresolved single-end fragment identity marked. Keep legacy `molecules` as the
+  record-count alias for compatibility; it is not physical abundance.
+
+- Count physical pairs once in collision-linkage tests and split molecule depth;
+  overlapping mates no longer inflate evidence for splitting one molecule.
+  Both original mate measurements still contribute to consensus base calls.
+- Update the optional seqtree dependency floor to 1.3.4 and the Nextflow MIGEC
+  environment to 2.6.0. Container modules require an explicitly supplied image.
+
+- Repair the optional ARDA Nextflow module: install the published `arda-mapper` distribution, pass `--organism`, and require an explicit image when using a container profile.
 
 ## 2.5.1 — 2026-08-15
 

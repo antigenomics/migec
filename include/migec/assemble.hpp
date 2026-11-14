@@ -116,7 +116,9 @@ struct AssembleStats {
     uint64_t reads = 0;
     uint64_t reads_without_umi = 0;
     uint64_t groups = 0;      // distinct UMIs
-    uint64_t molecules = 0;   // consensuses emitted; exceeds `groups` when a group splits
+    uint64_t molecules = 0;   // legacy: emitted consensus RECORDS, including separate contigs
+    uint64_t molecule_groups = 0;  // retained UMIs plus evidence-supported collision branches
+    uint64_t molecule_groups_ambiguous = 0;  // single-end fragmented groups: count is a lower bound
     uint64_t groups_split = 0;
     // Groups whose reads did not all reach each other: contig mode only, and the number that says
     // whether the library was random-primed enough to need it.

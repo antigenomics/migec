@@ -406,6 +406,7 @@ AssembleStats assemble(const AssembleRequest& in) {
         std::string fastq_path, table_path;
         uint64_t reads = 0;  // only counted for `.mig` input, where pass 1 did not count them
         uint64_t groups = 0, molecules = 0, groups_split = 0, groups_fragmented = 0, contigs = 0;
+        uint64_t molecule_groups = 0, molecule_groups_ambiguous = 0;
         uint64_t reads_dropped = 0, groups_capped = 0, reads_over_cap = 0;
         std::vector<uint64_t> size_histogram;
         // Molecules per (depth bin, rounded Phred). Both axes are DISCRETE and small -- a depth
@@ -476,7 +477,11 @@ AssembleStats assemble(const AssembleRequest& in) {
                                 : assemble_group(reads, request.consensus);
         const uint32_t components = molecules.empty() ? 1 : molecules[0].components;
         if (components > 1) { ++out.groups_fragmented; out.contigs += components; }
-        if (molecules.size() > components) ++out.groups_split;
+        uint32_t molecule_count = 0;
+        for (const auto& c : molecules) molecule_count = std::max(molecule_count, c.molecule + 1);
+        out.molecule_groups += molecule_count;
+        if (!request.merge_mates && components > 1) ++out.molecule_groups_ambiguous;
+        if (molecule_count > 1) ++out.groups_split;
         const std::string cell =
             stats.cell_length ? unpack_barcode(cell_key, stats.cell_length) : std::string();
         // The count is the true depth of the molecule whenever the group produced exactly one --
@@ -510,15 +515,21 @@ AssembleStats assemble(const AssembleRequest& in) {
             // what must be self-sufficient, but cD:i: is reachable if a consumer wants depth.)
             std::string name = stats.sample_id + "." +
                                (cell.empty() ? std::string() : cell + ".") + umi;
+            const std::string group_name = name;
             if (c.components > 1) name += ".c" + std::to_string(c.component + 1);
-            if (molecules.size() > c.components) name += "." + std::to_string(m + 1);
+            if (molecule_count > 1) name += "." + std::to_string(c.molecule + 1);
+            // MI identifies the physical pair partition, shared by its separately emitted ends.
+            // Unlinked single-end components retain their scoped identity and explicit ambiguity.
+            std::string molecule_id = request.merge_mates ? group_name :
+                (c.components > 1 ? group_name + ".c" + std::to_string(c.component + 1) : group_name);
+            if (molecule_count > 1) molecule_id += "." + std::to_string(c.molecule + 1);
             std::string tags = "RX:Z:" + umi + "\tBC:Z:" + stats.sample_id;
             if (!cell.empty()) tags += "\tCB:Z:" + cell;
-            tags += "\tMI:Z:" + name + "\tcD:i:" + std::to_string(reported_reads);
+            tags += "\tMI:Z:" + molecule_id + "\tcD:i:" + std::to_string(reported_reads);
             writer->write(name, tags, c.seq, c.qual);
             std::fprintf(table, "%s\t%s\t%u\t%u\t%zu\t%" PRIu64 "\t%u\t%zu\t%.2f\t%.3e\t%.2f\n",
                          cell.empty() ? "." : cell.c_str(), umi.c_str(), c.component + 1,
-                         c.components, m + 1, reported_reads, c.support, c.seq.size(),
+                         c.components, static_cast<size_t>(c.molecule + 1), reported_reads, c.support, c.seq.size(),
                          c.qual.empty() ? 0.0 : q / c.qual.size(), c.mean_error, c.linkage);
             if (c.support) {
                 out.support_reads += c.support;
@@ -621,6 +632,8 @@ AssembleStats assemble(const AssembleRequest& in) {
             if (premade) stats.reads += o.reads;  // pass 1 counts them otherwise
             stats.groups += o.groups;
             stats.molecules += o.molecules;
+            stats.molecule_groups += o.molecule_groups;
+            stats.molecule_groups_ambiguous += o.molecule_groups_ambiguous;
             stats.groups_split += o.groups_split;
             stats.groups_fragmented += o.groups_fragmented;
             stats.contigs += o.contigs;

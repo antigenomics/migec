@@ -1,20 +1,17 @@
 // Assign V/D/J and call clonotypes from the consensus, emitting AIRR.
 //
-// Note: THE AIRR `sequence_id` IS THE MOLECULE ID. arda reads the consensus through `dnaio`,
-// which drops FASTQ comments -- which is exactly why `assemble` writes the identity into the read
-// NAME (`<sample>.<cell>.<umi>`) as well as into SAM tags. The name stands alone, so nothing is
-// lost here even though the tags are.
-//
-// Note: `duplicate_count` in the output is therefore a MOLECULE count, not a read count. That is
-// the number a diversity estimate should be computed from; a read count is an amplification
-// artefact wearing an abundance's clothes.
+// AIRR `sequence_id` identifies an emitted consensus RECORD. The read name carries
+// <sample>[.<cell>].<umi>[.c<contig>][.<molecule>] even when comments are discarded.
+// Separate paired contigs share the UMI/molecule branch and must not be counted twice.
+// `duplicate_count` is native record abundance, not guaranteed physical molecule abundance.
+// Molecular summaries must group qualified UMI/collision identities across contig records.
 
 process DOWNSTREAM_ARDA {
     tag "$meta.id"
     label 'process_medium'
 
     conda "${moduleDir}/environment.yml"
-    container params.getOrDefault('arda_container', 'arda:latest')
+    container params.getOrDefault('arda_container', null)
 
     input:
     tuple val(meta), path(consensus)
@@ -33,7 +30,7 @@ process DOWNSTREAM_ARDA {
     """
     arda amplicon \\
         --r1 ${consensus} \\
-        --species ${species} \\
+        --organism ${species} \\
         --threads ${task.cpus} \\
         ${args} \\
         -p ${prefix}

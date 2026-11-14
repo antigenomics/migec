@@ -774,7 +774,11 @@ PYBIND11_MODULE(_core, m) {
             d["reads_without_umi"] = st.reads_without_umi;
             d["reads_dropped"] = st.reads_dropped;
             d["groups"] = st.groups;
-            d["molecules"] = st.molecules;
+            d["molecules"] = st.molecules;  // compatibility: consensus records, not physical units
+            d["consensus_records"] = st.molecules;
+            d["molecule_groups"] = st.molecule_groups;
+            d["molecule_groups_ambiguous"] = st.molecule_groups_ambiguous;
+            d["count_schema_version"] = 2;
             d["groups_split"] = st.groups_split;
             d["groups_fragmented"] = st.groups_fragmented;
             d["contigs"] = st.contigs;
