@@ -287,3 +287,27 @@ TEST_CASE("supported paired collisions retain physical read counts") {
     CHECK(paired[1].reads == 20);
     CHECK_THROWS_AS(assemble_pairs(reads, group({major}), p), MigecError);
 }
+
+TEST_CASE("gapped mates split once with shared physical molecule identities") {
+    ConsensusParams p;
+    const std::string left = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTGATCGTAGCTAGCATGCTAGC";
+    const std::string right = "TTAGGCGCCATGATACCTCTAGGTCATCGCGTATATCCAGTCTGACGTTAGCGATCGGCA";
+    std::string left_alt = left, right_alt = right;
+    left_alt[30] = left[30] == 'A' ? 'C' : 'A';
+    right_alt[30] = right[30] == 'A' ? 'C' : 'A';
+    REQUIRE(left_alt != left);
+    REQUIRE(right_alt != right);
+    std::vector<std::string> first(20, left), second(20, right);
+    first.insert(first.end(), 20, left_alt);
+    second.insert(second.end(), 20, right_alt);
+    const auto out = assemble_pairs(group(first), group(second), p);
+    REQUIRE(out.size() == 4);
+    CHECK(out[0].molecule == out[2].molecule);
+    CHECK(out[1].molecule == out[3].molecule);
+    CHECK(out[0].molecule != out[1].molecule);
+    for (const auto& c : out) {
+        CHECK(c.components == 2);
+        CHECK(c.reads == 20);
+        CHECK(c.seq.size() == left.size());
+    }
+}

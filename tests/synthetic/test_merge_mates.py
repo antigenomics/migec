@@ -89,6 +89,17 @@ def test_mates_that_do_not_overlap_stay_two_contigs(tmp_path):
     got = consensuses(tmp_path / "asm" / "S1.consensus.fq.gz")
 
     assert summary["groups_fragmented"] == summary["groups"]
+    assert summary["consensus_records"] == 2 * summary["molecule_groups"]
+    assert summary["molecule_groups"] == summary["groups"]
+    assert summary["molecule_groups_ambiguous"] == 0
+    identities = {}
+    with gzip.open(tmp_path / "asm" / "S1.consensus.fq.gz", "rt") as fh:
+        for i, line in enumerate(fh):
+            if i % 4 == 0:
+                mi = next(tag[5:] for tag in line.split() if tag.startswith("MI:Z:"))
+                identities[mi] = identities.get(mi, 0) + 1
+    assert len(identities) == summary["molecule_groups"]
+    assert set(identities.values()) == {2}
     assert all(".c" in name for name in got)
     # Never bridged: no emitted contig is longer than the mate it came from.
     assert max(len(s) for s in got.values()) <= 45
@@ -154,3 +165,41 @@ def test_mates_of_different_lengths_are_refused(tmp_path):
             dst.write(line)
     with pytest.raises(RuntimeError, match="not two mates of one run"):
         run(co / "S1_R1.fq.gz", tmp_path / "asm", mate2=short)
+
+
+def test_gapped_collision_branches_share_molecule_identity_across_ends(tmp_path):
+    """A physical partition owns two records, not two independent abundances."""
+    left = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTGATCGTAGCTAGCATGCTAGC"
+    right = "TTAGGCGCCATGATACCTCTAGGTCATCGCGTATATCCAGTCTGACGTTAGCGATCGGCA"
+    def alternate(seq):
+        return seq[:30] + ("C" if seq[30] == "A" else "A") + seq[31:]
+    complement = str.maketrans("ACGT", "TGCA")
+    inputs = [tmp_path / "R1.fq", tmp_path / "R2.fq"]
+    with inputs[0].open("w") as r1, inputs[1].open("w") as r2:
+        for i in range(40):
+            first, second = (left, right) if i < 20 else (alternate(left), alternate(right))
+            for dest, seq in ((r1, "ACGTACGT" + ADAPTER + first),
+                              (r2, second.translate(complement)[::-1])):
+                dest.write(f"@r{i}\n{seq}\n+\n{'I' * len(seq)}\n")
+    barcodes = tmp_path / "bc.txt"
+    barcodes.write_text(f"S1\tNNNNNNNN{ADAPTER.lower()}\n")
+    checkout_run(inputs[0], barcodes, tmp_path / "co", reads2=inputs[1])
+    summary = run(tmp_path / "co/S1_R1.fq.gz", tmp_path / "asm",
+                  mate2=tmp_path / "co/S1_R2.fq.gz")
+    assert summary["groups"] == 1
+    assert summary["groups_split"] == 1
+    assert summary["molecule_groups"] == 2
+    assert summary["consensus_records"] == summary["molecules"] == 4
+    assert summary["count_schema_version"] == 2
+    identities = {}
+    with gzip.open(tmp_path / "asm/S1.consensus.fq.gz", "rt") as fh:
+        for i, line in enumerate(fh):
+            if i % 4 == 0:
+                tags = line.split()
+                mi = next(t[5:] for t in tags if t.startswith("MI:Z:"))
+                assert "cD:i:20" in tags
+                identities.setdefault(mi, []).append(tags[0])
+    assert len(identities) == 2
+    assert all(len(names) == 2 for names in identities.values())
+    assert all({name.split(".")[-2] for name in names} == {"c1", "c2"}
+               for names in identities.values())

@@ -6,6 +6,12 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 ## Unreleased
 
+- Use one physical-pair collision partition for both ends, including nonoverlapping
+  mates. Separate observed contigs retain a shared molecule identity and branch index.
+- Add count schema 2: explicit consensus-record and molecule-group counts, with
+  unresolved single-end fragment identity marked. Keep legacy `molecules` as the
+  record-count alias for compatibility; it is not physical abundance.
+
 - Count physical pairs once in collision-linkage tests and split molecule depth;
   overlapping mates no longer inflate evidence for splitting one molecule.
   Both original mate measurements still contribute to consensus base calls.

@@ -409,12 +409,14 @@ def format_report(summary: dict) -> str:
         )
     lines += [
         "",
-        f"molecules   {s['molecules']:,}",
+        f"records     {s['molecules']:,} consensus sequence records",
+        f"molecule groups  {s.get('molecule_groups', s['molecules']):,} retained UMI/collision groups"
+        + (" (lower bound: unlinked contigs)" if s.get('molecule_groups_ambiguous', 0) else ""),
         f"  split     {s['groups_split']:,} groups held more than one "
         f"({_pct(s['groups_split'], max(s['groups'], 1))} of groups)",
         f"  expected  {s['expected_molecules_per_group']:.2f} molecules per group from the "
         f"birthday problem at {s['barcode_space']['occupancy']:.1%} occupancy, "
-        f"{s['molecules'] / max(s['groups'], 1):.2f} recovered",
+        f"{s.get('molecule_groups', s['molecules']) / max(s['groups'], 1):.2f} recovered",
         "",
         f"{_dur(s['wall_seconds'])} = {_dur(s['partition_seconds'])} partitioning into "
         f"{s['buckets']} bucket(s), serial + "

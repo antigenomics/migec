@@ -208,7 +208,7 @@ which is what stops a figure and a report disagreeing.
        ``q_max``, ``q_mean``
    * - ``<sample>.mig.tsv``
      - ``assemble``
-     - one row per molecule: barcode, contigs, reads, support, length, quality, error, linkage
+     - one row per consensus record: barcode, contig and molecule indices, reads, support, length, quality, error, linkage
 
 .. note::
 
@@ -227,3 +227,27 @@ which is what stops a figure and a report disagreeing.
 accumulates the exact joint distribution of (depth bin, rounded Phred) -- both are small integers,
 so it is 61 counters per bin -- and the quantiles are read off that. Nothing is thinned, which is
 why the quality panel can be a box instead of a scatter.
+
+Assembly count schema 2
+-----------------------
+
+``assemble.json`` distinguishes ``consensus_records`` (emitted FASTQ records) from
+``molecule_groups`` (retained UMI groups plus supported collision branches). The legacy
+``molecules`` field remains an alias of ``consensus_records`` for compatibility; it must not
+be used as physical molecule abundance when a group has multiple contigs.
+``count_schema_version`` is 2.
+
+Paired contigs share one physical-pair collision partition and one ``MI`` tag. Their record
+names retain separate ``.c1`` / ``.c2`` components and, after a collision split, the same
+molecule-branch suffix. The ``molecule`` column of ``<sample>.mig.tsv`` uses that branch
+index within the UMI, rather than the flattened record index. Never sum the depth of two
+contigs with the same molecule identity as independent abundance.
+
+For unlinked single-end contigs, cross-component template identity is unresolved.
+``molecule_groups_ambiguous`` counts such UMI groups; when nonzero, ``molecule_groups`` is a
+lower bound using the largest supported branch count within any component of each UMI.
+Component-scoped identities retain that ambiguity. Neither fragmented records nor an
+inferred occupancy correction establish additional observed physical molecules.
+
+Quality-by-depth tables describe emitted consensus records; their legacy ``molecules``
+column counts records, including separate contigs.
