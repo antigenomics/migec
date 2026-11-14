@@ -287,7 +287,8 @@ public:
     // when the bucket is read back, so a spill is O(1) per entry and correctness does not depend
     // on how many times it happened.
     void enable_spill(const std::string& directory, size_t budget_bytes, int bits);
-    bool spilled() const { return !spill_paths_.empty(); }
+    // Settle buffered additions before selecting resident versus partitioned algorithms.
+    bool spilled() const { flush(); return !spill_paths_.empty(); }
     // Spill configuration, so a bucketed algorithm can partition a derived counter the same way.
     const std::string& spill_dir() const { return spill_dir_; }
     size_t spill_budget() const { return spill_budget_; }
@@ -423,18 +424,21 @@ struct CorrectionParams {
     size_t library_distinct = 0;     // distinct barcodes in the whole library
     double library_collision = 0.0;  // Prod_j m_j over the whole library
     double library_space = 0.0;      // its effective barcode space
-    // Barcode positions this pass owns, as a half-open range; a negative `scan_to` means "to the
-    // end". Never: this is what stops the two passes double counting, and it is not a dedup pass
-    // after the fact. Pass 1 sees exactly the pairs whose substitution misses the partitioned
-    // prefix and pass 2, on rotated keys, exactly the ones it hides, so every pair is weighed once
-    // and `merged` is a count of barcodes rather than of opportunities to look at them.
+    // Optional legacy positional scan range, as a half-open interval. The complete
+    // two-substitution spill driver scans all positions in three disjoint-prefix
+    // partitions and reconciles duplicate proposals before merging.
     int scan_from = 0;
     int scan_to = -1;
+    // Left rotation of this internal bucket, for canonical deterministic ties.
+    int coordinate_rotation = 0;
     // Fraction of unrelated barcode pairs whose payloads agree anyway. Measured once over the
     // whole partition and passed down, because a bucket's own sample is a sample of the bucket:
     // the barcodes in it share a key prefix, and what payload agreement is worth is a property of
     // the library. 0 means "measure it from the array you were handed", the resident case.
     double library_clonality = 0.0;
+    // Assay context supplied by refine, never a CLI tuning parameter. Composite cell keys
+    // retain the released radius until a cell-conditioned multi-substitution model is verified.
+    int cell_length = 0;
 };
 
 struct CorrectionResult {
@@ -483,9 +487,8 @@ struct CorrectionResult {
 //                + 3L * sum_i (1 - exp(-c_i eps))         parent-child
 //                + 3L * sum_i (1 - exp(-c_i eps))^2       sibling
 //
-// `threads` only spreads the distance-1 census, which is 3L binary searches per barcode and was
-// the largest serial block left in both checkout and refine. It is a sum of integers over a
-// read-only table, so the answer does not depend on it.
+// `threads` budgets the native seqtree distance-one batch. The census sums integer pair
+// counts over a read-only table, so its answer does not depend on the worker count.
 //
 // Needs the whole table resident and throws on a spilled counter. `correct_umis` does the same
 // census bucket by bucket and reports the answer in `estimated_error`; take it from there rather

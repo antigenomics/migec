@@ -14,6 +14,7 @@
 #include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
+#include "barcode_search.hpp"
 
 namespace migec {
 
@@ -208,25 +209,16 @@ RefineStats refine(const RefineRequest& request) {
         // Barcodes with no distance-1 entry cannot be single substitutions of anything on the
         // list, so their reads measure how much of this library is genuinely off-list.
         uint64_t far_reads = 0;
-        std::vector<uint64_t> near;
-        for (uint64_t key : off) {
-            bool has_neighbour = false;
-            for (int j = 0; j < list.length() && !has_neighbour; ++j) {
-                const int shift = 62 - 2 * j;
-                const uint64_t cur = (key >> shift) & 3u;
-                for (uint64_t b = 0; b < 4; ++b) {
-                    if (b == cur) continue;
-                    if (list.contains((key & ~(uint64_t{3} << shift)) | (b << shift))) {
-                        has_neighbour = true;
-                        break;
-                    }
-                }
-            }
-            if (has_neighbour) {
-                near.push_back(key);
-            } else {
+        std::vector<std::string> queries;
+        queries.reserve(off.size());
+        for (uint64_t key : off) queries.push_back(unpack_barcode(key, list.length()));
+        const auto candidates = list.candidates(queries, request.correction.threads);
+        std::vector<size_t> near;
+        for (size_t i = 0; i < off.size(); ++i) {
+            if (!candidates[i].empty()) near.push_back(i);
+            else {
                 ++stats.whitelist.far;
-                far_reads += seen[key];
+                far_reads += seen[off[i]];
             }
         }
         stats.whitelist.background_prior =
@@ -234,11 +226,12 @@ RefineStats refine(const RefineRequest& request) {
                 ? request.whitelist.background_prior
                 : Whitelist::measure_background(far_reads, total_reads, off.size());
 
-        for (uint64_t key : near) {
-            const std::string observed = unpack_barcode(key, list.length());
+        for (size_t i : near) {
+            const uint64_t key = off[i];
+            const std::string& observed = queries[i];
             const std::string fixed =
                 list.correct(observed, quals[key], counts, request.whitelist,
-                             stats.whitelist.background_prior);
+                             stats.whitelist.background_prior, &candidates[i]);
             if (fixed.empty()) {
                 ++stats.whitelist.off_list;
             } else {
@@ -360,15 +353,17 @@ RefineStats refine(const RefineRequest& request) {
     // ...and what is actually held while it runs, which is the budget rather than the library once
     // the partition fires. The pair is the point: one is what it would cost, the other what it did.
     stats.table_resident_bytes = counts.memory_bytes();
-    // The whole barcode: cell then UMI. Correction walks its 3L neighbourhood, so a substitution
-    // in either part is found and neither is corrected across the other.
+    // The whole key is cell then UMI. Keep the assay context beside it: cell identity
+    // must not be interpreted as additional random UMI sequence by the wider model.
     const int L = stats.umi_length + stats.cell_length;
     stats.table_seconds = phase.seconds();
 
     // ---------------------------------------------------------------- correct
     phase = Stopwatch();
     stats.threads = worker_count(request.correction.threads, stats.barcodes);
-    const CorrectionResult correction = correct_umis(counts, request.correction);
+    CorrectionParams correction_params = request.correction;
+    correction_params.cell_length = stats.cell_length;
+    const CorrectionResult correction = correct_umis(counts, correction_params);
     stats.correct_seconds = phase.seconds();
     phase = Stopwatch();
     stats.merged = correction.merged;
@@ -386,12 +381,18 @@ RefineStats refine(const RefineRequest& request) {
     // rate rather than the count.
     std::unordered_map<uint64_t, uint64_t> to_root;   // child -> the molecule it belongs to
     std::unordered_map<uint64_t, uint32_t> gained;    // root -> reads its children brought
-    std::unordered_map<uint64_t, uint32_t> children;  // root -> how many children
+    struct ChildTally { uint64_t variants = 0, distance_one = 0, base_errors = 0; };
+    std::unordered_map<uint64_t, ChildTally> children;  // root -> observed child evidence
     to_root.reserve(correction.merges.size() * 2);
     for (const CorrectionResult::Merge& mg : correction.merges) {
         to_root[mg.child] = mg.root;
         gained[mg.root] += mg.reads;
-        ++children[mg.root];
+        auto& tally = children[mg.root];
+        ++tally.variants;
+        const int substitutions = seqtree::hamming(unpack_barcode(mg.child, L),
+                                                  unpack_barcode(mg.root, L));
+        tally.distance_one += substitutions == 1;
+        tally.base_errors += static_cast<uint64_t>(substitutions) * mg.reads;
     }
     // Reads after correction, for a barcode the table hands over. Zero when it was merged away.
     auto corrected_of = [&to_root, &gained](uint64_t key, uint32_t own) -> uint32_t {
@@ -608,7 +609,10 @@ RefineStats refine(const RefineRequest& request) {
     // a figure has to be redrawable from a committed TSV.
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> spectrum;  // corrected size -> (molecules, reads)
     std::vector<std::pair<uint64_t, uint32_t>> per_cell;         // (cell key, molecules)
-    struct DepthRow { uint64_t parents = 0, children = 0, child_reads = 0; };
+    struct DepthRow {
+        uint64_t parents = 0, children = 0, child_reads = 0;
+        uint64_t distance_one = 0, base_errors = 0;
+    };
     std::map<uint32_t, DepthRow> by_depth;  // the PARENT's own reads -> what its children came to
     std::vector<uint64_t> bin_barcodes, bin_reads, bin_merged, bin_molecules;
     std::vector<std::vector<std::array<uint32_t, 4>>> bin_comp;
@@ -705,8 +709,10 @@ RefineStats refine(const RefineRequest& request) {
                     ++row.parents;
                     const auto ch = children.find(key);
                     if (ch != children.end()) {
-                        row.children += ch->second;
+                        row.children += ch->second.variants;
                         row.child_reads += gained[key];
+                        row.distance_one += ch->second.distance_one;
+                        row.base_errors += ch->second.base_errors;
                     }
                 }
             }
@@ -902,8 +908,8 @@ RefineStats refine(const RefineRequest& request) {
         // get wrong, and its error children are what they got wrong, so two estimators of the same
         // eps fall out of the same row:
         //
-        //   distinct children   u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
-        //   reads in children   r(c) = c L eps                    -> eps = r / (c L)
+        //   distance-1 children u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
+        //   child base changes  r(c) = c L eps                    -> eps = r / (c L)
         //
         // They are the check on each other, not two opinions. The first counts distinct
         // NEIGHBOURS and a barcode has only 3L of them, so it saturates; the second counts READS,
@@ -942,10 +948,10 @@ RefineStats refine(const RefineRequest& request) {
         uint64_t deep_parent_reads = 0, deep_child_reads = 0;
         for (const auto& [depth, row] : by_depth) {
             all_parent_reads += static_cast<uint64_t>(depth) * row.parents;
-            all_child_reads += row.child_reads;
+            all_child_reads += row.base_errors;
             if (depth >= kTrustedDepth) {
                 deep_parent_reads += static_cast<uint64_t>(depth) * row.parents;
-                deep_child_reads += row.child_reads;
+                deep_child_reads += row.base_errors;
             }
         }
         stats.error_from_children =
@@ -970,16 +976,19 @@ RefineStats refine(const RefineRequest& request) {
         if (!ef) throw MigecError("refine: cannot write the barcode error table");
         std::fprintf(ef, "parent_reads\tparents\tchild_barcodes\tchild_reads\t"
                          "children_per_parent\treads_per_parent\tneighbours\t"
-                         "error_from_variants\terror_from_reads\tphred_from_reads\testimate\n");
+                         "error_from_variants\terror_from_reads\tphred_from_reads\testimate\t"
+                         "child_base_errors\tdistance_one_child_barcodes\n");
         for (const auto& [depth, row] : by_depth) {
             if (!row.parents) continue;
             const double c = static_cast<double>(depth);
             const double np = static_cast<double>(row.parents);
             const double u = static_cast<double>(row.children) / np;
             const double r = static_cast<double>(row.child_reads) / np;
-            const double eps_reads = r / (c * Lf);
-            const bool invertible = u < ceiling;
-            const double eps_variants = invertible ? -(3.0 / c) * std::log1p(-u / ceiling) : 0.0;
+            const double eps_reads = static_cast<double>(row.base_errors) / np / (c * Lf);
+            const double distance_one_per_parent = static_cast<double>(row.distance_one) / np;
+            const bool invertible = distance_one_per_parent < ceiling;
+            const double eps_variants = invertible
+                ? -(3.0 / c) * std::log1p(-distance_one_per_parent / ceiling) : 0.0;
             std::fprintf(ef, "%u\t%llu\t%llu\t%llu\t%.6f\t%.6f\t%.1f\t", depth,
                          static_cast<unsigned long long>(row.parents),
                          static_cast<unsigned long long>(row.children),
@@ -994,7 +1003,9 @@ RefineStats refine(const RefineRequest& request) {
             } else {
                 std::fprintf(ef, "0.000000e+00\t.\t");
             }
-            std::fprintf(ef, "%.6e\n", stats.error_at_depth);
+            std::fprintf(ef, "%.6e\t%llu\t%llu\n", stats.error_at_depth,
+                         static_cast<unsigned long long>(row.base_errors),
+                         static_cast<unsigned long long>(row.distance_one));
         }
         std::fclose(ef);
     }
@@ -1029,7 +1040,7 @@ RefineStats refine(const RefineRequest& request) {
             table.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
                                       const BarcodeEvidence& ev) {
                 // Threaded, and it is the whole reason this is not the serial tail any more: the
-                // scan is 3L binary searches per surviving barcode, which measured 0.53 s of a
+                // old scan used 3L binary searches per surviving barcode, measured at 0.53 s of a
                 // 2.17 s run on 2 M reads -- a quarter of refine, on one core, after everything
                 // else had been parallelised. It reads the table and the payload draft and writes
                 // nothing shared, so a per-worker bin counter merged afterwards is the whole
@@ -1046,13 +1057,7 @@ RefineStats refine(const RefineRequest& request) {
                     corr[i] = corrected_of(rotate_barcode(bucket[i].key, L, unrotate),
                                            bucket[i].count);
                 }
-                auto present = [&bucket](uint64_t key) -> size_t {
-                    auto it = std::lower_bound(
-                        bucket.begin(), bucket.end(), key,
-                        [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
-                    if (it == bucket.end() || it->key != key) return bucket.size();
-                    return static_cast<size_t>(it - bucket.begin());
-                };
+                const auto neighbors = detail::barcode_neighbors(bucket, L, 1, stats.threads);
                 parallel_for(bucket.size(), stats.threads, [&](size_t i, int w) {
                     const uint32_t mine = corr[i];
                     if (mine == 0) return;
@@ -1060,14 +1065,13 @@ RefineStats refine(const RefineRequest& request) {
                     if (!collect &&
                         std::binary_search(flagged.begin(), flagged.end(), plain)) return;
                     bool looks_like_a_child = false;
-                    for (int j = j_from; j < j_to && !looks_like_a_child; ++j) {
-                        const int shift = 62 - 2 * j;
-                        const uint64_t cur = (bucket[i].key >> shift) & 3u;
-                        for (uint64_t b = 0; b < 4; ++b) {
-                            if (b == cur) continue;
-                            const size_t at =
-                                present((bucket[i].key & ~(uint64_t{3} << shift)) | (b << shift));
-                            if (at >= bucket.size()) continue;
+                    for (const auto& hit : neighbors[i]) {
+                            if (hit.n_subs != 1) continue;
+                            const size_t at = hit.ref_id;
+                            const uint64_t differences = bucket[i].key ^ bucket[at].key;
+                            int position = 0;
+                            while (position < L && ((differences >> (62 - 2 * position)) & 3u) == 0) ++position;
+                            if (position < j_from || position >= j_to) continue;
                             const uint32_t theirs = corr[at];
                             if (theirs == 0) continue;
                             if (theirs >= 20u * mine) {
@@ -1097,7 +1101,6 @@ RefineStats refine(const RefineRequest& request) {
                                     break;
                                 }
                             }
-                        }
                     }
                     if (!looks_like_a_child) return;
                     size_t bidx = 0;

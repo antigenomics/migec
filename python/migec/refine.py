@@ -134,7 +134,7 @@ def format_report(summary: dict) -> str:
         # The same rate off the children instead of off the neighbourhood, because the two fail in
         # different directions and quoting one alone hides which. Read at depth, since a child
         # whose parent was never sequenced cannot be counted and that is most of them at 1 read.
-        f"                {s['error_at_depth']:.2e} from the reads in the children of molecules "
+        f"                {s['error_at_depth']:.2e} from base changes in corrected children of molecules "
         f"seen >= {s['error_depth']} times"
         + (f" -- Q{s['error_phred']:.0f}" if s["error_phred"] else ""),
         f"                {s['error_from_children']:.2e} over all depths, which is a LOWER bound: "

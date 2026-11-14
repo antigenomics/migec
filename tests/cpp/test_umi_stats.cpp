@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <random>
 #include <string>
 
@@ -746,4 +747,187 @@ TEST_CASE("a sample id that would escape the output directory is refused") {
     validate_sample_id("S1", "test");          // ordinary
     validate_sample_id("A2-i129", "test");     // a donor id with a dash inside
     validate_sample_id("S1.rep2", "test");     // a period is fine; the bucket suffix is 3 digits
+}
+
+TEST_CASE("two UMI mismatches use both base qualities and survive spilling") {
+    constexpr int L = 14;
+    const std::string parent = "ACGTACGTACGTAC";
+    const std::string child  = "TCGTATGTACGTAC";  // positions 0 and 5: different spill prefixes
+    auto check = [&](float error, bool spill, float second_error = -1.0f) {
+        UmiCounts counts(L);
+        counts.carry_evidence(0, true);
+        const auto dir = (std::filesystem::temp_directory_path() / "migec_two_mismatch").string();
+        std::filesystem::remove_all(dir);
+        if (spill) counts.enable_spill(dir, 1024, 8);
+        auto add = [&](const std::string& sequence, uint32_t n, bool damaged) {
+            std::vector<float> errors(L, 1e-6f * static_cast<float>(n));
+            if (damaged) {
+                errors[0] = error * static_cast<float>(n);
+                errors[5] = (second_error < 0 ? error : second_error) * static_cast<float>(n);
+            }
+            counts.add(umi(sequence), n, errors.data(), {});
+        };
+        for (const auto& sequence : background(3000, L, 175)) add(sequence, 1, false);
+        add(parent, 20, false);
+        add(child, 1, true);
+        CorrectionParams params;
+        params.sequencing_error = 1e-6;
+        params.polymerase_error = 0;
+        params.threads = 1;
+        const auto result = correct_umis(counts, params);
+        bool merged = false;
+        for (const auto& merge : result.merges) {
+            if (merge.child == umi(child)) {
+                CHECK(merge.root == umi(parent));
+                CHECK(merge.reads == 1);
+                merged = true;
+            }
+        }
+        if (spill) CHECK(counts.spilled());
+        std::filesystem::remove_all(dir);
+        return merged;
+    };
+    CHECK_FALSE(check(1e-6f, false));
+    CHECK_FALSE(check(1e-6f, true));
+    CHECK_FALSE(check(0.3f, false, 1e-6f));
+    CHECK_FALSE(check(0.3f, true, 1e-6f));
+    CHECK(check(0.3f, false));
+    CHECK(check(0.3f, true));
+}
+
+TEST_CASE("two-substitution UMI clouds have exact thread and spill equivalence") {
+    constexpr int L = 14;
+    const std::string parent = "ACGTACGTACGTAC";
+    std::vector<std::string> children;
+    for (int a = 0; a < L; ++a) {
+        for (int b = a + 1; b < L; ++b) {
+            auto sequence = parent;
+            sequence[a] = "ACGT"[(std::string("ACGT").find(sequence[a]) + 1) % 4];
+            sequence[b] = "ACGT"[(std::string("ACGT").find(sequence[b]) + 1) % 4];
+            children.push_back(sequence);
+        }
+    }
+    auto run = [&](bool spill, int threads) {
+        UmiCounts counts(L);
+        counts.carry_evidence(0, true);
+        const auto directory = (std::filesystem::temp_directory_path() / "migec_two_sub_cloud").string();
+        std::filesystem::remove_all(directory);
+        // A formerly valid two-prefix partition: broader correction must re-partition it.
+        if (spill) counts.enable_spill(directory, 1024, 10);
+        auto add = [&](const std::string& sequence, uint32_t n, bool damaged) {
+            std::vector<float> errors(L, 1e-6f * static_cast<float>(n));
+            for (int position = 0; position < L; ++position)
+                if (damaged && sequence[position] != parent[position]) errors[position] = 0.3f;
+            counts.add(umi(sequence), n, errors.data(), {});
+        };
+        for (const auto& sequence : background(3000, L, 175)) add(sequence, 1, false);
+        add(parent, 20, false);
+        for (const auto& sequence : children) add(sequence, 1, true);
+        CorrectionParams params;
+        params.sequencing_error = 1e-6;
+        params.polymerase_error = 0;
+        params.threads = threads;
+        const auto result = correct_umis(counts, params);
+        REQUIRE(result.merged == children.size());
+        CHECK(result.merged_reads == children.size());
+        CHECK(result.molecules_observed == 3001);
+        std::map<uint64_t, uint64_t> mapping;
+        for (const auto& merge : result.merges) {
+            CHECK(merge.root == umi(parent));
+            CHECK(merge.reads == 1);
+            mapping.emplace(merge.child, merge.root);
+        }
+        if (!spill) {
+            uint64_t total = 0;
+            for (auto count : result.corrected) total += count;
+            CHECK(total == 3000 + 20 + children.size());
+            CHECK(reads_of(counts, result, parent) == 20 + children.size());
+        }
+        std::filesystem::remove_all(directory);
+        return mapping;
+    };
+    const auto resident = run(false, 1);
+    CHECK(run(false, 2) == resident);
+    CHECK(run(true, 1) == resident);
+    CHECK(run(true, 2) == resident);
+}
+
+TEST_CASE("rotated barcode quality follows the observed base") {
+    UmiCounts counts(4);
+    counts.carry_evidence(0, true);
+    const float sums[] = {0.02f, 0.04f, 0.06f, 0.08f};
+    counts.add(umi("ACGT"), 2, sums, {});
+    const auto rotated = counts.rotated_copy(1, "");
+    rotated.for_each_bucket([&](const auto& bucket, const BarcodeEvidence& evidence) {
+        REQUIRE(bucket.size() == 1);
+        CHECK(bucket[0].key == umi("CGTA"));
+        REQUIRE(evidence.position_error.size() == 4);
+        const float expected[] = {0.02f, 0.03f, 0.04f, 0.01f};
+        for (size_t i = 0; i < 4; ++i) CHECK(evidence.position_error[i] == doctest::Approx(expected[i]));
+    });
+}
+
+TEST_CASE("missing barcode quality uses the fitted library rate") {
+    UmiCounts counts = background_library(2000, 14, 175);
+    counts.add(umi("ACGTACGTACGTAC"), 10000);
+    counts.add(umi("TCGTATGTACGTAC"), 1);
+    CorrectionParams params;
+    params.sequencing_error = 0.003;
+    params.polymerase_error = 0;
+    params.threads = 1;
+    const auto no_quality = correct_umis(counts, params);
+    REQUIRE(merged_away(counts, no_quality, "TCGTATGTACGTAC"));
+    // refine stores zero where QX/CY was absent: this is unknown, not Q60.
+    BarcodeEvidence unknown;
+    unknown.position_error.assign(counts.entries().size() * 14, 0.0f);
+    const auto missing_quality = correct_umis(counts, params, unknown);
+    CHECK(missing_quality.root == no_quality.root);
+    CHECK(missing_quality.corrected == no_quality.corrected);
+}
+
+TEST_CASE("a fully observed quality batch fits the same census without changing decisions") {
+    UmiCounts counts = background_library(2000, 14, 175);
+    counts.add(umi("ACGTACGTACGTAC"), 20);
+    counts.add(umi("TCGTACGTACGTAC"), 1);
+    BarcodeEvidence quality;
+    quality.position_error.assign(counts.entries().size() * 14, 0.003f);
+    CorrectionParams params;
+    params.polymerase_error = 0;
+    params.threads = 2;
+    const auto fused = correct_umis(counts, params, quality);
+    const double estimate = estimate_umi_error(counts, counts.composition(false), 1);
+    const double fitted = estimate <= 0 ? 1e-4 : estimate;
+    CHECK(fused.estimated_error == fitted);
+    params.sequencing_error = fitted;
+    const auto separate = correct_umis(counts, params, quality);
+    CHECK(fused.root == separate.root);
+    CHECK(fused.corrected == separate.corrected);
+    REQUIRE(merged_away(counts, fused, "TCGTACGTACGTAC"));
+}
+
+TEST_CASE("noncanonical packed padding cannot create duplicate search references") {
+    UmiCounts counts(4);
+    counts.add(0, 20);  // AAAA
+    counts.add(1, 1);   // corrupt padding: also decodes as AAAA
+    CHECK_THROWS_AS(correct_umis(counts), MigecError);
+}
+
+TEST_CASE("dense short UMIs retain every independent molecule through streamed candidates") {
+    constexpr uint32_t count = 1u << 14;  // every 7 nt canonical DNA tag
+    UmiCounts counts(7);
+    for (uint32_t code = 0; code < count; ++code)
+        counts.add(static_cast<uint64_t>(code) << 50, 1);
+    CorrectionParams params;
+    params.sequencing_error = 1e-6;
+    params.polymerase_error = 0;
+    params.threads = 2;
+    const auto result = correct_umis(counts, params);
+    CHECK(result.merged == 0);
+    CHECK(result.molecules_observed == count);
+    REQUIRE(result.root.size() == count);
+    REQUIRE(result.corrected.size() == count);
+    for (uint32_t i = 0; i < count; ++i) {
+        CHECK(result.root[i] == i);
+        CHECK(result.corrected[i] == 1);
+    }
 }

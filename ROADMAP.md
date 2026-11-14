@@ -1,6 +1,6 @@
 # Roadmap
 
-## Current release gate: molecule correctness and dependencies
+## Counting, parameter and dependency invariants
 
 Retain the counting defaults: keep singletons, count physical support without
 capping abundance, and preserve separate observed mate contigs without bridging
@@ -14,8 +14,44 @@ count provenance. Verify that paired contigs share molecule identities without
 inventing sequence across gaps. MIGEC and ARDA are independent packages: neither
 core tool calls or installs the other. Their optional shared workflows own the
 integration pins and compatibility checks; these do not gate standalone MIGEC.
-Use current seqtree for optional barcode-search paths. Complete native/real-input
-checks, CI/docs and released-package smoke tests before publication.
+Use current seqtree as a required dependency for barcode search, including distance one.
+Complete native/real-input checks, CI/docs and released-package smoke tests before publication.
+
+## Active follow-up: seqtree-owned UMI edit search
+
+Published 2.6.0 remains an immutable baseline. The author superseded its fixed one-substitution
+correction assumption and no-indels restriction. The seqtree appendix, “UMI and barcode collapse: a
+birthday problem”, describes a small edit budget with chance-collision accounting; it does not
+justify a universal distance-one limit.
+
+- [x] Inspect appendix and native callers; make seqtree required and remove the optional-search rationale.
+- [x] Replace duplicate one-mismatch candidate kernels with pinned seqtree native batch APIs.
+- [x] Recover quality-supported two-substitution children in 14 nt UMIs while protecting true neighbours.
+- [ ] Implement and verify the conditional multi-substitution model for cell-tagged cohorts.
+  Version 2.7.0 retains their released single-substitution path. Treating cell identity
+  as extra random UMI sequence produced two false class merges in the controlled regression;
+  it must not be enabled as the wider null. Bulk UMIs use the verified radius-two extension.
+- [ ] Support homopolymer indel errors through extraction, barcode representation and correction;
+  distinguish genuine length changes from fixed-window boundary shifts.
+- [x] Verify complete two-substitution candidate retrieval across disk partitions, count conservation
+  and deterministic thread/storage mappings. All 91 mismatch-position pairs in 14 nt tags are covered.
+  Use three disjoint prefixes; the original two-pass proof remains only for distance-one diagnostics.
+- [ ] Extend this completeness and identity-preservation proof to indels and variable geometry.
+- [x] Stream correction candidates through the existing native seqtree consumer; retain per-query
+  decisions and bounded 32-query blocks instead of a radius-two adjacency matrix. Reuse one index
+  within a call; fully observed qualities permit the distance-one census to share that batch.
+- [x] Measure memory/runtime against the published producer and verify focused known-truth checks.
+  Dense streaming witness: 89,112,576→12,615,680 peak RSS bytes, 0.133859→0.035646 seconds.
+  Accepted correction benchmark: scored counts unchanged; native 0.024553→0.047588 seconds,
+  process peak RSS 94,978,048→111,034,368 bytes. One execution each; workload-specific observations.
+- [x] Separate read counts, weighted base errors and distance-one variants in error diagnostics.
+- [ ] Complete release verification and publish 2.7.0 for the bulk substitution scope.
+  The author explicitly requested this bounded release; cell-conditioned radius two and indels
+  remain future work and must not be advertised as implemented.
+
+The distance-one excess remains a labelled estimator, not a correction radius. Wider candidate
+retrieval must use the corresponding error likelihoods and chance-neighbour model; it must never
+merge every neighbour indiscriminately. No new CLI tool or peptide-mapping feature is introduced.
 
 Downstream peptide-to-clonotype mapping remains in its own analysis pipeline and
 search scripts; it is not a new MIGEC feature or standalone tool developed here.

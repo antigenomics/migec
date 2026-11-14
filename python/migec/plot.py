@@ -272,7 +272,7 @@ plot "{src}" using 2:3 with boxes lc rgb "#1b9e77" title "molecules", \
         name="umi_error_children",
         source="*.umi_errors.tsv",
         script="""
-set title "Barcode errors against the parent's depth -- distinct children, and the reads in them"
+set title "Barcode errors against the parent's depth -- distance-one children and base changes"
 set xlabel "reads carried by the parent"
 set ylabel "per parent"
 set logscale xy
@@ -284,14 +284,15 @@ set key inside top left
 # neighbourhood filled, measured rather than predicted, and it is the same saturation that makes
 # the distance-1 error estimate fail downward.
 #
-# Points, never lines: one row is one exact depth, and past the head most depths hold a handful of
-# parents, so a line would draw quantisation noise as structure.
-plot "{src}" using 1:($5 > 0 ? $5 : 1/0) with points pt 7 ps 0.5 lc rgb "#1b9e77" \
-       title "distinct child barcodes", \
-     "" using 1:($6 > 0 ? $6 : 1/0) with points pt 7 ps 0.5 lc rgb "#d95f02" \
-       title "reads in those children", \
+# The appended columns distinguish distance-one variants and weighted base changes. Legacy
+# tables have only single-base accounting; valid() retains their original quantities.
+# Points, never lines: one row is one exact depth, often with only a handful of parents.
+plot "{src}" using 1:((valid(13) ? $13/$2 : $5) > 0 ? (valid(13) ? $13/$2 : $5) : 1/0) with points pt 7 ps 0.5 lc rgb "#1b9e77" \
+       title "distance-one child barcodes", \
+     "" using 1:((valid(12) ? $12/$2 : $6) > 0 ? (valid(12) ? $12/$2 : $6) : 1/0) with points pt 7 ps 0.5 lc rgb "#d95f02" \
+       title "base changes in corrected reads", \
      "" using 1:7 with lines lw 1.5 dt 2 lc rgb "{INK}" \
-       title "3L, the only children there can be"
+       title "3L, distance-one neighbour ceiling"
 """,
     ),
     Panel(

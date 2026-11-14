@@ -13,9 +13,12 @@
 
 #include "migec/parallel.hpp"
 #include "migec/types.hpp"
+#include "barcode_search.hpp"
 
 namespace migec {
 namespace {
+using detail::barcode_neighbors;
+using detail::BarcodeSearch;
 
 int log2_bin(uint32_t count) {
     int b = 0;
@@ -676,13 +679,14 @@ UmiCounts UmiCounts::rotated_copy(int r, const std::string& directory) const {
     if (spill_budget_) out.enable_spill(directory, spill_budget_, spill_bits_);
     const size_t E = static_cast<size_t>(ev_err_);
     std::vector<float> sums(E);
+    const size_t rotation = length_ > 0 ? static_cast<size_t>((r % length_ + length_) % length_) : 0;
     for_each_bucket([&](const std::vector<Entry>& bucket, const BarcodeEvidence& ev) {
         for (size_t i = 0; i < bucket.size(); ++i) {
             // The evidence arrives averaged and is stored as a sum, so it is multiplied back by
             // the count on the way in. Anything else divides by the count twice and the rotated
             // pass weighs a barcode quality that is a factor of its own depth too small.
             for (size_t j = 0; j < E; ++j) {
-                sums[j] = ev.position_error[i * E + j] * static_cast<float>(bucket[i].count);
+                sums[j] = ev.position_error[i * E + (j + rotation) % E] * static_cast<float>(bucket[i].count);
             }
             out.add(rotate_barcode(bucket[i].key, length_, r), bucket[i].count,
                     E ? sums.data() : nullptr,
@@ -787,40 +791,29 @@ SizeHist size_hist_of(const std::vector<UmiCounts::Entry>& m) {
     return out;
 }
 
-// Observed distinct-barcode pairs at Hamming distance 1 *within this array*, counted once each,
-// over substitutions at positions [j0, j1). Threaded: a barcode's probes read the sorted table and
-// nothing else, so each worker keeps its own tally and they are added up afterwards -- an integer
-// sum, so the total does not depend on who counted what.
-//
-// The position range is how a range-partitioned library is censused without double counting: a
-// pair that differs at a position outside the partitioned prefix is in one bucket and is seen
-// here, and the rest are seen by the same call on the rotated copy.
-uint64_t d1_census(const std::vector<UmiCounts::Entry>& m, int j0, int j1, int threads) {
-    if (m.size() < 2 || j1 <= j0) return 0;
-    // Binary search over the array we were handed. Not UmiCounts::find, which flushes the append
-    // buffer and could reallocate the very array this refers to.
-    auto present = [&m](uint64_t key) {
-        auto it = std::lower_bound(m.begin(), m.end(), key,
-                                   [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
-        return it != m.end() && it->key == key;
-    };
-    const int workers = worker_count(threads, m.size());
-    std::vector<uint64_t> tally(static_cast<size_t>(workers), 0);
-    parallel_for(m.size(), workers, [&](size_t i, int w) {
-        const UmiCounts::Entry& e = m[i];
-        for (int j = j0; j < j1; ++j) {
-            const int shift = 62 - 2 * j;
-            const uint64_t cur = (e.key >> shift) & 3u;
-            for (uint64_t b = 0; b < 4; ++b) {
-                if (b == cur) continue;
-                const uint64_t nb = (e.key & ~(uint64_t{3} << shift)) | (b << shift);
-                if (nb > e.key && present(nb)) ++tally[static_cast<size_t>(w)];  // each pair once
+// Keep the established distance-one excess estimator distinct from the correction radius.
+// Partition ownership remains position-based, and each unordered pair contributes once.
+uint64_t d1_from_search(const std::vector<UmiCounts::Entry>& entries,
+                        const BarcodeSearch& search, int j0, int j1, int threads) {
+    uint64_t total = 0;
+    search.consume(1, threads, [&](size_t, size_t, seqtree::CountBuffer&& block) {
+        for (size_t row = 0; row < block.data.size(); row += 6) {
+            const size_t query = block.data[row], reference = block.data[row + 1];
+            if (block.data[row + 3] != 1 || reference <= query) continue;
+            const uint64_t differences = entries[query].key ^ entries[reference].key;
+            for (int j = j0; j < j1; ++j) {
+                if (((differences >> (62 - 2 * j)) & 3u) != 0) { ++total; break; }
             }
         }
     });
-    uint64_t total = 0;
-    for (uint64_t v : tally) total += v;
     return total;
+}
+
+uint64_t d1_census(const std::vector<UmiCounts::Entry>& entries, int length,
+                   int j0, int j1, int threads) {
+    if (entries.size() < 2 || j1 <= j0) return 0;
+    const BarcodeSearch search(entries, length);
+    return d1_from_search(entries, search, j0, j1, threads);
 }
 
 // Inverts the distance-1 census into a per-base error rate. Split out of `estimate_umi_error` so
@@ -890,7 +883,7 @@ double estimate_umi_error(const UmiCounts& counts, const UmiComposition& comp, i
     // Every position, because this table is the whole library: `entries()` refuses a spilled
     // counter, and a partition is censused by `correct_umis` in two passes instead.
     const std::vector<UmiCounts::Entry>& m = counts.entries();
-    return solve_umi_error(d1_census(m, 0, L, threads), static_cast<double>(m.size()), comp, L,
+    return solve_umi_error(d1_census(m, L, 0, L, threads), static_cast<double>(m.size()), comp, L,
                            size_hist_of(m));
 }
 
@@ -1080,7 +1073,9 @@ struct Proposal {
 CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
                                  const CorrectionParams& params, const BarcodeEvidence& evidence,
                                  const std::map<uint32_t, uint64_t>* library_sizes = nullptr,
-                                 std::vector<Proposal>* proposals = nullptr) {
+                                 std::vector<Proposal>* proposals = nullptr,
+                                 const BarcodeSearch* supplied = nullptr,
+                                 uint64_t* observed_d1 = nullptr) {
     CorrectionResult res;
     const size_t n_entries = m.size();
 
@@ -1095,15 +1090,6 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         res.molecules_corrected = static_cast<double>(n_entries);
         return res;
     }
-
-    // Index of a packed barcode in the sorted entry array. Binary search: the alternative would be
-    // a side hash map, which is exactly the allocation this class exists to avoid.
-    auto find_idx = [&m](uint64_t key) -> size_t {
-        auto it = std::lower_bound(m.begin(), m.end(), key,
-                                   [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
-        if (it == m.end() || it->key != key) return static_cast<size_t>(-1);
-        return static_cast<size_t>(it - m.begin());
-    };
 
     double eps = params.sequencing_error;
     if (eps <= 0.0) eps = 1e-4;  // a floor, so correction still runs on a clean small library
@@ -1169,7 +1155,7 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
     }
     res.payload_clonality = pw > 0 ? clonality : 0.0;
 
-    // Order by count descending, then walk each barcode's 3L neighbourhood from the smallest MIG
+    // Order by count descending, then inspect native candidates from the smallest MIG
     // upwards. Indices, not copies of the entries: 4 bytes each rather than 16.
     std::vector<uint32_t> order(n_entries);
     for (size_t i = 0; i < n_entries; ++i) order[i] = static_cast<uint32_t>(i);
@@ -1182,116 +1168,151 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
     //
     // Every child's best parent is a pure function of the table and the evidence: the loop below
     // reads `m`, `evidence`, `size_pmf` and the constants above, and NOTHING it writes is read by
-    // another child. So the scan -- which is all of the cost, 3L binary searches and a payload
-    // comparison per barcode -- parallelises exactly, and the answer is identical at any thread
+    // another child. Candidate likelihoods and payload comparisons therefore parallelise
+    // exactly, and the answer is identical at any thread
     // count. The decisions are applied afterwards, serially, in the original order.
     struct Decision {
         size_t parent = static_cast<size_t>(-1);
         double posterior = 0.0;
     };
     std::vector<Decision> decisions(n_entries);
-
-    parallel_for(n_entries, params.threads, [&](size_t k, int) {
-        // Smallest MIG first, as the serial walk did. The order does not matter to the scan --
-        // that is the point -- but keeping it means the two versions can be diffed.
-        const size_t child_idx = order[n_entries - 1 - k];
+    std::unique_ptr<BarcodeSearch> owned_search;
+    if (!supplied) {
+        owned_search = std::make_unique<BarcodeSearch>(m, L);
+        supplied = owned_search.get();
+    }
+    auto canonical = [&](uint64_t key) {
+        return params.coordinate_rotation ? rotate_barcode(key, L, L - params.coordinate_rotation) : key;
+    };
+    auto candidate_rank = [&](uint64_t child, uint64_t candidate) {
+        child = canonical(child);
+        candidate = canonical(candidate);
+        const uint64_t difference = child ^ candidate;
+        int position = 0;
+        while (position < L && ((difference >> (62 - 2 * position)) & 3u) == 0) ++position;
+        return std::make_pair(position, candidate);
+    };
+    auto consider = [&](size_t child_idx, const seqtree::Hit& hit) {
         const uint64_t child = m[child_idx].key;
         const uint32_t c_child = m[child_idx].count;
-        size_t best_parent = static_cast<size_t>(-1);
-        double best_post = 0.0;
+        auto& decision = decisions[child_idx];
+        size_t& best_parent = decision.parent;
+        double& best_post = decision.posterior;
+        if (hit.n_subs == 0) return;
+        const size_t cand_idx = hit.ref_id;
+        const uint64_t cand = m[cand_idx].key;
+        int j = 0;
+        const uint64_t differences = child ^ cand;
+        while (j < L && ((differences >> (62 - 2 * j)) & 3u) == 0) ++j;
+        if (j < j_from || j >= j_to) return;
+        const uint32_t c_par = m[cand_idx].count;
 
-        for (int j = j_from; j < j_to; ++j) {
-            const int shift = 62 - 2 * j;
-            const uint64_t cur = (child >> shift) & 3u;
-            for (uint64_t b = 0; b < 4; ++b) {
-                if (b == cur) continue;
-                const uint64_t cand = (child & ~(uint64_t{3} << shift)) | (b << shift);
-                const size_t cand_idx = find_idx(cand);
-                if (cand_idx == static_cast<size_t>(-1)) continue;
-                const uint32_t c_par = m[cand_idx].count;
-
-                // The payload likelihood ratio, before the count gates -- because it is what
-                // decides whether those gates apply at all.
-                double lr_payload = 1.0;
-                bool payload_decisive = false, payload_refutes = false;
-                if (pw > 0) {
-                    int mism = 0, cmp = 0;
-                    for (int q = 0; q < pw; ++q) {
-                        const char x = evidence.payload[child_idx * static_cast<size_t>(pw) +
-                                                        static_cast<size_t>(q)];
-                        const char y = evidence.payload[cand_idx * static_cast<size_t>(pw) +
-                                                        static_cast<size_t>(q)];
-                        if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
-                        ++cmp;
-                        mism += x != y;
-                    }
-                    if (cmp >= 8) {
-                        // Same molecule: two drafts of it disagree at ~2e. Independent molecule:
-                        // the same thing with probability `clonality`, and otherwise a different
-                        // sequence altogether.
-                        const double ll_same = log_binom_pmf(mism, cmp, params.payload_error);
-                        const double ll_diff = log_binom_pmf(mism, cmp, 0.75);
-                        const double ll_ind =
-                            std::log(clonality * std::exp(ll_same) +
-                                     (1.0 - clonality) * std::exp(ll_diff) + 1e-300);
-                        lr_payload = std::exp(std::clamp(ll_same - ll_ind, -60.0, 60.0));
-                        payload_decisive = lr_payload > 10.0;
-                        payload_refutes = lr_payload < 0.1;
-                    }
-                }
-                // A payload that disagrees is not this molecule, whatever the counts say.
-                if (payload_refutes) continue;
-
-                // The count gates exist because a child is smaller than its parent -- true, and
-                // vacuous at 1-3 reads per UMI. They are lifted exactly when the reads themselves
-                // say the two barcodes carry the same molecule.
-                if (!payload_decisive) {
-                    if (c_par <= c_child) continue;
-                    if (static_cast<double>(c_child) >
-                        params.max_child_fraction * static_cast<double>(c_par)) {
-                        continue;
-                    }
-                } else if (c_par < c_child) {
-                    continue;  // still orient the merge into the larger of the two
-                } else if (c_par == c_child && cand > child) {
-                    continue;  // a tie folds into the lexicographically smaller key, once
-                }
-
-                // Two ways to be an error child. Sequencing miscalls land on one specific
-                // alternative base, so the rate per neighbour is eps/3, not eps.
-                // The barcode's OWN reported quality at the base that differs, when it is known:
-                // a miscall carries a low Phred there and an early-PCR child carries a high one,
-                // which is the distinction a single global rate has to average away.
-                double eps_j = eps;
-                if (evidence.has_quality()) {
-                    const size_t at = child_idx * static_cast<size_t>(L) + static_cast<size_t>(j);
-                    if (at < evidence.position_error.size()) {
-                        eps_j = std::clamp(static_cast<double>(evidence.position_error[at]),
-                                           1e-6, 0.75);
-                    }
-                }
-                const double lam = static_cast<double>(c_par) * eps_j / 3.0;
-                const double l_seq = poisson_pmf(c_child, lam);
-                const double l_pol = ld_pmf(c_child, c_par, params.max_child_fraction);
-                const double l_err = (1.0 - rho_pol) * l_seq + rho_pol * l_pol;
-
-                // ...against being a real molecule that happens to sit one substitution away and
-                // to have this many reads.
-                auto sp = size_pmf.find(c_child);
-                const double p_size = sp == size_pmf.end() ? size_floor
-                                                           : std::max(sp->second, size_floor);
-                const double l_ind = std::max(a_ind * p_size, 1e-300);
-
-                // The payload evidence multiplies the error hypothesis, because it is a
-                // likelihood ratio between exactly the two hypotheses already being weighed.
-                const double post = (l_err * lr_payload) / (l_err * lr_payload + l_ind);
-                if (post > best_post) {
-                    best_post = post;
-                    best_parent = cand_idx;
-                }
+        // The payload likelihood ratio, before the count gates -- because it is what
+        // decides whether those gates apply at all.
+        double lr_payload = 1.0;
+        bool payload_decisive = false, payload_refutes = false;
+        if (pw > 0) {
+            int mism = 0, cmp = 0;
+            for (int q = 0; q < pw; ++q) {
+                const char x = evidence.payload[child_idx * static_cast<size_t>(pw) +
+                                                static_cast<size_t>(q)];
+                const char y = evidence.payload[cand_idx * static_cast<size_t>(pw) +
+                                                static_cast<size_t>(q)];
+                if (x == 0 || y == 0 || x == 'N' || y == 'N') continue;
+                ++cmp;
+                mism += x != y;
+            }
+            if (cmp >= 8) {
+                // Same molecule: two drafts of it disagree at ~2e. Independent molecule:
+                // the same thing with probability `clonality`, and otherwise a different
+                // sequence altogether.
+                const double ll_same = log_binom_pmf(mism, cmp, params.payload_error);
+                const double ll_diff = log_binom_pmf(mism, cmp, 0.75);
+                const double ll_ind =
+                    std::log(clonality * std::exp(ll_same) +
+                             (1.0 - clonality) * std::exp(ll_diff) + 1e-300);
+                lr_payload = std::exp(std::clamp(ll_same - ll_ind, -60.0, 60.0));
+                payload_decisive = lr_payload > 10.0;
+                payload_refutes = lr_payload < 0.1;
             }
         }
-        decisions[child_idx] = {best_parent, best_post};
+        // A payload that disagrees is not this molecule, whatever the counts say.
+        if (payload_refutes) return;
+
+        // The count gates exist because a child is smaller than its parent -- true, and
+        // vacuous at 1-3 reads per UMI. They are lifted exactly when the reads themselves
+        // say the two barcodes carry the same molecule.
+        if (!payload_decisive) {
+            if (c_par <= c_child) return;
+            if (static_cast<double>(c_child) >
+                params.max_child_fraction * static_cast<double>(c_par)) {
+                return;
+            }
+        } else if (c_par < c_child) {
+            return;  // still orient the merge into the larger of the two
+        } else if (c_par == c_child && canonical(cand) > canonical(child)) {
+            return;  // a tie folds into the lexicographically smaller key, once
+        }
+
+        // Two ways to be an error child. Sequencing miscalls land on one specific
+        // alternative base, so the rate per neighbour is eps/3, not eps.
+        // The barcode's OWN reported quality at the base that differs, when it is known:
+        // a miscall carries a low Phred there and an early-PCR child carries a high one,
+        // which is the distinction a single global rate has to average away.
+        // A specific two-base miscall requires both errors, not either error.
+        // This preserves the distance-one model exactly and prevents a single poor
+        // base from licensing another confidently observed mismatch.
+        double error_probability = 1.0, single_rate = eps;
+        for (int position = 0; position < L; ++position) {
+            if (((differences >> (62 - 2 * position)) & 3u) == 0) continue;
+            double rate = eps;
+            if (evidence.has_quality()) {
+                const size_t at = child_idx * static_cast<size_t>(L) + static_cast<size_t>(position);
+                if (at < evidence.position_error.size() && evidence.position_error[at] > 0.0f)
+                    rate = std::clamp(static_cast<double>(evidence.position_error[at]), 1e-6, 0.75);
+            }
+            single_rate = rate;
+            error_probability *= rate / 3.0;
+        }
+        const double lam = hit.n_subs == 1 ? static_cast<double>(c_par) * single_rate / 3.0
+                                              : static_cast<double>(c_par) * error_probability;
+        const double l_seq = poisson_pmf(c_child, lam);
+        const double l_pol = ld_pmf(c_child, c_par, params.max_child_fraction);
+        // Independent polymerase events are a model assumption for multi-base children.
+        const double rho_events = std::pow(rho_pol, hit.n_subs);
+        const double l_err = (1.0 - rho_events) * l_seq + rho_events * l_pol;
+
+        // ...against being a real molecule that happens to sit one substitution away and
+        // to have this many reads.
+        auto sp = size_pmf.find(c_child);
+        const double p_size = sp == size_pmf.end() ? size_floor
+                                                   : std::max(sp->second, size_floor);
+        const double l_ind = std::max(a_ind * p_size, 1e-300);
+
+        // The payload evidence multiplies the error hypothesis, because it is a
+        // likelihood ratio between exactly the two hypotheses already being weighed.
+        const double post = (l_err * lr_payload) / (l_err * lr_payload + l_ind);
+        if (post > best_post ||
+            (post == best_post && best_parent != static_cast<size_t>(-1) &&
+             candidate_rank(child, cand) < candidate_rank(child, m[best_parent].key))) {
+            best_post = post;
+            best_parent = cand_idx;
+        }
+    };
+    // The verified development extension applies to bulk UMI cohorts. Preserve the
+    // released cell-tagged model until its conditional background is implemented.
+    const int substitutions = params.cell_length ? 1 : 2;
+    supplied->consume(substitutions, params.threads, [&](size_t, size_t, seqtree::CountBuffer&& block) {
+        // seqtree serializes consumer callbacks within its one native worker pool.
+        // Every query's complete candidate set is consumed; only O(queries) decisions survive.
+        for (size_t row = 0; row < block.data.size(); row += 6) {
+            const size_t query = block.data[row], reference = block.data[row + 1];
+            const auto substitutions = static_cast<uint16_t>(block.data[row + 3]);
+            if (observed_d1 && substitutions == 1 && reference > query) ++*observed_d1;
+            consider(query, seqtree::Hit{static_cast<uint32_t>(reference),
+                static_cast<int32_t>(block.data[row + 2]), substitutions,
+                static_cast<uint16_t>(block.data[row + 4]), static_cast<uint16_t>(block.data[row + 5])});
+        }
     });
 
     // ------------------------------------------------------------------ apply, serially
@@ -1377,27 +1398,40 @@ double collision_of(const UmiComposition& comp, int L) {
     return p;
 }
 
-// Correction over a range-partitioned counter, bucket by bucket, in two passes.
-//
-// The partition is on the top `bits` of the key, so a barcode and its 1-substitution neighbour
-// share a bucket exactly when the substitution missed the first `pb = (bits + 1) / 2` positions.
-// Pass 1 therefore owns positions [pb, L) and sees every such pair. Pass 2 runs on a copy of the
-// counter whose keys are rotated left by `pb` bases -- so what used to be positions [pb, 2pb) is
-// now the prefix, and the positions the first partition hid are in the clear -- and owns exactly
-// the complementary set, which in rotated coordinates is [L - pb, L).
-//
-// Never: every pair is weighed in exactly ONE pass. The alternative -- scan every position in both
-// and deduplicate -- would need the pairs, not the merges, to be remembered, which is the resident
-// set being bounded here in the first place.
-//
-// Note: peak memory here is one bucket, plus the rotated copy's own budget (it partitions the same
-// way), plus the merged-barcode list. That list is the only part that scales with the library at
-// all: 8 bytes per barcode actually corrected, which is the error rate rather than the count -- at
-// 1e-3 per base on a 12 nt barcode, ~1.2% of the distinct barcodes, 38 MB against a library of
-// 8.8 GB. Spilling it too is the upgrade path if a library ever makes it matter.
+// Correction over three disjoint prefix partitions. At most two substitutions cannot
+// change every prefix, so every candidate pair co-occurs in at least one bucket.
+// Proposals are deduplicated before merging; the distance-one census retains its
+// separate two-pass ownership rule. Working memory includes the native index/hits
+// for the current bucket and the temporary counters, not only the entry table.
 CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams& params) {
     const int L = counts.length();
     const int pb = counts.spill_prefix_bases();
+    // Two substitutions leave at least one of three DISJOINT prefixes untouched.
+    // Older caller-selected partitions may be wider: re-partition without losing evidence.
+    if (3 * pb > L) {
+        const auto directory = (std::filesystem::path(counts.spill_dir()) / "three_prefixes").string();
+        UmiCounts narrower(L);
+        if (counts.carries_evidence()) narrower.carry_evidence(counts.payload_width(), true);
+        const int bits = std::min(counts.spill_bits(), 2 * (L / 3));
+        if (bits > 0) narrower.enable_spill(directory, counts.spill_budget(), bits);
+        // With L < 3 the complete alphabet has at most 16 keys and is bounded without spilling.
+        const size_t P = static_cast<size_t>(counts.payload_width());
+        std::vector<float> sums(static_cast<size_t>(L));
+        counts.for_each_bucket([&](const auto& bucket, const BarcodeEvidence& ev) {
+            for (size_t i = 0; i < bucket.size(); ++i) {
+                for (int j = 0; j < L && ev.has_quality(); ++j)
+                    sums[static_cast<size_t>(j)] = ev.position_error[i * L + j] * bucket[i].count;
+                narrower.add(bucket[i].key, bucket[i].count, ev.has_quality() ? sums.data() : nullptr,
+                    ev.has_payload() ? std::string_view(ev.payload.data() + i * P, P) : std::string_view());
+            }
+        });
+        auto result = correct_umis(narrower, params);
+        result.root.clear();
+        result.corrected.clear();
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
+        return result;
+    }
     CorrectionResult res;
 
     // One pass over the spilled buckets does four things at once, because each is a full read of
@@ -1436,7 +1470,7 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
             // pass weighs a barcode quality a factor of its own depth too small.
             if (ev.has_quality()) {
                 for (size_t j = 0; j < E; ++j) {
-                    sums[j] = ev.position_error[i * E + j] * static_cast<float>(e.count);
+                    sums[j] = ev.position_error[i * E + (j + static_cast<size_t>(pb)) % E] * static_cast<float>(e.count);
                 }
             }
             rotated.add(rotate_barcode(e.key, L, pb), e.count,
@@ -1448,7 +1482,7 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
             // reservoir sees the same barcodes a resident table would.
             if (ev.has_payload()) reservoir.add(ev.payload.data() + i * P);
         }
-        d1 += d1_census(bucket, pb, L, params.threads);
+        d1 += d1_census(bucket, L, pb, L, params.threads);
     });
     if (n > 0.0) {
         for (auto& row : comp.freq) {
@@ -1456,7 +1490,7 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
         }
     }
     rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket) {
-        d1 += d1_census(bucket, L - pb, L, params.threads);
+        d1 += d1_census(bucket, L, L - pb, L, params.threads);
     });
 
     CorrectionParams sub = params;
@@ -1477,51 +1511,44 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     // error budget as a ratio of zero. Caught by diffing a whole run against its resident twin.
     if (sub.sequencing_error <= 0.0) sub.sequencing_error = 1e-4;
 
-    // `unrotate` is how many bases to rotate the keys BACK by: 0 in pass 1, and L - pb in pass 2,
-    // whose keys arrived rotated left by pb. Reporting a merge in rotated coordinates would name a
-    // barcode that never existed.
-    // Both passes SCAN; neither merges. Every pair is seen by exactly one of them -- pass 1 owns
-    // the barcode positions the partitioned prefix does not touch, pass 2 on the rotated copy owns
-    // exactly the ones it hides -- so the two proposal sets together are the same set of
-    // candidates a resident scan over every position produces, and the apply below is the resident
-    // apply. Never: merging inside a pass instead would take the FIRST candidate rather than the
-    // best, and a barcode with a plausible parent on each side of the boundary would land on
-    // whichever pass ran first. Measured before this was split out: 2 barcodes in 6,591 went to a
-    // different (still valid) parent than the resident run gave them, and every table downstream
-    // differed with them.
-    std::vector<Proposal> p1, p2;
-    sub.scan_from = pb;
+    // Each pair within two substitutions shares at least one of the three prefixes.
+    // Scan all positions in each bucket; combine duplicate proposals before any merge.
+    // The established two-pass distance-one census above still counts each pair once.
+    const auto third_dir = (std::filesystem::path(counts.spill_dir()) / "rotated_twice").string();
+    UmiCounts third = counts.rotated_copy(2 * pb, third_dir);
+    std::vector<Proposal> p1, p2, p3;
+    sub.scan_from = 0;
     sub.scan_to = L;
-    counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
-                               const BarcodeEvidence& ev) {
-        correct_entries(bucket, L, sub, ev, &sizes, &p1);
-    });
-    sub.scan_from = L - pb;
-    sub.scan_to = L;
-    rotated.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
-                                const BarcodeEvidence& ev) {
-        const size_t at = p2.size();
-        correct_entries(bucket, L, sub, ev, &sizes, &p2);
-        // Back into the coordinates every other number is in. A merge reported in rotated
-        // coordinates names a barcode that never existed.
-        for (size_t i = at; i < p2.size(); ++i) {
-            p2[i].child = rotate_barcode(p2[i].child, L, L - pb);
-            p2[i].parent = rotate_barcode(p2[i].parent, L, L - pb);
-        }
-    });
-
-    // One proposal per child, the best of the two. Pass 2 goes in first because it owns the LOW
-    // barcode positions, which a resident scan reaches first, so an exact tie resolves the same
-    // way there as here.
+    auto scan = [&](const UmiCounts& table, int rotation, std::vector<Proposal>& proposals) {
+        sub.coordinate_rotation = rotation;
+        table.for_each_bucket([&](const auto& bucket, const BarcodeEvidence& ev) {
+            const size_t begin = proposals.size();
+            correct_entries(bucket, L, sub, ev, &sizes, &proposals);
+            if (rotation) {
+                for (size_t i = begin; i < proposals.size(); ++i) {
+                    proposals[i].child = rotate_barcode(proposals[i].child, L, L - rotation);
+                    proposals[i].parent = rotate_barcode(proposals[i].parent, L, L - rotation);
+                }
+            }
+        });
+    };
+    scan(counts, 0, p1);
+    scan(rotated, pb, p2);
+    scan(third, 2 * pb, p3);
+    auto rank = [&](const Proposal& p) {
+        const uint64_t difference = p.child ^ p.parent;
+        int position = 0;
+        while (position < L && ((difference >> (62 - 2 * position)) & 3u) == 0) ++position;
+        return std::make_pair(position, p.parent);
+    };
     std::unordered_map<uint64_t, Proposal> best;
-    best.reserve(p1.size() + p2.size());
-    for (const Proposal& p : p2) {
-        auto it = best.find(p.child);
-        if (it == best.end() || p.posterior > it->second.posterior) best[p.child] = p;
-    }
-    for (const Proposal& p : p1) {
-        auto it = best.find(p.child);
-        if (it == best.end() || p.posterior > it->second.posterior) best[p.child] = p;
+    best.reserve(p1.size() + p2.size() + p3.size());
+    for (const auto* proposals : {&p1, &p2, &p3}) {
+        for (const Proposal& p : *proposals) {
+            auto it = best.find(p.child);
+            if (it == best.end() || p.posterior > it->second.posterior ||
+                (p.posterior == it->second.posterior && rank(p) < rank(it->second))) best[p.child] = p;
+        }
     }
 
     // Apply, serially, smallest MIG first and ties by descending key -- the order the resident
@@ -1582,6 +1609,7 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     // a reason to lose a correction result that is already computed.
     std::error_code rm_ec;
     std::filesystem::remove_all(rot_dir, rm_ec);
+    std::filesystem::remove_all(third_dir, rm_ec);
 
     // The per-bucket molecule counts mean nothing on their own -- a bucket is a slice of the
     // barcode space, not of the molecules -- so they are recomputed here from the totals. Every
@@ -1604,6 +1632,8 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
 
 CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& params,
                               const BarcodeEvidence& evidence) {
+    if (params.cell_length < 0 || params.cell_length > counts.length())
+        throw MigecError("correct_umis: cell length is outside the composite barcode");
     if (counts.spilled()) {
         if (evidence.has_quality() || evidence.has_payload()) {
             throw MigecError(
@@ -1616,17 +1646,37 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         return correct_spilled(counts, params);
     }
     CorrectionParams p = params;
-    // A resident table IS the library, so it supplies its own context. Filling it here rather than
-    // inside the core keeps the bucketed and the resident path on one implementation.
+    const auto& entries = counts.entries();
+    const BarcodeSearch search(entries, counts.length());
+    const bool fit_error = p.library_distinct == 0 && p.sequencing_error < 0.0;
+    UmiComposition comp;
     if (p.library_distinct == 0) {
-        const UmiComposition comp = counts.composition(false);
+        comp = counts.composition(false);
         p.library_distinct = counts.distinct();
         p.library_collision = collision_of(comp, counts.length());
         p.library_space = comp.effective_space();
-        if (p.sequencing_error < 0.0) {
-            p.sequencing_error = estimate_umi_error(counts, comp, params.threads);
-        }
     }
+    auto run = [&](const BarcodeEvidence& ev) {
+        const bool full_quality = entries.size() > 1 && ev.has_quality() &&
+            ev.position_error.size() == entries.size() * static_cast<size_t>(counts.length()) &&
+            std::all_of(ev.position_error.begin(), ev.position_error.end(),
+                        [](float rate) { return rate > 0.0f && std::isfinite(rate); });
+        auto fit = [&](uint64_t d1) {
+            const double estimate = solve_umi_error(d1, static_cast<double>(entries.size()),
+                comp, counts.length(), size_hist_of(entries));
+            return estimate <= 0.0 ? 1e-4 : estimate;
+        };
+        // With every mismatch quality observed, candidate likelihoods do not depend
+        // on the fitted fallback rate: census and decisions share ONE native batch.
+        // Missing-quality inputs first fit the census using the SAME owned index.
+        if (fit_error && !full_quality)
+            p.sequencing_error = fit(d1_from_search(entries, search, 0, counts.length(), params.threads));
+        uint64_t d1 = 0;
+        auto result = correct_entries(entries, counts.length(), p, ev, nullptr, nullptr, &search,
+                                      fit_error && full_quality ? &d1 : nullptr);
+        if (fit_error && full_quality) result.estimated_error = fit(d1);
+        return result;
+    };
     if (counts.carries_evidence()) {
         // A resident table that carries its own evidence is one bucket of a partition that
         // happened to fit. Same call, same evidence, so the answer does not depend on whether the
@@ -1642,11 +1692,11 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
                 }
                 p.library_clonality = reservoir.clonality(p);
             }
-            out = correct_entries(bucket, counts.length(), p, ev);
+            out = run(ev);
         });
         return out;
     }
-    return correct_entries(counts.entries(), counts.length(), p, evidence);
+    return run(evidence);
 }
 
 }  // namespace migec

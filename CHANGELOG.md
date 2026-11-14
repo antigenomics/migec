@@ -4,6 +4,27 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.7.0 — 2026-11-14
+
+- Require seqtree and reuse its pinned native batch search for UMI correction, distance-one
+  census/residual diagnostics and whitelist candidates. Keep the old installation extra as an alias.
+- Consider two-substitution UMI children using both mismatch-position qualities. Preserve
+  deterministic ties, physical counts and singletons. Reconcile candidates across three disjoint
+  spill prefixes; re-partition wider legacy prefixes rather than silently missing pairs.
+- Rotate barcode quality with its key, settle pending entries before testing spill state, and
+  treat missing barcode quality as unknown rather than as a high-confidence base.
+- Stream complete radius-two candidate blocks through the existing native consumer and retain
+  only per-barcode decisions. Reuse one native index; fully observed qualities share the
+  distance-one census batch. Preserve reported fitted error and canonical ties.
+- Apply the wider search to bulk UMIs. Preserve the released cell-tagged
+  path until a cell-conditioned background model is verified; the composite-key null otherwise
+  merges genuine cell/UMI classes.
+- Count read-weighted base changes separately from corrected child reads in error diagnostics;
+  restrict the distance-one inversion and its plot ceiling to distance-one children. Append explicit
+  base-error and distance-one child columns while preserving existing column positions.
+- Homopolymer indels and the conditional cell-tagged multi-substitution model remain future work;
+  this release does not claim those capabilities.
+
 ## 2.6.0 — 2026-11-14
 
 - Honor scheduler and available CPU limits in all stages, including default and
