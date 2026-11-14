@@ -4,7 +4,7 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.6.0 — 2026-11-14
 
 - Use one physical-pair collision partition for both ends, including nonoverlapping
   mates. Separate observed contigs retain a shared molecule identity and branch index.
@@ -15,7 +15,8 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 - Count physical pairs once in collision-linkage tests and split molecule depth;
   overlapping mates no longer inflate evidence for splitting one molecule.
   Both original mate measurements still contribute to consensus base calls.
-- Update the optional seqtree dependency floor to 1.3.4.
+- Update the optional seqtree dependency floor to 1.3.4 and the Nextflow MIGEC
+  environment to 2.6.0. Container modules require an explicitly supplied image.
 
 - Repair the optional ARDA Nextflow module: install the published `arda-mapper` distribution, pass `--organism`, and require an explicit image when using a container profile.
 

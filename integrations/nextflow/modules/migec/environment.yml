@@ -9,4 +9,4 @@ dependencies:
   - gnuplot
   - pip
   - pip:
-      - migec==2.0.0a3
+      - migec==2.6.0

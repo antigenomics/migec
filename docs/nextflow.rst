@@ -36,6 +36,11 @@ Nextflow
 
    nextflow run integrations/nextflow --mode airr --input 'data/*_R{1,2}.fq.gz' --preset migec
 
+The MIGEC conda environment pins ``migec==2.6.0``. Container execution requires
+an image you have built containing that release, supplied through
+``params.migec_container``. No default MIGEC container image is published by this
+repository. The ARDA module has its own ``params.arda_container`` setting.
+
 Or include a subworkflow in a pipeline of your own:
 
 .. code-block:: groovy
