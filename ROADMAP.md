@@ -1,6 +1,6 @@
 # Roadmap
 
-## Current release gate: molecule correctness and dependencies
+## Counting, parameter and dependency invariants
 
 Retain the counting defaults: keep singletons, count physical support without
 capping abundance, and preserve separate observed mate contigs without bridging
@@ -30,9 +30,12 @@ justify a universal distance-one limit.
 - [ ] Support homopolymer indel errors through extraction, barcode representation and correction;
   distinguish genuine length changes from fixed-window boundary shifts.
 - [x] Verify complete two-substitution candidate retrieval across disk partitions, count conservation
-  and deterministic thread/storage mappings. All91 mismatch-position pairs in14nt tags are covered.
+  and deterministic thread/storage mappings. All 91 mismatch-position pairs in 14 nt tags are covered.
   Use three disjoint prefixes; the original two-pass proof remains only for distance-one diagnostics.
 - [ ] Extend this completeness and identity-preservation proof to indels and variable geometry.
+- [x] Stream correction candidates through the existing native seqtree consumer; retain per-query
+  decisions and bounded 32-query blocks instead of a radius-two adjacency matrix. Reuse one index
+  within a call; fully observed qualities permit the distance-one census to share that batch.
 - [ ] Measure memory and runtime against the published producer; run focused known-truth checks,
   existing native/Python suites and docs, then publish a new verified release.
 

@@ -884,3 +884,50 @@ TEST_CASE("missing barcode quality uses the fitted library rate") {
     CHECK(missing_quality.root == no_quality.root);
     CHECK(missing_quality.corrected == no_quality.corrected);
 }
+
+TEST_CASE("a fully observed quality batch fits the same census without changing decisions") {
+    UmiCounts counts = background_library(2000, 14, 175);
+    counts.add(umi("ACGTACGTACGTAC"), 20);
+    counts.add(umi("TCGTACGTACGTAC"), 1);
+    BarcodeEvidence quality;
+    quality.position_error.assign(counts.entries().size() * 14, 0.003f);
+    CorrectionParams params;
+    params.polymerase_error = 0;
+    params.threads = 2;
+    const auto fused = correct_umis(counts, params, quality);
+    const double estimate = estimate_umi_error(counts, counts.composition(false), 1);
+    const double fitted = estimate <= 0 ? 1e-4 : estimate;
+    CHECK(fused.estimated_error == fitted);
+    params.sequencing_error = fitted;
+    const auto separate = correct_umis(counts, params, quality);
+    CHECK(fused.root == separate.root);
+    CHECK(fused.corrected == separate.corrected);
+    REQUIRE(merged_away(counts, fused, "TCGTACGTACGTAC"));
+}
+
+TEST_CASE("noncanonical packed padding cannot create duplicate search references") {
+    UmiCounts counts(4);
+    counts.add(0, 20);  // AAAA
+    counts.add(1, 1);   // corrupt padding: also decodes as AAAA
+    CHECK_THROWS_AS(correct_umis(counts), MigecError);
+}
+
+TEST_CASE("dense short UMIs retain every independent molecule through streamed candidates") {
+    constexpr uint32_t count = 1u << 14;  // every 7 nt canonical DNA tag
+    UmiCounts counts(7);
+    for (uint32_t code = 0; code < count; ++code)
+        counts.add(static_cast<uint64_t>(code) << 50, 1);
+    CorrectionParams params;
+    params.sequencing_error = 1e-6;
+    params.polymerase_error = 0;
+    params.threads = 2;
+    const auto result = correct_umis(counts, params);
+    CHECK(result.merged == 0);
+    CHECK(result.molecules_observed == count);
+    REQUIRE(result.root.size() == count);
+    REQUIRE(result.corrected.size() == count);
+    for (uint32_t i = 0; i < count; ++i) {
+        CHECK(result.root[i] == i);
+        CHECK(result.corrected[i] == 1);
+    }
+}

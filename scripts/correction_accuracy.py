@@ -2,7 +2,7 @@
 # 2026-08-13  Where does UMI error correction stop working, and why?
 #
 # `correct_umis` decides that barcode x is an error child of barcode y from three things: the
-# distance (1 substitution), the estimated per-base error rate, and the COUNT RATIO -- a child
+# bounded edit neighbourhood, the estimated per-base error rate, and the COUNT RATIO -- a child
 # should be much smaller than its parent, and `max_child_fraction` refuses a merge outright when
 # it is not.
 #
@@ -25,6 +25,7 @@ import gzip
 import pathlib
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -66,8 +67,9 @@ def evaluate(cov, molecules, umi_error, umi_len, out_dir, seed=5):
                 reads_payload.append(seq[off:off + 80])
                 reads_qual.append(qual[: len(umi)])
 
-    # An error child is an observed barcode that is never its own true barcode. Anything else is a
-    # real molecule, and merging one away destroys a molecule that was really there.
+    # An error child is an observed barcode that is never its own true barcode. Anything else is an
+    # observed true-barcode class. Distinct physical molecules can share a barcode, so this
+    # benchmark scores barcode assignments rather than physical-molecule identities.
     children = {u for u, t in parents.items() if u not in t}
     real = [u for u in observed if u not in children]
 
@@ -78,10 +80,19 @@ def evaluate(cov, molecules, umi_error, umi_len, out_dir, seed=5):
     # whose parent is actually present.
     reachable = {c for c in children if any(t in observed for t in parents[c])}
 
+    started = time.perf_counter()
     result = _core.correct_umis(reads_umi, payloads=reads_payload, umi_quals=reads_qual)
+    native_seconds = time.perf_counter() - started
     merged = {m["from"]: m["to"] for m in result["merges"]}
     correct = sum(1 for c, p in merged.items() if c in children and p in parents[c])
     return {
+        "observed_reads": len(reads_umi),
+        "error_child_barcodes_corrected": correct,
+        "error_child_barcodes_wrong_parent": sum(1 for child in merged if child in children) - correct,
+        "true_barcode_classes_merged": sum(1 for barcode in real if barcode in merged),
+        "true_barcode_classes": len(real),
+        "reachable_error_child_barcodes": len(reachable),
+        "native_seconds": native_seconds,
         "coverage": cov,
         "reads_per_umi": sum(observed.values()) / len(observed),
         "children": len(children),

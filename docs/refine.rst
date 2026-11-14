@@ -302,9 +302,13 @@ and the stage can see that for itself.
    The distance-one excess estimator and distance-one residual diagnostic retain their
    separately labelled two-pass semantics; their radius is not the correction limit.
 
-   The table budget bounds counter storage, not total search memory. Native seqtree search
-   additionally holds an index and candidate lists for the current bucket. Dense short-tag
-   populations can therefore require more working memory than the table budget.
+   The table budget bounds counter storage, not total process memory. Correction uses
+   seqtree's native batch consumer and retains each barcode's best decision rather than all
+   radius-two neighbours. For unique canonical DNA tags up to 32 nt, a query has at most 4,561
+   radius-two hits: a 32-query primitive block is at most 3,502,848 bytes. Concurrent native
+   hit vectors and blocks scale with the worker count, and the current bucket's index also
+   occupies memory. The distance-one residual and whitelist paths still use ordinary native
+   batches; the counter budget is not a hard limit on the whole process.
 
 The two-substitution sequencing model uses the product of per-position error probabilities.
 The multiple-polymerase-event component assumes independent events; the focused synthetic
