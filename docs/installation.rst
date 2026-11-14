@@ -17,10 +17,9 @@ Optional extras
 
 .. code-block:: bash
 
-   pip install "migec[seqtree]"     # whitelist lookup at >=2 substitutions, N-wildcard barcodes
    pip install "migec[notebooks]"   # polars + marimo, for notebooks/
 
-The pipeline itself has one runtime dependency, ``typer``. Every stage writes plain TSV with the
+The pipeline requires ``typer`` and ``seqtree``. Every stage writes plain TSV with the
 standard library, and :doc:`migec plot <plots>` draws those tables with **gnuplot**, which is not a
 Python package — install it from your package manager (``brew install gnuplot``,
 ``apt install gnuplot-nox``). Without it ``migec plot`` still writes the ``.gp`` scripts, so the
@@ -30,10 +29,10 @@ figures can be drawn anywhere.
 (:doc:`Bring your own UMI <byo_umi>`). ``conda install -c bioconda samtools`` or
 ``brew install samtools``. A FASTQ run never calls it.
 
-``seqtree`` is deliberately *not* a core dependency. Every hot path here searches a fixed-length
-barcode at at most one substitution, and enumerating the ``3L`` neighbours in a hash table beats a
-trie by orders of magnitude at that shape. seqtree earns its place only where enumeration cannot
-express the query.
+``seqtree`` owns sequence-neighbour search, including one-mismatch searches. It is installed
+automatically; the historical ``migec[seqtree]`` extra remains a compatible alias. MIGEC owns
+barcode-error likelihoods, collision accounting, quality and payload evidence, and merge policy.
+A candidate within an edit budget is not by itself evidence that two molecules should merge.
 
 From source
 -----------
@@ -46,6 +45,12 @@ From source
 ``setup.sh`` creates ``.venv`` with uv, builds the extension in editable mode, and then asserts
 that ``migec._core`` imports. That last step matters: without it a failed C++ build looks like a
 successful install and only fails much later, in the middle of a long run.
+
+Native source builds fetch the immutable seqtree 1.3.4 source archive and verify its SHA256.
+For an offline build, provide that source explicitly with CMake's
+``-DFETCHCONTENT_SOURCE_DIR_SEQTREE=/path/to/seqtree-source``. Wheel installation does not
+fetch native source. Development editable installs use ``setup.sh``'s
+``--no-build-isolation`` recipe so rebuild tools remain available in the isolated environment.
 
 Running the tests
 -----------------

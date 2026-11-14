@@ -20,9 +20,12 @@
 #define MIGEC_WHITELIST_HPP
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace seqtree { class Index; }
 
 namespace migec {
 
@@ -67,6 +70,10 @@ public:
     int length() const { return length_; }
     bool contains(uint64_t key) const;
 
+    // One indexed native batch, ids aligned with the sorted whitelist/count table.
+    std::vector<std::vector<uint32_t>> candidates(const std::vector<std::string>& observed,
+                                                   int threads = 0) const;
+
     // The per-barcode background prior: the share of reads on barcodes that cannot be single
     // substitutions of anything on the list, spread over the distinct off-list barcodes seen.
     // Both halves are measured. `far_reads` and `far_barcodes` count barcodes at distance >= 2
@@ -79,13 +86,15 @@ public:
     // is what makes a heavily used barcode a likelier parent than an unused one.
     std::string correct(std::string_view observed, std::string_view qual,
                         const std::vector<uint32_t>& counts, const WhitelistParams& params,
-                        double background_prior) const;
+                        double background_prior,
+                        const std::vector<uint32_t>* candidate_ids = nullptr) const;
 
     size_t index_of(uint64_t key) const;
 
 private:
     std::vector<uint64_t> keys_;  // sorted
     int length_ = 0;
+    std::shared_ptr<seqtree::Index> index_;
 };
 
 }  // namespace migec

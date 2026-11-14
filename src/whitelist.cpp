@@ -6,6 +6,8 @@
 #include <cmath>
 
 #include "migec/types.hpp"
+#include "migec/parallel.hpp"
+#include "seqtree/seqtree.hpp"
 
 namespace migec {
 
@@ -45,6 +47,10 @@ Whitelist Whitelist::load(const std::string& path) {
     if (w.keys_.empty()) throw MigecError("whitelist: " + path + " has no entries");
     std::sort(w.keys_.begin(), w.keys_.end());
     w.keys_.erase(std::unique(w.keys_.begin(), w.keys_.end()), w.keys_.end());
+    std::vector<std::string> sequences;
+    sequences.reserve(w.keys_.size());
+    for (uint64_t key : w.keys_) sequences.push_back(unpack_barcode(key, w.length_));
+    w.index_ = seqtree::Index::build(std::move(sequences), seqtree::Alphabet::Nucleotide);
     return w;
 }
 
@@ -56,6 +62,27 @@ size_t Whitelist::index_of(uint64_t key) const {
 
 bool Whitelist::contains(uint64_t key) const {
     return index_of(key) != static_cast<size_t>(-1);
+}
+
+std::vector<std::vector<uint32_t>> Whitelist::candidates(
+    const std::vector<std::string>& observed, int threads) const {
+    if (observed.empty()) return {};
+    if (!index_) throw MigecError("whitelist: no sequence index has been loaded");
+    std::vector<std::string> queries;
+    queries.reserve(observed.size());
+    for (const auto& sequence : observed) {
+        if (static_cast<int>(sequence.size()) != length_)
+            throw MigecError("whitelist: observed barcode length differs from the whitelist");
+        queries.push_back(unpack_barcode(pack_barcode(sequence), length_));
+    }
+    seqtree::SearchParams scope;
+    scope.max_substitutions = 1;
+    auto hits = index_->search_batch(queries, scope, worker_count(threads, queries.size()));
+    std::vector<std::vector<uint32_t>> result(observed.size());
+    for (size_t i = 0; i < hits.size(); ++i) {
+        for (const auto& hit : hits[i]) if (hit.n_subs == 1) result[i].push_back(hit.ref_id);
+    }
+    return result;
 }
 
 double Whitelist::measure_background(uint64_t far_reads, uint64_t total_reads,
@@ -70,7 +97,8 @@ double Whitelist::measure_background(uint64_t far_reads, uint64_t total_reads,
 
 std::string Whitelist::correct(std::string_view observed, std::string_view qual,
                                const std::vector<uint32_t>& counts,
-                               const WhitelistParams& params, double background_prior) const {
+                               const WhitelistParams& params, double background_prior,
+                               const std::vector<uint32_t>* candidate_ids) const {
     if (static_cast<int>(observed.size()) != length_) return {};
 
     // Per position: the probability the instrument got this base wrong. An N is not a failure to
@@ -91,37 +119,41 @@ std::string Whitelist::correct(std::string_view observed, std::string_view qual,
     double total = best_post;
     std::string best;
 
-    // Candidates: every whitelist entry one substitution away. 3L lookups against a sorted array,
-    // never a scan of the list -- 737,000 entries would be a scan per barcode.
+    // Production passes the cohort's precomputed native candidates; standalone calls use
+    // the same API once. No read- or barcode-level pool wraps seqtree's native batch.
+    std::vector<uint32_t> owned;
+    if (!candidate_ids) {
+        owned = candidates({std::string(observed)}, 1).front();
+        candidate_ids = &owned;
+    }
     const uint64_t key = pack_barcode(observed);
+    auto ranked = *candidate_ids;
+    auto position = [&](uint32_t at) {
+        const uint64_t difference = key ^ keys_.at(at);
+        int j = 0;
+        while (j < length_ && ((difference >> (62 - 2 * j)) & 3u) == 0) ++j;
+        return j;
+    };
+    std::sort(ranked.begin(), ranked.end(), [&](uint32_t a, uint32_t b) {
+        const int ja = position(a), jb = position(b);
+        return ja != jb ? ja < jb : keys_[a] < keys_[b];
+    });
     double sum_counts = 0.0;
-    for (uint32_t c : counts) sum_counts += c;
+    for (uint32_t count : counts) sum_counts += count;
     const double denom = sum_counts + static_cast<double>(keys_.size());
-
-    for (int j = 0; j < length_; ++j) {
-        const int shift = 62 - 2 * j;
-        const uint64_t cur = (key >> shift) & 3u;
-        for (uint64_t b = 0; b < 4; ++b) {
-            if (b == cur) continue;
-            const uint64_t cand = (key & ~(uint64_t{3} << shift)) | (b << shift);
-            const size_t at = index_of(cand);
-            if (at == static_cast<size_t>(-1)) continue;
-            // Add-one prior on the whitelist entry's own usage: a barcode this run leans on is a
-            // likelier source than one it has never seen, and the +1 keeps an unseen entry
-            // possible rather than impossible.
-            const double prior =
-                (static_cast<double>(at < counts.size() ? counts[at] : 0u) + 1.0) / denom;
-            // ...times the chance of exactly this miscall: wrong at j, right everywhere else.
-            double like = err[static_cast<size_t>(j)] / 3.0;
-            for (int k = 0; k < length_; ++k) {
-                if (k != j) like *= (1.0 - err[static_cast<size_t>(k)]);
-            }
-            const double post = prior * like * (1.0 - background_prior);
-            total += post;
-            if (post > best_post) {
-                best_post = post;
-                best = unpack_barcode(cand, length_);
-            }
+    for (uint32_t at : ranked) {
+        const int j = position(at);
+        if (j == length_) continue;
+        const double prior = (static_cast<double>(at < counts.size() ? counts[at] : 0u) + 1.0) / denom;
+        double like = err[static_cast<size_t>(j)] / 3.0;
+        for (int k = 0; k < length_; ++k) {
+            if (k != j) like *= (1.0 - err[static_cast<size_t>(k)]);
+        }
+        const double post = prior * like * (1.0 - background_prior);
+        total += post;
+        if (post > best_post) {
+            best_post = post;
+            best = unpack_barcode(keys_[at], length_);
         }
     }
     if (best.empty() || total <= 0.0) return {};

@@ -108,7 +108,10 @@ correction is written up in `project/review-algorithms.md`.
 - **Never: Range partition, never hash partition.** A hash sends a barcode and its 1-mismatch
   neighbours to uncorrelated buckets, which makes correction impossible to apply and splits the
   molecule permanently — and the halves each look like a well-formed MIG, so nothing detects it.
-- **Never: No indels anywhere.** Substitutions only. Reinstate when there is a dataset to verify against.
+- **UMI search uses seqtree as a required dependency, including one-mismatch search.** The author
+  explicitly superseded the old substitution-only restriction: quality-supported two-mismatch
+  errors in 14 nt UMIs and homopolymer indels are in scope. Candidate retrieval and calibrated
+  merge acceptance remain distinct. Preserve sample/cell isolation, counts and spill equivalence.
 - **Never: Nothing that scales with the input on the serial path, and no hash map keyed by barcode.**
   zlib level 6 does 7 MB/s on random DNA, so compression belongs on the workers (concatenated gzip
   members are a valid stream) at level 1. A `unordered_map<uint64,uint32>` costs ~48 B per distinct

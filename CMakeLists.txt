@@ -22,6 +22,18 @@ option(MIGEC_PYTHON "Build the pybind11 module" OFF)
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)  # gzipped FASTQ, and the .mig block codec
 
+# Use the published seqtree native API, never a second barcode-search implementation.
+# Pin source and digest independently of any developer's local seqtree checkout.
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+include(FetchContent)
+FetchContent_Declare(seqtree
+  URL https://codeload.github.com/antigenomics/seqtree/tar.gz/84e044304294e3ddc398bd141ff3772cfbe2cf2d
+  URL_HASH SHA256=4a2fa29cdd2b378a403dfc583b2a118b7622847cc41e0e7b5612fc55a886dcd6
+)
+FetchContent_MakeAvailable(seqtree)
+
 add_library(migec_core STATIC
   src/types.cpp
   src/resource.cpp
@@ -38,7 +50,7 @@ add_library(migec_core STATIC
   src/assemble.cpp
 )
 target_include_directories(migec_core PUBLIC include PRIVATE src)
-target_link_libraries(migec_core PUBLIC Threads::Threads ZLIB::ZLIB)
+target_link_libraries(migec_core PUBLIC Threads::Threads ZLIB::ZLIB seqtree_core)
 
 if(MIGEC_PYTHON)
   set(PYBIND11_FINDPYTHON ON)

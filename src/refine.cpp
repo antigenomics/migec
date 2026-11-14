@@ -14,6 +14,7 @@
 #include "migec/parallel.hpp"
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
+#include "barcode_search.hpp"
 
 namespace migec {
 
@@ -208,25 +209,16 @@ RefineStats refine(const RefineRequest& request) {
         // Barcodes with no distance-1 entry cannot be single substitutions of anything on the
         // list, so their reads measure how much of this library is genuinely off-list.
         uint64_t far_reads = 0;
-        std::vector<uint64_t> near;
-        for (uint64_t key : off) {
-            bool has_neighbour = false;
-            for (int j = 0; j < list.length() && !has_neighbour; ++j) {
-                const int shift = 62 - 2 * j;
-                const uint64_t cur = (key >> shift) & 3u;
-                for (uint64_t b = 0; b < 4; ++b) {
-                    if (b == cur) continue;
-                    if (list.contains((key & ~(uint64_t{3} << shift)) | (b << shift))) {
-                        has_neighbour = true;
-                        break;
-                    }
-                }
-            }
-            if (has_neighbour) {
-                near.push_back(key);
-            } else {
+        std::vector<std::string> queries;
+        queries.reserve(off.size());
+        for (uint64_t key : off) queries.push_back(unpack_barcode(key, list.length()));
+        const auto candidates = list.candidates(queries, request.correction.threads);
+        std::vector<size_t> near;
+        for (size_t i = 0; i < off.size(); ++i) {
+            if (!candidates[i].empty()) near.push_back(i);
+            else {
                 ++stats.whitelist.far;
-                far_reads += seen[key];
+                far_reads += seen[off[i]];
             }
         }
         stats.whitelist.background_prior =
@@ -234,11 +226,12 @@ RefineStats refine(const RefineRequest& request) {
                 ? request.whitelist.background_prior
                 : Whitelist::measure_background(far_reads, total_reads, off.size());
 
-        for (uint64_t key : near) {
-            const std::string observed = unpack_barcode(key, list.length());
+        for (size_t i : near) {
+            const uint64_t key = off[i];
+            const std::string& observed = queries[i];
             const std::string fixed =
                 list.correct(observed, quals[key], counts, request.whitelist,
-                             stats.whitelist.background_prior);
+                             stats.whitelist.background_prior, &candidates[i]);
             if (fixed.empty()) {
                 ++stats.whitelist.off_list;
             } else {
@@ -1029,7 +1022,7 @@ RefineStats refine(const RefineRequest& request) {
             table.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
                                       const BarcodeEvidence& ev) {
                 // Threaded, and it is the whole reason this is not the serial tail any more: the
-                // scan is 3L binary searches per surviving barcode, which measured 0.53 s of a
+                // old scan used 3L binary searches per surviving barcode, measured at 0.53 s of a
                 // 2.17 s run on 2 M reads -- a quarter of refine, on one core, after everything
                 // else had been parallelised. It reads the table and the payload draft and writes
                 // nothing shared, so a per-worker bin counter merged afterwards is the whole
@@ -1046,13 +1039,7 @@ RefineStats refine(const RefineRequest& request) {
                     corr[i] = corrected_of(rotate_barcode(bucket[i].key, L, unrotate),
                                            bucket[i].count);
                 }
-                auto present = [&bucket](uint64_t key) -> size_t {
-                    auto it = std::lower_bound(
-                        bucket.begin(), bucket.end(), key,
-                        [](const UmiCounts::Entry& e, uint64_t k) { return e.key < k; });
-                    if (it == bucket.end() || it->key != key) return bucket.size();
-                    return static_cast<size_t>(it - bucket.begin());
-                };
+                const auto neighbors = detail::barcode_neighbors(bucket, L, 1, stats.threads);
                 parallel_for(bucket.size(), stats.threads, [&](size_t i, int w) {
                     const uint32_t mine = corr[i];
                     if (mine == 0) return;
@@ -1060,14 +1047,13 @@ RefineStats refine(const RefineRequest& request) {
                     if (!collect &&
                         std::binary_search(flagged.begin(), flagged.end(), plain)) return;
                     bool looks_like_a_child = false;
-                    for (int j = j_from; j < j_to && !looks_like_a_child; ++j) {
-                        const int shift = 62 - 2 * j;
-                        const uint64_t cur = (bucket[i].key >> shift) & 3u;
-                        for (uint64_t b = 0; b < 4; ++b) {
-                            if (b == cur) continue;
-                            const size_t at =
-                                present((bucket[i].key & ~(uint64_t{3} << shift)) | (b << shift));
-                            if (at >= bucket.size()) continue;
+                    for (const auto& hit : neighbors[i]) {
+                            if (hit.n_subs != 1) continue;
+                            const size_t at = hit.ref_id;
+                            const uint64_t differences = bucket[i].key ^ bucket[at].key;
+                            int position = 0;
+                            while (position < L && ((differences >> (62 - 2 * position)) & 3u) == 0) ++position;
+                            if (position < j_from || position >= j_to) continue;
                             const uint32_t theirs = corr[at];
                             if (theirs == 0) continue;
                             if (theirs >= 20u * mine) {
@@ -1097,7 +1083,6 @@ RefineStats refine(const RefineRequest& request) {
                                     break;
                                 }
                             }
-                        }
                     }
                     if (!looks_like_a_child) return;
                     size_t bidx = 0;

@@ -14,8 +14,31 @@ count provenance. Verify that paired contigs share molecule identities without
 inventing sequence across gaps. MIGEC and ARDA are independent packages: neither
 core tool calls or installs the other. Their optional shared workflows own the
 integration pins and compatibility checks; these do not gate standalone MIGEC.
-Use current seqtree for optional barcode-search paths. Complete native/real-input
-checks, CI/docs and released-package smoke tests before publication.
+Use current seqtree as a required dependency for barcode search, including distance one.
+Complete native/real-input checks, CI/docs and released-package smoke tests before publication.
+
+## Active follow-up: seqtree-owned UMI edit search
+
+Published 2.6.0 remains an immutable baseline. The author superseded its fixed one-substitution
+correction assumption and no-indels restriction. The seqtree appendix, “UMI and barcode collapse: a
+birthday problem”, describes a small edit budget with chance-collision accounting; it does not
+justify a universal distance-one limit.
+
+- [x] Inspect appendix and native callers; make seqtree required and remove the optional-search rationale.
+- [x] Replace duplicate one-mismatch candidate kernels with pinned seqtree native batch APIs.
+- [x] Recover quality-supported two-substitution children in 14 nt UMIs while protecting true neighbours.
+- [ ] Support homopolymer indel errors through extraction, barcode representation and correction;
+  distinguish genuine length changes from fixed-window boundary shifts.
+- [x] Verify complete two-substitution candidate retrieval across disk partitions, count conservation
+  and deterministic thread/storage mappings. All91 mismatch-position pairs in14nt tags are covered.
+  Use three disjoint prefixes; the original two-pass proof remains only for distance-one diagnostics.
+- [ ] Extend this completeness and identity-preservation proof to indels and variable geometry.
+- [ ] Measure memory and runtime against the published producer; run focused known-truth checks,
+  existing native/Python suites and docs, then publish a new verified release.
+
+The distance-one excess remains a labelled estimator, not a correction radius. Wider candidate
+retrieval must use the corresponding error likelihoods and chance-neighbour model; it must never
+merge every neighbour indiscriminately. No new CLI tool or peptide-mapping feature is introduced.
 
 Downstream peptide-to-clonotype mapping remains in its own analysis pipeline and
 search scripts; it is not a new MIGEC feature or standalone tool developed here.

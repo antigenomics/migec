@@ -4,6 +4,17 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased — seqtree UMI correction follow-up
+
+- Require seqtree and reuse its pinned native batch search for UMI correction, distance-one
+  census/residual diagnostics and whitelist candidates. Keep the old installation extra as an alias.
+- Consider two-substitution UMI children using both mismatch-position qualities. Preserve
+  deterministic ties, physical counts and singletons. Reconcile candidates across three disjoint
+  spill prefixes; re-partition wider legacy prefixes rather than silently missing pairs.
+- Rotate barcode quality with its key, settle pending entries before testing spill state, and
+  treat missing barcode quality as unknown rather than as a high-confidence base.
+- Homopolymer indels and empirical/performance release gates remain unfinished.
+
 ## 2.6.0 — 2026-11-14
 
 - Honor scheduler and available CPU limits in all stages, including default and

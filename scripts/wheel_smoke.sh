@@ -14,7 +14,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-python -c "import migec; print('version', migec.__version__)"
+python -c "import migec, seqtree; print('version', migec.__version__)"
 migec info
 migec sheet --presets > /dev/null
 

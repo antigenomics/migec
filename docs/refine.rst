@@ -37,7 +37,7 @@ out the far end; ``tests/synthetic/test_mig_chain.py`` asserts exactly that.
 What the evidence is
 --------------------
 
-A barcode one substitution away from another is either an **error child** of it or an
+A barcode within two substitutions of another is either an **error child** of it or an
 **independent molecule** that drew a neighbouring barcode. Three things separate them, and only
 the first survives on a shallow library.
 
@@ -48,12 +48,14 @@ must be strictly larger, a child at most half its parent — made a singleton-vs
 impossible by construction.
 
 **The barcode's own base quality**, at the position that differs. A sequencing miscall carries a
-low Phred *exactly there*; a polymerase error from an early PCR cycle carries a high one in every
+low Phred *exactly there*. For two mismatches, the likelihood multiplies both position-specific
+error probabilities: one poor base cannot license another confidently observed mismatch. Missing
+barcode quality falls back to the fitted library rate. A polymerase error from an early PCR cycle carries a high one in every
 read that inherits it. ``checkout`` already writes this to ``QX`` and nothing read it. Works at one
 read.
 
 **Payload agreement.** A barcode error child is a read of the *parent's molecule*, so its payload
-matches. An independent molecule at distance 1 has its own payload. Worth ``log(1/clonality)`` —
+matches. An independent molecule at a nearby barcode has its own payload. Worth ``log(1/clonality)`` —
 and the clonality is **measured**, by sampling random barcode pairs and asking how often two
 unrelated barcodes carry the same sequence anyway:
 
@@ -292,21 +294,25 @@ and the stage can see that for itself.
 
 .. warning::
 
-   **Correction is not bucketable by a plain range partition.** A range partition on the top *b*
-   bits keeps a barcode and its 1-substitution neighbours together for every position except the
-   top *b*/2 — and a neighbour that crosses a bucket boundary would never be found, so the
-   partition would bound the memory and silently stop correcting. It runs in **two passes**: over
-   the buckets as they stand, owning the positions the prefix does not touch, then over a copy with
-   the key rotated past it, owning exactly the ones it hid.
+   **Correction is not complete within one plain range partition.** Two substitutions may
+   affect two different prefixes. Correction uses three disjoint prefix partitions, rotating
+   keys and quality positions together: at least one prefix remains unchanged. Overly wide
+   legacy partitions are re-partitioned. Every pass proposes parents; duplicate proposals
+   are reconciled using original-coordinate deterministic ties before any merge is applied.
+   The distance-one excess estimator and distance-one residual diagnostic retain their
+   separately labelled two-pass semantics; their radius is not the correction limit.
 
-   Two things follow, and both were bugs before they were rules. The table carries the
-   **evidence** — the barcode's own quality and its payload draft — because a side array indexed
-   against the entry list cannot survive a partition, and dropping it would leave the bucketed run
-   correcting on the count ratio alone, which reports nothing at 1–3 reads per UMI. And the two
-   passes **scan**; they do not merge. A barcode can have a plausible parent on each side of the
-   boundary, and merging inside a pass takes the first candidate rather than the best: measured, 2
-   barcodes in 6,591 landed on a different parent than the resident run gave them, and every table
-   downstream moved with them.
+   The table budget bounds counter storage, not total search memory. Native seqtree search
+   additionally holds an index and candidate lists for the current bucket. Dense short-tag
+   populations can therefore require more working memory than the table budget.
+
+The two-substitution sequencing model uses the product of per-position error probabilities.
+The multiple-polymerase-event component assumes independent events; the focused synthetic
+regressions verify the implementation, not empirical calibration for every chemistry. Candidate
+retrieval uses seqtree, including distance one, and acceptance retains the independent-molecule,
+count, quality and payload hypotheses. See the seqtree technical appendix's
+`UMI and barcode collapse discussion <https://antigenomics.github.io/seqtree/_static/evalue-appendix.pdf>`_.
+Homopolymer indel support is an active follow-up and is not implemented by this substitution stage.
 
 Output
 ------
