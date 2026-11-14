@@ -1,5 +1,17 @@
 # Roadmap
 
+## Current release gate: molecule correctness and dependencies
+
+Preserve physical-pair support, real supported collision branches, singletons and
+count provenance. Verify that paired contigs share molecule identities without
+inventing sequence across gaps. Finish the ARDA integration against its verified
+published repair release before raising the dependency floor; use current seqtree
+for the optional barcode-search paths. Complete native/real-input checks, CI/docs
+and released-package smoke tests before publication.
+
+Downstream peptide-to-clonotype mapping remains in its own analysis pipeline and
+search scripts; it is not a new MIGEC feature or standalone tool developed here.
+
 **`checkout`, `refine` and `assemble` all work.** **Implemented:** the `.mig` intermediate format (reader, writer, range partitioning, CRC-checked
 blocks, provenance and quality-calibration in the header), FASTQ IO for plain and gzipped input
 with strict validation, barcode packing/unpacking and the IUPAC/Phred primitives, the pybind11
