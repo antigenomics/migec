@@ -381,12 +381,18 @@ RefineStats refine(const RefineRequest& request) {
     // rate rather than the count.
     std::unordered_map<uint64_t, uint64_t> to_root;   // child -> the molecule it belongs to
     std::unordered_map<uint64_t, uint32_t> gained;    // root -> reads its children brought
-    std::unordered_map<uint64_t, uint32_t> children;  // root -> how many children
+    struct ChildTally { uint64_t variants = 0, distance_one = 0, base_errors = 0; };
+    std::unordered_map<uint64_t, ChildTally> children;  // root -> observed child evidence
     to_root.reserve(correction.merges.size() * 2);
     for (const CorrectionResult::Merge& mg : correction.merges) {
         to_root[mg.child] = mg.root;
         gained[mg.root] += mg.reads;
-        ++children[mg.root];
+        auto& tally = children[mg.root];
+        ++tally.variants;
+        const int substitutions = seqtree::hamming(unpack_barcode(mg.child, L),
+                                                  unpack_barcode(mg.root, L));
+        tally.distance_one += substitutions == 1;
+        tally.base_errors += static_cast<uint64_t>(substitutions) * mg.reads;
     }
     // Reads after correction, for a barcode the table hands over. Zero when it was merged away.
     auto corrected_of = [&to_root, &gained](uint64_t key, uint32_t own) -> uint32_t {
@@ -603,7 +609,10 @@ RefineStats refine(const RefineRequest& request) {
     // a figure has to be redrawable from a committed TSV.
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> spectrum;  // corrected size -> (molecules, reads)
     std::vector<std::pair<uint64_t, uint32_t>> per_cell;         // (cell key, molecules)
-    struct DepthRow { uint64_t parents = 0, children = 0, child_reads = 0; };
+    struct DepthRow {
+        uint64_t parents = 0, children = 0, child_reads = 0;
+        uint64_t distance_one = 0, base_errors = 0;
+    };
     std::map<uint32_t, DepthRow> by_depth;  // the PARENT's own reads -> what its children came to
     std::vector<uint64_t> bin_barcodes, bin_reads, bin_merged, bin_molecules;
     std::vector<std::vector<std::array<uint32_t, 4>>> bin_comp;
@@ -700,8 +709,10 @@ RefineStats refine(const RefineRequest& request) {
                     ++row.parents;
                     const auto ch = children.find(key);
                     if (ch != children.end()) {
-                        row.children += ch->second;
+                        row.children += ch->second.variants;
                         row.child_reads += gained[key];
+                        row.distance_one += ch->second.distance_one;
+                        row.base_errors += ch->second.base_errors;
                     }
                 }
             }
@@ -897,8 +908,8 @@ RefineStats refine(const RefineRequest& request) {
         // get wrong, and its error children are what they got wrong, so two estimators of the same
         // eps fall out of the same row:
         //
-        //   distinct children   u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
-        //   reads in children   r(c) = c L eps                    -> eps = r / (c L)
+        //   distance-1 children u(c) = 3L (1 - exp(-c eps / 3))   -> eps = -(3/c) ln(1 - u/3L)
+        //   child base changes  r(c) = c L eps                    -> eps = r / (c L)
         //
         // They are the check on each other, not two opinions. The first counts distinct
         // NEIGHBOURS and a barcode has only 3L of them, so it saturates; the second counts READS,
@@ -937,10 +948,10 @@ RefineStats refine(const RefineRequest& request) {
         uint64_t deep_parent_reads = 0, deep_child_reads = 0;
         for (const auto& [depth, row] : by_depth) {
             all_parent_reads += static_cast<uint64_t>(depth) * row.parents;
-            all_child_reads += row.child_reads;
+            all_child_reads += row.base_errors;
             if (depth >= kTrustedDepth) {
                 deep_parent_reads += static_cast<uint64_t>(depth) * row.parents;
-                deep_child_reads += row.child_reads;
+                deep_child_reads += row.base_errors;
             }
         }
         stats.error_from_children =
@@ -965,16 +976,19 @@ RefineStats refine(const RefineRequest& request) {
         if (!ef) throw MigecError("refine: cannot write the barcode error table");
         std::fprintf(ef, "parent_reads\tparents\tchild_barcodes\tchild_reads\t"
                          "children_per_parent\treads_per_parent\tneighbours\t"
-                         "error_from_variants\terror_from_reads\tphred_from_reads\testimate\n");
+                         "error_from_variants\terror_from_reads\tphred_from_reads\testimate\t"
+                         "child_base_errors\tdistance_one_child_barcodes\n");
         for (const auto& [depth, row] : by_depth) {
             if (!row.parents) continue;
             const double c = static_cast<double>(depth);
             const double np = static_cast<double>(row.parents);
             const double u = static_cast<double>(row.children) / np;
             const double r = static_cast<double>(row.child_reads) / np;
-            const double eps_reads = r / (c * Lf);
-            const bool invertible = u < ceiling;
-            const double eps_variants = invertible ? -(3.0 / c) * std::log1p(-u / ceiling) : 0.0;
+            const double eps_reads = static_cast<double>(row.base_errors) / np / (c * Lf);
+            const double distance_one_per_parent = static_cast<double>(row.distance_one) / np;
+            const bool invertible = distance_one_per_parent < ceiling;
+            const double eps_variants = invertible
+                ? -(3.0 / c) * std::log1p(-distance_one_per_parent / ceiling) : 0.0;
             std::fprintf(ef, "%u\t%llu\t%llu\t%llu\t%.6f\t%.6f\t%.1f\t", depth,
                          static_cast<unsigned long long>(row.parents),
                          static_cast<unsigned long long>(row.children),
@@ -989,7 +1003,9 @@ RefineStats refine(const RefineRequest& request) {
             } else {
                 std::fprintf(ef, "0.000000e+00\t.\t");
             }
-            std::fprintf(ef, "%.6e\n", stats.error_at_depth);
+            std::fprintf(ef, "%.6e\t%llu\t%llu\n", stats.error_at_depth,
+                         static_cast<unsigned long long>(row.base_errors),
+                         static_cast<unsigned long long>(row.distance_one));
         }
         std::fclose(ef);
     }

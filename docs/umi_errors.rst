@@ -11,6 +11,13 @@ subtract what independent draws would produce, and invert the remainder. That is
 
 The second is on this page. It reads the errors off the **children correction actually found**.
 
+The wider correction search distinguishes reads from base changes. ``child_reads`` counts
+observations; ``child_base_errors`` sums each child's read count times its substitution distance
+to the final parent. The read-based rates use the latter. ``error_from_variants`` uses only
+``distance_one_child_barcodes`` because its :math:`3L` neighbourhood formula applies only to
+distance one. ``child_barcodes`` and ``children_per_parent`` retain all corrected children.
+These are inferred changes conditional on accepted correction, not independent error truth.
+
 Two estimators, one number
 --------------------------
 
@@ -25,8 +32,8 @@ children, so the same :math:`\varepsilon` falls out of the row two ways:
    r(c) &= c\,L\,\varepsilon
         &&\Rightarrow\quad \varepsilon = \frac{r}{c\,L}
 
-where :math:`u` is the **distinct child barcodes** per parent and :math:`r` is the **reads in those
-children** per parent. Both are columns of ``<sample>.umi_errors.tsv``, one row per exact parent
+where :math:`u` is the **distinct distance-one child barcodes** per parent and :math:`r` is the
+**read-weighted substitution count** per parent. Both are columns of ``<sample>.umi_errors.tsv``, one row per exact parent
 depth.
 
 The two differ in one respect that matters. A barcode has exactly :math:`3L` neighbours one
@@ -112,7 +119,7 @@ The figures
 
 ``migec plot`` draws two panels from this table.
 
-``umi_error_children`` puts the distinct children and the reads in them against the parent's depth,
+``umi_error_children`` puts the distance-one children and read-weighted base changes against the parent's depth,
 with :math:`3L` as a dashed ceiling. Both series climb with :math:`c`; only one of them can climb
 forever.
 
@@ -148,19 +155,23 @@ The table
    * - ``child_reads``
      - reads carried by those children
    * - ``children_per_parent``
-     - :math:`u`
+     - all corrected child barcodes per parent
    * - ``reads_per_parent``
-     - :math:`r`
+     - all corrected child reads per parent
    * - ``neighbours``
      - :math:`3L`, the saturation ceiling. Constant down the column
    * - ``error_from_variants``
      - :math:`\varepsilon` from :math:`u`; ``.`` past saturation
    * - ``error_from_reads``
-     - :math:`\varepsilon` from :math:`r`
+     - :math:`\varepsilon` from read-weighted substitution counts
    * - ``phred_from_reads``
      - the same, as a Phred
    * - ``estimate``
      - ``error_at_depth``, repeated so the panel can draw it. Constant down the column
+
+The appended ``child_base_errors`` and ``distance_one_child_barcodes`` columns distinguish
+read-weighted substitution counts from distinct distance-one children. Existing column
+positions are retained. The plot accepts older distance-one tables as well.
 
 ``neighbours`` and ``estimate`` are constant on every row deliberately. The panels draw them as
 reference lines, and a figure that needs a value its own table does not carry is a figure that will

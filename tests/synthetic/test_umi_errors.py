@@ -68,7 +68,7 @@ def test_the_table_says_what_the_report_says(diverse):
     assert header == [
         "parent_reads", "parents", "child_barcodes", "child_reads", "children_per_parent",
         "reads_per_parent", "neighbours", "error_from_variants", "error_from_reads",
-        "phred_from_reads", "estimate",
+        "phred_from_reads", "estimate", "child_base_errors", "distance_one_child_barcodes",
     ]
     body = [r.split("\t") for r in rows[1:]]
     assert body, "no depths were tabulated"
@@ -78,7 +78,7 @@ def test_the_table_says_what_the_report_says(diverse):
     assert {r[10] for r in body} == {f"{s['error_at_depth']:.6e}"}
     # Every row's own reads estimate is the ratio it claims to be.
     for r in body:
-        depth, parents, child_reads = int(r[0]), int(r[1]), int(r[3])
+        depth, parents, child_reads = int(r[0]), int(r[1]), int(r[11])
         expected = child_reads / parents / (depth * s["umi_length"])
         assert float(r[8]) == pytest.approx(expected, rel=1e-4)
         if float(r[8]) > 0:
@@ -133,3 +133,34 @@ def test_a_full_barcode_space_reports_a_floor_and_says_so(tmp_path):
     assert s["saturated"], "a full barcode space must be flagged"
     assert s["error_at_depth"] < 5e-3, "a collapsed estimate must not be mistaken for the truth"
     assert s["estimated_error"] < 5e-3
+
+
+def test_two_substitution_child_counts_two_base_errors(tmp_path):
+    """A merged read is one observation but can witness two barcode base changes."""
+    import random
+    from migec.refine import run
+
+    parent = "ACGTTGCAGACTGA"
+    child = "TCGTAGCAGACTGA"
+    rng = random.Random(153)
+    keys = {parent, child}
+    while len(keys) < 2002:
+        key = "".join(rng.choices("ACGT", k=14))
+        if sum(a != b for a, b in zip(key, parent)) > 2:
+            keys.add(key)
+    reads = tmp_path / "tagged.fq"
+    with reads.open("w") as handle:
+        for i, key in enumerate(sorted(keys)):
+            quality = "".join("&" if key == child and j in (0, 4) else "I" for j in range(14))
+            for copy in range(20 if key == parent else 1):
+                handle.write(f"@r{i}_{copy} RX:Z:{key}\tQX:Z:{quality}\n{'ACGT' * 20}\n+\n{'I' * 80}\n")
+    result = run(reads, tmp_path / "refine", sample_id="S1", threads=1)
+    assert result["merged"] == 1
+    assert result["error_at_depth"] == pytest.approx(2 / (20 * 14))
+    import csv
+    with (tmp_path / "refine/S1.umi_errors.tsv").open() as handle:
+        row, = [r for r in csv.DictReader(handle, delimiter="\t") if r["parent_reads"] == "20"]
+    assert row["child_reads"] == "1"
+    assert row["child_base_errors"] == "2"
+    assert row["distance_one_child_barcodes"] == "0"
+    assert float(row["error_from_variants"]) == 0

@@ -28,7 +28,7 @@ justify a universal distance-one limit.
 - [x] Replace duplicate one-mismatch candidate kernels with pinned seqtree native batch APIs.
 - [x] Recover quality-supported two-substitution children in 14 nt UMIs while protecting true neighbours.
 - [ ] Implement and verify the conditional multi-substitution model for cell-tagged cohorts.
-  Development handoffs retain their released single-substitution path. Treating cell identity
+  Version 2.7.0 retains their released single-substitution path. Treating cell identity
   as extra random UMI sequence produced two false class merges in the controlled regression;
   it must not be enabled as the wider null. Bulk UMIs use the verified radius-two extension.
 - [ ] Support homopolymer indel errors through extraction, barcode representation and correction;
@@ -40,8 +40,14 @@ justify a universal distance-one limit.
 - [x] Stream correction candidates through the existing native seqtree consumer; retain per-query
   decisions and bounded 32-query blocks instead of a radius-two adjacency matrix. Reuse one index
   within a call; fully observed qualities permit the distance-one census to share that batch.
-- [ ] Measure memory and runtime against the published producer; run focused known-truth checks,
-  existing native/Python suites and docs, then publish a new verified release.
+- [x] Measure memory/runtime against the published producer and verify focused known-truth checks.
+  Dense streaming witness: 89,112,576→12,615,680 peak RSS bytes, 0.133859→0.035646 seconds.
+  Accepted correction benchmark: scored counts unchanged; native 0.024553→0.047588 seconds,
+  process peak RSS 94,978,048→111,034,368 bytes. One execution each; workload-specific observations.
+- [x] Separate read counts, weighted base errors and distance-one variants in error diagnostics.
+- [ ] Complete release verification and publish 2.7.0 for the bulk substitution scope.
+  The author explicitly requested this bounded release; cell-conditioned radius two and indels
+  remain future work and must not be advertised as implemented.
 
 The distance-one excess remains a labelled estimator, not a correction radius. Wider candidate
 retrieval must use the corresponding error likelihoods and chance-neighbour model; it must never
