@@ -11,10 +11,11 @@ is required for these resource/parameter repairs.
 
 Preserve physical-pair support, real supported collision branches, singletons and
 count provenance. Verify that paired contigs share molecule identities without
-inventing sequence across gaps. Finish the ARDA integration against its verified
-published repair release before raising the dependency floor; use current seqtree
-for the optional barcode-search paths. Complete native/real-input checks, CI/docs
-and released-package smoke tests before publication.
+inventing sequence across gaps. MIGEC and ARDA are independent packages: neither
+core tool calls or installs the other. Their optional shared workflows own the
+integration pins and compatibility checks; these do not gate standalone MIGEC.
+Use current seqtree for optional barcode-search paths. Complete native/real-input
+checks, CI/docs and released-package smoke tests before publication.
 
 Downstream peptide-to-clonotype mapping remains in its own analysis pipeline and
 search scripts; it is not a new MIGEC feature or standalone tool developed here.
