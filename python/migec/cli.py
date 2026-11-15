@@ -28,6 +28,26 @@ app = typer.Typer(
     help="UMI barcode extraction, correction and consensus assembly.",
 )
 
+
+@app.callback()
+def main() -> None:
+    """Show the brand on interactive stderr without contaminating pipeline output."""
+    import os
+    import sys
+
+    if not sys.stderr.isatty() or os.environ.get("TERM") == "dumb":
+        return
+    from rich.console import Console
+    from rich.text import Text
+
+    console = Console(stderr=True)
+    title = Text("  migec", style="bold #ff5050")
+    title.append(f"  {__version__}", style="#38b6ff")
+    console.print(title)
+    console.print("  MOLECULAR IDENTIFIERS · RELIABLE CONSENSUS", style="bold")
+    console.print("  checkout  →  refine  →  assemble", style="#38b6ff")
+    console.print()
+
 # The two intake limits read the same on every stage that has them, so they are worded once. A
 # per-command copy is a warning that drifts: three copies, and the one a user happens to read is
 # the one nobody updated.

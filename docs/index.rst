@@ -5,13 +5,17 @@ UMI barcode extraction, correction and consensus assembly for barcoded sequencin
 complete C++20 rewrite of `MIGEC <https://doi.org/10.1038/nmeth.2960>`_ and
 `MAGERI <https://doi.org/10.1371/journal.pcbi.1005480>`_.
 
-.. warning::
+Released MIGEC 2 provides barcode extraction, correction and molecular consensus assembly.
+See :doc:`roadmap` for remaining work and scope limitations. The original Groovy version
+is archived on ``legacy-v1`` and at tag ``v1-final``.
 
-   **Version 2 is under construction.** All three stages work today — ``checkout``, ``refine`` and
-   ``assemble`` — with cell barcodes, whitelists, dual-end and positional layouts, cell calling,
-   and ``suggest``/``subsample``/``plot``. Index hopping and the published benchmark comparisons
-   are what remain; see :doc:`roadmap`. The Groovy MIGEC 1.2.9
-   that this replaces is archived on the ``legacy-v1`` branch and at tag ``v1-final``.
+Documentation by task
+---------------------
+
+* **Tutorial:** :doc:`quickstart` takes a small library through all three stages.
+* **How-to guides:** :doc:`examples`, :doc:`layouts`, :doc:`byo_umi` and :doc:`nextflow`.
+* **Reference:** :doc:`commands` and :doc:`reference` define interfaces and formats.
+* **Explanation:** :doc:`method` explains the models, assumptions and limitations.
 
 What it does
 ------------
@@ -97,6 +101,7 @@ Where to go
    :maxdepth: 1
    :hidden:
 
+   quickstart
    installation
    examples
    Layouts <layouts>

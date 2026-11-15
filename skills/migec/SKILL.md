@@ -16,7 +16,7 @@ MIGEC (Groovy) and MAGERI (Java); the algorithms carry over, the code does not.
 
 ```bash
 pip install migec            # wheels: CPython 3.10-3.13, Linux x86-64, macOS arm64
-migec info                   # prints package, extension and .mig format versions
+migec info                   # prints package and extension versions, plus the independent .mig format version
 ```
 
 From a checkout: `bash setup.sh` (uv venv, editable, asserts the *extension* imports — a failed
@@ -569,5 +569,24 @@ taking the first entry.
   `docs/validation.rst`, `docs/formats.rst`, `docs/nulls.rst`, `docs/variants.rst`,
   `docs/nextflow.rst`
 - `notebooks/` — six marimo notebooks, four of which need no network; `notebooks/README.md`
-- `CLAUDE.md` — the non-negotiables and why each exists
+- `CLAUDE.md` — contributor invariants and their rationale
 - `project/` — the design record: six subsystem designs and two critiques, with 25 corrected errors
+
+## Scope and verification contracts
+
+Peptide-to-clonotype placement belongs to seqtree and existing project scripts/pipelines,
+with placement tables separate from evidence and scores. Do not add a peptide-mapping tool
+or place that responsibility in ARDA/MIGEC. These packages can share a pipeline without
+calling one another; check actual dependency metadata before assuming a release dependency.
+
+Use the owning isolated environment. Verify current CLI help and API signatures before
+constructing commands; do not infer flags from another tool. Preserve raw inputs, molecule
+identifiers, counts and provenance. Software fixtures do not authorize cohort recomputation.
+
+Required seqtree supplies native UMI neighborhood searches; do not duplicate them with
+custom one-mismatch enumeration. Released bulk correction supports quality-aware radius two;
+cell-tagged correction remains radius one. Homopolymer UMI indel correction is future work,
+not a flag to turn on. Retain the full physical family when investigating a missing consensus;
+minority sequence support alone does not establish a correction defect. Use native MigReader/
+MigWriter APIs for .mig records, not a parallel binary parser. Do not equate package version
+with .mig format version: inspect `migec info` and the format contract.

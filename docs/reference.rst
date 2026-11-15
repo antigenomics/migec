@@ -24,3 +24,11 @@ Reference
    performance
    nextflow
    roadmap
+
+License
+-------
+
+MIGEC is licensed under GPL-3.0-or-later. The authoritative text is
+`LICENSE <https://github.com/antigenomics/migec/blob/master/LICENSE>`_.
+ARDA is a separate package with its own license; pipeline interoperability does
+not make their licenses interchangeable.
