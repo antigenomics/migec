@@ -360,7 +360,7 @@ bool seed_offset_indexed(const SeedIndex& seeds, int la, const ConsensusRead& b,
     }
     if (best_votes < params.min_seed_votes) return false;
     // The implied overlap has to be long enough to be evidence rather than a repeat.
-    const int overlap = std::min(shift + la, lb) - std::max(shift, 0);
+    const int overlap = std::min(la, shift + lb) - std::max(shift, 0);
     return overlap >= params.min_overlap;
 }
 
@@ -577,6 +577,16 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
     LogTables calibrated;
     if (!params.calibration.empty()) calibrated = build_tables(params.calibration);
     const LogTables& tables = params.calibration.empty() ? nominal_tables() : calibrated;
+
+    if (best_votes == 0 && mates1.size() > 1) {
+        // Independent read errors may hide every raw-pair seed while the UMI consensuses
+        // expose the overlap. Use the same seed/length gates only to place the original reads;
+        // final calls, linkage and physical-pair counts still use those original measurements.
+        const auto first = call_consensus(mates1, params, tables);
+        const auto second = call_consensus(mates2, params, tables);
+        if (seed_offset({first.seq, first.qual}, {second.seq, second.qual}, params, best))
+            best_votes = 1;
+    }
 
     if (best_votes == 0) {
         // Mate identity links the two observed ends even when their genomic distance is

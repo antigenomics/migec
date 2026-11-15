@@ -9,6 +9,9 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 - Retain covered tails when anchored reads within a UMI group have different lengths. Previously
   the shortest read trimmed every consensus in that group. Each base still uses only covering
   reads for its likelihood and quality; unmerged mates remain separate observed intervals.
+- Calculate mate overlap from both actual read lengths in their shared coordinate frame.
+  When individual read errors hide the overlap, try the corrected UMI-family mate consensuses
+  with the same seed and overlap requirements, then call the molecule from the original reads.
 
 ## 2.7.0 — 2026-11-14
 
