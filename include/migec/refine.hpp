@@ -113,6 +113,7 @@ struct RefineStats {
     double molecules_corrected = 0.0;
     double estimated_error = 0.0;
     double payload_clonality = 0.0;
+    int payload_primary_width = 0, payload_observed_width = 0, payload_mate1_span = 0;
     bool saturated = false;
     int umi_length = 0;
     int cell_length = 0;

@@ -163,12 +163,18 @@ struct BarcodeEvidence {
     // at the base it changed, and an early-PCR child carries a high one in every read -- so this
     // separates the two mechanisms the global rate has to average over. Works at one read.
     std::vector<float> position_error;
-    // Draft payload consensus per barcode, `payload_width` bases each, entry i at
-    // [i * payload_width]. A barcode error child is a read of the PARENT'S molecule, so its
+    // First-read payload draft per barcode. Each block contains payload_width bases,
+    // followed by the matching Phred bytes when payload_has_quality is true. Entry i
+    // begins at i * payload_stride(); missing quality bytes are zero. A barcode error child is a read of the PARENT'S molecule, so its
     // payload matches; an independent molecule one substitution away has its own. Works at one
     // read, and it is the only thing that does when both barcodes are singletons.
     std::vector<char> payload;
-    int payload_width = 0;
+    int payload_width = 0;  // number of bases, never the storage stride
+    int payload_primary_width = 0;  // zero means all bases; otherwise positive-evidence prefix
+    bool payload_has_quality = false;
+    size_t payload_stride() const {
+        return static_cast<size_t>(payload_width) * (payload_has_quality ? 2 : 1);
+    }
 
     bool has_quality() const { return !position_error.empty(); }
     bool has_payload() const { return payload_width > 0 && !payload.empty(); }
@@ -218,16 +224,19 @@ public:
     // with the evidence that works at 1-3 reads/UMI, which is the whole regime the evidence exists
     // for. Carrying it here is what lets `refine` correct in buckets at all. It costs nothing when
     // it is not asked for: `checkout` leaves the stride at zero and every branch below is skipped.
-    void carry_evidence(int payload_width, bool quality);
+    void carry_evidence(int payload_width, bool quality, bool payload_quality = false, int primary_width = 0);
     bool carries_evidence() const { return ev_pw_ > 0 || ev_err_ > 0; }
-    int payload_width() const { return ev_pw_; }
+    int payload_width() const { return ev_pw_ / (ev_payload_quality_ ? 2 : 1); }
+    size_t payload_stride() const { return static_cast<size_t>(ev_pw_); }
+    bool payload_has_quality() const { return ev_payload_quality_; }
+    int payload_primary_width() const { return ev_primary_pw_; }
 
     // One read's contribution. `pos_err` is `length()` floats (null means "no reported quality",
     // which accumulates zero and is read downstream as "fall back to the global rate"); `payload`
     // is the read's first bases, and the FIRST read of a barcode wins -- a later one is dropped,
     // which is what makes the draft reproducible whatever the partition.
-    void add(uint64_t packed, uint32_t n, const float* pos_err, std::string_view payload) {
-        push_evidence(pos_err, payload);
+    void add(uint64_t packed, uint32_t n, const float* pos_err, std::string_view payload, std::string_view payload_quality = {}) {
+        push_evidence(pos_err, payload, payload_quality);
         buf_.push_back(Entry{packed, n});
         total_ += n;
         if (buf_.size() >= flush_at_) flush();
@@ -335,7 +344,7 @@ private:
     void flush_evidence() const;
     void spill() const;
     void require_resident(const char* what) const;
-    void push_evidence(const float* pos_err, std::string_view payload);
+    void push_evidence(const float* pos_err, std::string_view payload, std::string_view payload_quality);
     size_t ev_bytes() const {
         return static_cast<size_t>(ev_err_) * sizeof(float) + static_cast<size_t>(ev_pw_);
     }
@@ -359,6 +368,8 @@ private:
 
     // Carried evidence, in lockstep with buf_/entries_: `ev_err_` floats then `ev_pw_` chars per
     // entry. Both empty and both strides zero on every counter that does not ask for them.
+    bool ev_payload_quality_ = false;  // base+Phred blocks are selected/spilled atomically
+    int ev_primary_pw_ = 0;
     int ev_pw_ = 0;
     int ev_err_ = 0;
     mutable std::vector<float> buf_err_, err_;
@@ -399,8 +410,9 @@ struct CorrectionParams {
     // Per-base disagreement expected between two draft consensuses of the SAME molecule. Two
     // reads each carrying error e disagree at ~2e.
     double payload_error = 2e-3;
-    // A payload pair is "the same sequence" at or below this mismatch fraction. This defines
-    // clonality and, in bulk with at least eight comparable bases, vetoes incompatible merges.
+    // A payload pair is "the same sequence" at or below this latent template mismatch
+    // fraction, after accounting for draft sequencing errors. This defines clonality
+    // and the related-template boundary used by the bulk compatibility safeguard.
     // Related distinct templates must not be mistaken for one molecule merely because the
     // random-DNA alternative fits even worse than the same-molecule model.
     double payload_same_fraction = 0.05;

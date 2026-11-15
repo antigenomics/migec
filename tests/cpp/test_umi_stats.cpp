@@ -8,6 +8,7 @@
 #include <string>
 
 #include "../../src/barcode_search.hpp"
+#include "../../src/payload_evidence.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
 
@@ -1022,4 +1023,112 @@ TEST_CASE("bulk payload compatibility respects evidence boundaries and preserves
             CHECK((entries[result.root[child_at]].key == umi(parent)) == test.merged);
         }
     }
+}
+
+TEST_CASE("payload draft and its qualities remain atomic through spill and rotation") {
+    const std::string tag = "ACGTACGTACGT";
+    for (const std::string draft : {std::string("ACGT"), std::string("\0\0GT", 4)})
+    for (bool spill : {false, true}) {
+        const auto dir = std::filesystem::temp_directory_path() /
+            (spill ? "migec_payload_quality_spill" : "migec_payload_quality_resident");
+        std::filesystem::remove_all(dir);
+        {
+            UmiCounts counts(12);
+            counts.carry_evidence(4, false, true, 2);
+            if (spill) counts.enable_spill(dir.string(), 1024, 8);
+            counts.add(umi(tag), 1, nullptr, draft, "+5?I");
+            for (const auto& value : background(5000, 12, 283))
+                counts.add(umi(value), 1, nullptr, "TTTT", "IIII");
+            counts.add(umi(tag), 1, nullptr, "CCCC", "!!!!");
+            auto verify = [&](const UmiCounts& table, uint64_t wanted) {
+                size_t found = 0;
+                table.for_each_bucket([&](const auto& entries, const BarcodeEvidence& ev) {
+                    CHECK(ev.payload_width == 4);
+                    CHECK(ev.payload_primary_width == 2);
+                    CHECK(ev.payload_stride() == 8);
+                    CHECK(ev.payload_has_quality);
+                    for (size_t i = 0; i < entries.size(); ++i) {
+                        if (entries[i].key != wanted) continue;
+                        ++found;
+                        CHECK(entries[i].count == 2);
+                        const char* pair = ev.payload.data() + i * ev.payload_stride();
+                        CHECK(std::string(pair, 4) == draft);
+                        CHECK(std::string(pair + 4, 4) == "+5?I");
+                    }
+                });
+                CHECK(found == 1);
+            };
+            verify(counts, umi(tag));
+            auto rotated = counts.rotated_copy(3, (dir / "quality_rotation").string());
+            verify(rotated, rotate_barcode(umi(tag), 12, 3));
+        }
+        std::filesystem::remove_all(dir);
+    }
+}
+
+TEST_CASE("payload qualities preserve released positive clonality") {
+    UmiCounts counts(12);
+    for (const auto& tag : {"AAAAAAAAAAAA", "CCCCCCCCCCCC", "GGGGGGGGGGGG"})
+        counts.add(umi(tag), 1);
+    BarcodeEvidence ev;
+    ev.payload_width = 32;
+    ev.payload_has_quality = true;
+    for (int entry = 0; entry < 3; ++entry) {
+        ev.payload.insert(ev.payload.end(), 32, entry == 0 ? 'A' : 'C');
+        ev.payload.insert(ev.payload.end(), 32, entry == 2 ? '!' : 'I');
+    }
+    const auto result = correct_umis(counts, {}, ev);
+    CHECK(result.payload_clonality == 0.5);
+    CHECK(result.merged == 0);
+    for (size_t i = 0; i < 3; ++i)
+        std::fill_n(ev.payload.begin() + i * 64 + 32, 32, 'I');
+    const auto confident = correct_umis(counts, {}, ev);
+    CHECK(confident.payload_clonality == result.payload_clonality);
+    CHECK(confident.root == result.root);
+}
+
+TEST_CASE("capped payload errors are uninformative with mixed or missing qualities") {
+    for (char capped : {'!', '"'}) {
+        for (char other : {'%', 'I', '\0'}) {
+            BarcodeEvidence ev;
+            ev.payload_width = 32;
+            ev.payload_has_quality = true;
+            ev.payload.insert(ev.payload.end(), 32, 'A');
+            ev.payload.insert(ev.payload.end(), 32, capped);
+            ev.payload.insert(ev.payload.end(), 32, 'C');
+            ev.payload.insert(ev.payload.end(), 32, other);
+            for (const auto pair : {std::make_pair(0, 1), std::make_pair(1, 0)}) {
+                const auto result = detail::compare_payload(ev.payload, 32, true,
+                    pair.first, pair.second, CorrectionParams{});
+                CHECK(result.comparable == 0);
+                CHECK(result.information == 0.0);
+            }
+        }
+    }
+}
+
+TEST_CASE("quality-disabled compatibility preserves the observed mismatch boundary") {
+    UmiCounts counts(12);
+    const std::string parent = "AAAACCCCGGGG", child = "AAAACCCCGGGT";
+    counts.add(umi(parent), 100);
+    counts.add(umi(child), 1);
+    for (const auto& barcode : background(3000, 12, 1911)) counts.add(umi(barcode), 1);
+    auto ev = make_evidence(counts, 12, 39, {parent, child});
+    const size_t at = index_of(counts, umi(child));
+    for (size_t j = 0; j < 2; ++j) {
+        char& base = ev.payload[at * 39 + j];
+        base = base == 'A' ? 'C' : 'A';
+    }
+    const auto result = correct_umis(counts, {}, ev);
+    CHECK(result.root[at] == at);
+}
+
+TEST_CASE("missing payload quality retains the other observation error") {
+    CorrectionParams params;
+    const auto forward = detail::payload_emission(10, -1, params);
+    const auto reverse = detail::payload_emission(-1, 10, params);
+    CHECK(forward.delta >= 0.1);
+    CHECK(forward.delta == reverse.delta);
+    const auto missing = detail::payload_emission(-1, -1, params);
+    CHECK(missing.delta == params.payload_error);
 }

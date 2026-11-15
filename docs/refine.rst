@@ -79,15 +79,28 @@ says so rather than the evidence being quietly over-trusted. Agreement also **li
 gates**, which is what makes a singleton merge possible at all; disagreement **refuses** a merge
 the count ratio would have made.
 
-For bulk UMI correction, with at least eight comparable payload bases, disagreement above the existing
-``payload_same_fraction`` (5% by default) vetoes a candidate merge. This uses the
-same definition of payload compatibility as the clonality estimate. A likelihood
-ratio against random DNA alone can favor a related but distinct template even
-when its disagreement is incompatible with that definition. Identical payloads
-can still lift the count gates. No-payload and shorter-payload cases retain their
-existing behavior, as does the cell-tagged correction model. This stricter acceptance rule can retain extra error-child
-barcodes when their draft payloads are noisy; molecule-count effects need matched
-validation before replacing an accepted analysis.
+Bulk payload compatibility uses the **first read's draft**, not a family consensus.
+Its matching base qualities travel with that draft through stable compaction,
+spill partitions and rotations. At least eight informative bases are required.
+A bulk veto requires both inferred template disagreement above the existing
+``payload_same_fraction`` (5%) boundary and a same-template/related-template
+likelihood ratio below the existing refutation bound (0.1). Read errors therefore
+do not automatically become template differences. Unknown payload qualities fall
+back to the historical ``payload_error`` pair-disagreement floor; they do not
+constitute measured confidence. Zero-information observations are excluded.
+
+Clonality and residual diagnostics use the same observation interpretation.
+The positive payload likelihood/count gates remain historical: this is a bounded
+compatibility safeguard, not a calibrated posterior over all related templates.
+Full observed read-pair context refutes a proposed waiver when sequence outside
+the noisy prefix supplies contradictory evidence; positive scoring retains its
+original requested prefix. The full guard costs an additional bounded input scan
+and larger evidence blocks under the existing spill budget. First-read
+representativeness remains a limitation. Cell-tagged correction retains
+its preceding observation model. No extra barcode group is certified as an
+independent molecule merely because a merge was refused.
+
+See :doc:`payload_evidence` for the equations and storage invariants.
 
 .. note::
 
@@ -297,12 +310,15 @@ What it holds
 -------------
 
 The **barcode table**, never the reads: ``(key, count)`` plus this barcode's own evidence — the
-mean error at each barcode position and a 32-base payload draft. The reads are streamed twice
-instead, and the table size is reported for the same reason ``checkout`` reports its counters.
+mean error at each barcode position and one observed first-read payload per original UMI.
+Positive evidence retains the requested prefix (32 bases by default). Quality-enabled bulk
+refutation also stores the full observed first read pair with matching Phred bytes; an
+additional bounded input scan establishes its coordinate extents. The entire read collection
+is streamed rather than held, and reported table bytes include the full paired evidence.
 
 .. code-block:: text
 
-   0.5 s, two passes over the reads
+   Example from the earlier prefix-only configuration: 0.5 s
    peak RSS 184.3 MB of which the barcode table 2.2 MB
 
 **And the table bounds itself.** Past 1 GB it range-partitions to disk, correction follows it into
