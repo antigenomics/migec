@@ -267,10 +267,15 @@ RefineStats refine(const RefineRequest& request) {
         // of first-record length. Re-read inputs; do not retain the raw read collection.
         uint64_t seen = 0;
         IntakeLimit limit = request.limit;
+        bool first_tagged = true;
         for_each_read(request, [&](const SourceRead& r) {
             ++seen;
             if (r.umi.empty()) return true;
             if (limit.active() && !limit.admit(seen, pack_barcode(r.umi))) return false;
+            if (first_tagged) {
+                first_tagged = false;
+                if (!r.cell.empty()) return false;  // cell cohorts never consume full extents
+            }
             if (r.cell.empty()) {
                 guard_r1 = std::max(guard_r1, r.seq.size());
                 guard_r2 = std::max(guard_r2, r.seq2.size());

@@ -45,7 +45,7 @@ inline const auto& default_payload_emissions() {
 }
 
 struct PayloadComparison {
-    int comparable = 0, mismatches = 0;
+    int comparable = 0, mismatches = 0, raw_comparable = 0, raw_mismatches = 0;
     double excess = 0.0, information = 0.0;
     double log_same = 0.0, log_related = 0.0, log_random = 0.0;
     double latent_fraction() const {
@@ -64,7 +64,6 @@ inline PayloadComparison compare_payload(const std::vector<char>& data, int widt
     if (!quality || params.cell_length > 0) {
         // Historical constant-emission path: aggregate counts before logarithms.
         const auto emission = payload_emission(-1, -1, params);
-        if (emission.weight <= 0.0) return result;
         for (int position = 0; position < compared; ++position) {
             const char left = data[a * stride + static_cast<size_t>(position)];
             const char right = data[b * stride + static_cast<size_t>(position)];
@@ -73,8 +72,10 @@ inline PayloadComparison compare_payload(const std::vector<char>& data, int widt
             result.mismatches += left != right;
         }
         const int matches = result.comparable - result.mismatches;
-        result.excess = result.mismatches - result.comparable * emission.delta;
-        result.information = result.comparable * emission.weight;
+        result.raw_comparable = result.comparable;
+        result.raw_mismatches = result.mismatches;
+        result.excess = result.mismatches;
+        result.information = result.comparable;
         result.log_same = result.mismatches * emission.same_mismatch + matches * emission.same_match;
         result.log_related = result.mismatches * emission.related_mismatch + matches * emission.related_match;
         result.log_random = result.mismatches * std::log(0.75) + matches * std::log(0.25);
@@ -85,6 +86,8 @@ inline PayloadComparison compare_payload(const std::vector<char>& data, int widt
         const size_t y = b * stride + static_cast<size_t>(position);
         const char left = data[x], right = data[y];
         if (left == 0 || right == 0 || left == 'N' || right == 'N') continue;
+        ++result.raw_comparable;
+        result.raw_mismatches += left != right;
         constexpr size_t table_width = kMaxPhred + 2;
         size_t q1 = table_width - 1, q2 = table_width - 1;
         if (quality && params.cell_length == 0) {

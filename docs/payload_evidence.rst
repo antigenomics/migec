@@ -55,7 +55,7 @@ molecule groups and consensus records. More groups are not proof of more
 independent molecules; supported earlier corrections and template separations
 must both be traced.
 
-Full observed context before waiving a prefix veto
+Full observed context for the prefix compatibility test
 --------------------------------------------------
 
 The positive-evidence/clonality window remains the requested payload prefix
@@ -64,9 +64,10 @@ input scan establishes fixed mate-1 and mate-2 coordinate slots from admitted
 read lengths. The first read pair for each original UMI supplies those slots;
 missing sequence is zero-padded and excluded, never reconstructed.
 
-If a noisy prefix has latent disagreement above the compatibility boundary but
-insufficient likelihood evidence to veto, the complete observed pair is checked
-before waiving that veto. Refutation requires the same informative-base minimum,
+If the observed prefix exceeds the existing mismatch-fraction boundary, the
+complete observed pair determines compatibility, even if the prefix alone
+appears incompatible or its qualities erase all informative mismatches.
+Refutation requires the same informative-base minimum,
 latent-fraction boundary and same/related likelihood ratio. Extra context is
 negative evidence only: it does not lift the positive count gates or strengthen
 the original prefix likelihood. This retains confidently different sequence

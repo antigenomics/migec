@@ -42,8 +42,9 @@ def test_payload_compatibility_distinguishes_noise_from_template_evidence(
 
 @pytest.mark.parametrize('different_mate', [False, True])
 @pytest.mark.parametrize('budget, threads', [(0, 1), (4096, 4)])
+@pytest.mark.parametrize('prefix_error_quality', ['+', '!', 'I'])
 def test_paired_context_protects_distinct_template_after_noisy_prefix(
-    tmp_path, different_mate, budget, threads
+    tmp_path, different_mate, budget, threads, prefix_error_quality
 ):
     from migec.checkout import run as checkout_run
 
@@ -66,7 +67,7 @@ def test_paired_context_protects_distinct_template_after_noisy_prefix(
 
         for i in range(12):
             write(f'parent{i}', parent, template, 'I' * 32, mate)
-        write('child', child, damaged, '+' * 5 + 'I' * 27, child_mate)
+        write('child', child, damaged, prefix_error_quality * 5 + 'I' * 27, child_mate)
         used = {parent, child}
         while len(used) < 3002:
             barcode = ''.join(rng.choice('ACGT') for _ in range(12))

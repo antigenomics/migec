@@ -1100,3 +1100,19 @@ TEST_CASE("capped payload errors are uninformative with mixed or missing qualiti
         }
     }
 }
+
+TEST_CASE("quality-disabled compatibility preserves the observed mismatch boundary") {
+    UmiCounts counts(12);
+    const std::string parent = "AAAACCCCGGGG", child = "AAAACCCCGGGT";
+    counts.add(umi(parent), 100);
+    counts.add(umi(child), 1);
+    for (const auto& barcode : background(3000, 12, 1911)) counts.add(umi(barcode), 1);
+    auto ev = make_evidence(counts, 12, 39, {parent, child});
+    const size_t at = index_of(counts, umi(child));
+    for (size_t j = 0; j < 2; ++j) {
+        char& base = ev.payload[at * 39 + j];
+        base = base == 'A' ? 'C' : 'A';
+    }
+    const auto result = correct_umis(counts, {}, ev);
+    CHECK(result.root[at] == at);
+}

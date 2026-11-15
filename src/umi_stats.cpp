@@ -1243,22 +1243,28 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
                 // posterior: retain the historical positive evidence path while requiring
                 // evidence beyond read error before vetoing a related bulk template.
                 const bool incompatible = params.cell_length == 0 &&
-                    comparison.latent_fraction() > params.payload_same_fraction &&
-                    comparison.log_same - comparison.log_related < std::log(0.1);
+                    (evidence.payload_has_quality
+                        ? (comparison.latent_fraction() > params.payload_same_fraction &&
+                           comparison.log_same - comparison.log_related < std::log(0.1))
+                        : (static_cast<double>(comparison.raw_mismatches) >
+                           params.payload_same_fraction * comparison.raw_comparable));
                 payload_refutes = incompatible || lr_payload < 0.1;
-                if (!payload_refutes && params.cell_length == 0 && evidence.payload_has_quality &&
-                    evidence.payload_primary_width > 0 && pw > evidence.payload_primary_width &&
-                    comparison.latent_fraction() > params.payload_same_fraction) {
-                    // Waiving a noisy-prefix veto must not ignore contradictory observed
-                    // sequence outside that window, including the other physical mate.
-                    const auto full = detail::compare_payload(evidence.payload, pw, true,
-                        child_idx, cand_idx, params);
-                    payload_refutes = full.comparable >= 8 &&
-                        full.latent_fraction() > params.payload_same_fraction &&
-                        full.log_same - full.log_related < std::log(0.1);
-                }
-                payload_decisive = !payload_refutes && lr_payload > 10.0;
             }
+            if (params.cell_length == 0 && evidence.payload_has_quality &&
+                evidence.payload_primary_width > 0 && pw > evidence.payload_primary_width &&
+                comparison.raw_comparable >= 8 &&
+                static_cast<double>(comparison.raw_mismatches) >
+                    params.payload_same_fraction * comparison.raw_comparable) {
+                // Judge the original observed-prefix veto using all available context,
+                // even when the prefix alone refutes. A noisy local window must not
+                // override a compatible complete pair. Positive evidence stays local.
+                const auto full = detail::compare_payload(evidence.payload, pw, true,
+                    child_idx, cand_idx, params);
+                if (full.comparable >= 8)
+                    payload_refutes = full.latent_fraction() > params.payload_same_fraction &&
+                        full.log_same - full.log_related < std::log(0.1);
+            }
+            payload_decisive = !payload_refutes && lr_payload > 10.0;
         }
 
         // A payload that disagrees is not this molecule, whatever the counts say.

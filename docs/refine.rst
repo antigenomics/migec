@@ -310,12 +310,15 @@ What it holds
 -------------
 
 The **barcode table**, never the reads: ``(key, count)`` plus this barcode's own evidence — the
-mean error at each barcode position and a 32-base payload draft. The reads are streamed twice
-instead, and the table size is reported for the same reason ``checkout`` reports its counters.
+mean error at each barcode position and one observed first-read payload per original UMI.
+Positive evidence retains the requested prefix (32 bases by default). Quality-enabled bulk
+refutation also stores the full observed first read pair with matching Phred bytes; an
+additional bounded input scan establishes its coordinate extents. The entire read collection
+is streamed rather than held, and reported table bytes include the full paired evidence.
 
 .. code-block:: text
 
-   0.5 s, two passes over the reads
+   Example from the earlier prefix-only configuration: 0.5 s
    peak RSS 184.3 MB of which the barcode table 2.2 MB
 
 **And the table bounds itself.** Past 1 GB it range-partitions to disk, correction follows it into
