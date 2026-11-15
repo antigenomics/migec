@@ -545,3 +545,12 @@ model has to use the evidence that survives at one read:
   benchmark gate is written against that rather than against a Jaccard we cannot reach.
 - **An external merge sort** — range partitioning plus an in-RAM sort per bucket covers it, and
   `nbuckets == 1` is the in-memory case, so there is one code path rather than two.
+
+## Review follow-up: streamed candidate scoring
+
+Copilot review of release PR #81 flagged candidate acceptance inside seqtree's serialized
+consumer callback (`src/umi_stats.cpp`, `consider()` invocation). This may limit parallel
+scaling even though candidate retrieval is threaded. This is a review hypothesis, not a
+measured regression. Profile the existing batch path before changing it; retain bounded
+candidate storage, deterministic decisions, cell isolation and thread-equivalent output.
+See https://github.com/antigenomics/migec/pull/81#discussion_r4577283101.
