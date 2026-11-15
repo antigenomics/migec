@@ -11,7 +11,7 @@
   <a href="https://antigenomics.github.io/migec/"><img alt="docs" src="https://github.com/antigenomics/migec/actions/workflows/docs.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue">
   <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-blue">
-  <img alt="license" src="https://img.shields.io/badge/license-GPLv3-green">
+  <img alt="license" src="https://img.shields.io/badge/license-Academic%20%26%20Non--Commercial-green">
 </p>
 
 <h1 align="center">migec — molecular identifiers, reliable consensus</h1>
@@ -116,4 +116,4 @@ Until the v2 paper exists, cite the original methods:
 
 ## License
 
-GPL-3.0-or-later. See [`LICENSE`](https://github.com/antigenomics/migec/blob/master/LICENSE).
+ISALGO LAB Academic and Non-Commercial Research License v1.0. See [`LICENSE`](https://github.com/antigenomics/migec/blob/master/LICENSE).

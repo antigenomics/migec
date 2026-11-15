@@ -10,13 +10,12 @@ version = "2.7.1"  # keep in sync with include/migec/version.hpp and python/mige
 description = "UMI barcode extraction, correction and consensus assembly for barcoded sequencing"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-or-later" }
+license = { file = "LICENSE" }
 authors = [{ name = "Mikhail Shugay", email = "mikhail.shugay@gmail.com" }]
 keywords = ["umi", "barcode", "consensus", "airr", "repseq", "single-cell", "sequencing"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS :: MacOS X",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
