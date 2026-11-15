@@ -49,22 +49,14 @@ int read_length(const ConsensusRead& r) {
     return static_cast<int>(std::min(r.seq.size(), r.qual.size()));
 }
 
-// The group's frame runs from the leftmost read start to the rightmost read end. With every
-// offset at 0 -- the amplicon case -- that is the shortest read, which is the old behaviour: no
-// column is emitted that some read does not reach.
+// Include every observed column, including tails reached by only the longer anchored reads.
+// base_at/qual_at exclude non-covering reads from each column's likelihood.
 int group_width(const std::vector<ConsensusRead>& reads) {
     if (reads.empty()) return 0;
     int begin = reads[0].offset, end = 0;
     for (const ConsensusRead& r : reads) {
         begin = std::min(begin, r.offset);
         end = std::max(end, r.offset + read_length(r));
-    }
-    bool all_anchored = true;
-    for (const ConsensusRead& r : reads) all_anchored = all_anchored && r.offset == begin;
-    if (all_anchored) {
-        int w = read_length(reads[0]);
-        for (const ConsensusRead& r : reads) w = std::min(w, read_length(r));
-        return w;
     }
     return end - begin;
 }

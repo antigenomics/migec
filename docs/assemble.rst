@@ -3,6 +3,10 @@ assemble -- one consensus per molecule
 
 Reads carrying the same barcode are reads of one molecule, so collapse them into one consensus.
 
+Anchored reads of different lengths retain every covered position; short reads do not trim the
+longer reads' tails. Each position's quality uses only reads covering it. Unmerged mates remain
+separate observed intervals when their overlap cannot be established.
+
 .. code-block:: bash
 
    migec assemble out/S1.fq.gz -o cons/

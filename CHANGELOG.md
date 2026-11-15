@@ -4,6 +4,12 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+- Retain covered tails when anchored reads within a UMI group have different lengths. Previously
+  the shortest read trimmed every consensus in that group. Each base still uses only covering
+  reads for its likelihood and quality; unmerged mates remain separate observed intervals.
+
 ## 2.7.0 — 2026-11-14
 
 - Require seqtree and reuse its pinned native batch search for UMI correction, distance-one

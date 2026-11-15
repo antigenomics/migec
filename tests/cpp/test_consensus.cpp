@@ -46,6 +46,20 @@ TEST_CASE("one erroneous read is outvoted") {
     CHECK(out[0].seq == "ACGTACGT");
 }
 
+TEST_CASE("short anchored reads do not discard the longer reads covered tail") {
+    ConsensusParams p;
+    p.rt_floor = 1e-12;
+    const auto out = assemble_group(group({"ACGT", "ACGT", "ACGTACGT"},
+                                          char_from_phred(20)), p);
+    const auto tail = assemble_group(group({"ACGT"}, char_from_phred(20)), p);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].seq == "ACGTACGT");
+    CHECK(out[0].reads == 3);
+    REQUIRE(out[0].qual.size() == 8);
+    CHECK(out[0].qual.substr(4) == tail[0].qual);
+    CHECK(phred_from_char(out[0].qual[0]) > phred_from_char(out[0].qual[4]));
+}
+
 TEST_CASE("emitted quality never exceeds the RT floor") {
     ConsensusParams p;
     p.rt_floor = 1e-4;  // -> Q40 cap
@@ -309,5 +323,18 @@ TEST_CASE("gapped mates split once with shared physical molecule identities") {
         CHECK(c.components == 2);
         CHECK(c.reads == 20);
         CHECK(c.seq.size() == left.size());
+    }
+}
+
+TEST_CASE("unmerged mate consensuses retain covered tails independently") {
+    ConsensusParams p;
+    const auto out = assemble_pairs(group({"ACGT", "ACGTACGT"}),
+                                    group({"TTAA", "TTAAGG"}), p);
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].seq == "ACGTACGT");
+    CHECK(out[1].seq == "TTAAGG");
+    for (const auto& c : out) {
+        CHECK(c.components == 2);
+        CHECK(c.reads == 2);
     }
 }
