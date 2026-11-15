@@ -8,6 +8,7 @@
 #include <string>
 
 #include "../../src/barcode_search.hpp"
+#include "../../src/payload_evidence.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
 
@@ -1077,4 +1078,24 @@ TEST_CASE("uninformative payload qualities do not inflate clonality") {
     const auto result = correct_umis(counts, {}, ev);
     CHECK(result.payload_clonality < 0.5);
     CHECK(result.merged == 0);
+}
+
+TEST_CASE("capped payload errors are uninformative with mixed or missing qualities") {
+    for (char capped : {'!', '"'}) {
+        for (char other : {'%', 'I', '\0'}) {
+            BarcodeEvidence ev;
+            ev.payload_width = 32;
+            ev.payload_has_quality = true;
+            ev.payload.insert(ev.payload.end(), 32, 'A');
+            ev.payload.insert(ev.payload.end(), 32, capped);
+            ev.payload.insert(ev.payload.end(), 32, 'C');
+            ev.payload.insert(ev.payload.end(), 32, other);
+            for (const auto pair : {std::make_pair(0, 1), std::make_pair(1, 0)}) {
+                const auto result = detail::compare_payload(ev.payload, 32, true,
+                    pair.first, pair.second, CorrectionParams{});
+                CHECK(result.comparable == 0);
+                CHECK(result.information == 0.0);
+            }
+        }
+    }
 }

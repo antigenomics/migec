@@ -89,10 +89,11 @@ def test_the_table_is_what_scales_not_the_reads(deep, shallow):
     # Same read count, 4x the distinct barcodes -> ~4x the table. The reads contribute nothing.
     assert b["barcodes"] > 3 * a["barcodes"]
     assert b["table_bytes"] > 3 * a["table_bytes"]
-    # 16 B of (key, count) + a float per barcode position + the payload draft.
+    # 16 B of (key, count) + a float per barcode position + 32 draft bases
+    # and the 32 matching Phred bytes. Keep an explicit allocation bound.
     per_barcode = a["table_bytes"] / a["barcodes"]
     print(f"  {per_barcode:.0f} B per distinct barcode")
-    assert per_barcode < 16 + 4 * UMI_LEN + 64
+    assert per_barcode <= 16 + 4 * UMI_LEN + 2 * 32
 
 
 def _peak_in_a_fresh_process(path, out, payload_width):
@@ -148,7 +149,7 @@ def test_the_payload_draft_is_a_real_allocation(tmp_path):
           f"RSS {narrow['rss'] / 2**20:5.0f} MB"
           f"\n  claimed {claimed / 2**20:.0f} MB, measured {measured / 2**20:.0f} MB")
     assert narrow["table"] < wide["table"]
-    assert claimed == 256 * wide["barcodes"]
+    assert claimed == 2 * 256 * wide["barcodes"]
     # Half, not all: the peak is a high-water mark over the whole run, and the draft is not
     # necessarily live at the moment the rest of the process is at its widest.
     assert measured > claimed / 2, (

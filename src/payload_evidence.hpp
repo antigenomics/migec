@@ -12,9 +12,11 @@ struct PayloadEmission {
 
 inline PayloadEmission payload_emission(int q1, int q2, const CorrectionParams& params) {
     double delta = params.payload_error;
-    if (q1 >= 0 && q2 >= 0) {
-        const double e1 = std::min(0.75, phred_error(static_cast<uint8_t>(q1)));
-        const double e2 = std::min(0.75, phred_error(static_cast<uint8_t>(q2)));
+    const double e1 = q1 >= 0 ? std::min(0.75, phred_error(static_cast<uint8_t>(q1))) : -1.0;
+    const double e2 = q2 >= 0 ? std::min(0.75, phred_error(static_cast<uint8_t>(q2))) : -1.0;
+    if (e1 == 0.75 || e2 == 0.75) {
+        delta = 0.75;  // preserve exact zero information, including mixed/missing quality
+    } else if (e1 >= 0.0 && e2 >= 0.0) {
         delta = std::max(delta, e1 + e2 - 4.0 * e1 * e2 / 3.0);
     }
     delta = std::clamp(delta, 1e-12, 0.75);
@@ -87,10 +89,10 @@ inline PayloadComparison compare_payload(const std::vector<char>& data, int widt
         if (quality && params.cell_length == 0) {
             const unsigned char first = data[x + static_cast<size_t>(width)];
             const unsigned char second = data[y + static_cast<size_t>(width)];
-            if (first >= 33 && first <= 126 && second >= 33 && second <= 126) {
+            if (first >= 33 && first <= 126)
                 q1 = std::min<size_t>(kMaxPhred, first - 33);
+            if (second >= 33 && second <= 126)
                 q2 = std::min<size_t>(kMaxPhred, second - 33);
-            }
         }
         const auto emission = params.payload_error == 2e-3 && params.payload_same_fraction == 0.05
             ? default_payload_emissions()[q1 * table_width + q2]

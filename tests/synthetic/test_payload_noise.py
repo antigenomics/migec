@@ -4,6 +4,8 @@ import random
 
 import pytest
 
+pytest.importorskip("migec._core", reason="the C++ extension is not built")
+
 from migec.refine import run
 
 
