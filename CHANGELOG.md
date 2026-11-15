@@ -4,7 +4,7 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.7.3 — 2026-11-15
 
 - Reject bulk UMI merge candidates whose comparable payload drafts exceed the existing
   same-payload mismatch fraction. Related distinct templates could previously gain
