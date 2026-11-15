@@ -7,6 +7,7 @@
 #include <random>
 #include <string>
 
+#include "../../src/barcode_search.hpp"
 #include "migec/types.hpp"
 #include "migec/umi_stats.hpp"
 
@@ -930,4 +931,40 @@ TEST_CASE("dense short UMIs retain every independent molecule through streamed c
         CHECK(result.root[i] == i);
         CHECK(result.corrected[i] == 1);
     }
+}
+
+TEST_CASE("candidate scoring visits complete queries with bounded worker scratch") {
+    UmiCounts counts(8);
+    for (uint64_t key = 0; key < 2048; ++key) counts.add(key << 48, 1);
+    detail::BarcodeSearch search(counts.entries(), 8);
+    std::vector<std::vector<seqtree::Hit>> expected(search.queries.size());
+    // Independent exhaustive Hamming oracle: neither visit_queries nor seqtree search.
+    for (size_t query = 0; query < search.queries.size(); ++query) {
+        for (size_t reference = 0; reference < search.queries.size(); ++reference) {
+            uint16_t differences = 0;
+            for (size_t position = 0; position < 8; ++position)
+                differences += search.queries[query][position] != search.queries[reference][position];
+            if (differences <= 2)
+                expected[query].push_back(seqtree::Hit{static_cast<uint32_t>(reference),
+                    0, differences, 0, 0});
+        }
+    }
+    std::vector<std::vector<seqtree::Hit>> actual(search.queries.size());
+    std::vector<unsigned> visits(search.queries.size(), 0);
+    search.visit_queries(2, 8, [&](size_t query, const auto& hits, int) {
+        ++visits[query];
+        actual[query] = hits;
+    });
+    REQUIRE(actual.size() == expected.size());
+    for (size_t query = 0; query < actual.size(); ++query) {
+        CHECK(visits[query] == 1);
+        auto by_reference = [](const auto& left, const auto& right) { return left.ref_id < right.ref_id; };
+        std::sort(actual[query].begin(), actual[query].end(), by_reference);
+        REQUIRE(actual[query].size() == expected[query].size());
+        for (size_t hit = 0; hit < actual[query].size(); ++hit) {
+            CHECK(actual[query][hit].ref_id == expected[query][hit].ref_id);
+            CHECK(actual[query][hit].n_subs == expected[query][hit].n_subs);
+        }
+    }
+    CHECK_THROWS_AS(search.visit_queries(3, 1, [](size_t, const auto&, int) {}), MigecError);
 }

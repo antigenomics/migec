@@ -1,0 +1,4 @@
+interface:
+  display_name: "MIGEC molecular consensus"
+  short_description: "Barcode extraction, UMI correction and consensus workflows"
+  default_prompt: "Use MIGEC for barcode extraction, seqtree-backed UMI correction and molecular consensus, preserving sample/cell/UMI identity and physical read counts."

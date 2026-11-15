@@ -30,6 +30,33 @@ struct BarcodeSearch {
         index = seqtree::Index::build(queries, seqtree::Alphabet::Nucleotide);
     }
 
+    // One native pool over coarse query blocks. Searcher is seqtree's reusable
+    // caller-owned scratch API; searches and scoring share the same worker budget.
+    // Query-owned decisions may be updated concurrently, never shared reductions.
+    template <typename Visitor>
+    void visit_queries(int substitutions, int threads, Visitor&& visit) const {
+        if (substitutions < 0 || substitutions > 2)
+            throw MigecError("barcode search supports at most two substitutions");
+        seqtree::SearchParams scope;
+        scope.engine = seqtree::Engine::SeqTm;
+        scope.max_substitutions = static_cast<uint16_t>(substitutions);
+        constexpr size_t chunk = 32;
+        const size_t blocks = queries.size() / chunk + (queries.size() % chunk != 0);
+        const int workers = worker_count(threads, blocks);
+        std::vector<std::unique_ptr<seqtree::Searcher>> scratch;
+        std::vector<std::vector<seqtree::Hit>> hits(static_cast<size_t>(workers));
+        for (int i = 0; i < workers; ++i)
+            scratch.push_back(std::make_unique<seqtree::Searcher>(*index));
+        parallel_for(blocks, workers, [&](size_t block, int worker) {
+            const size_t begin = block * chunk;
+            const size_t end = std::min(queries.size(), begin + chunk);
+            for (size_t query = begin; query < end; ++query) {
+                scratch[worker]->search_into(queries[query], scope, hits[worker]);
+                visit(query, hits[worker], worker);
+            }
+        });
+    }
+
     void consume(int substitutions, int threads,
                  const std::function<void(size_t, size_t, seqtree::CountBuffer&&)>& callback) const {
         if (substitutions < 0 || substitutions > 2)

@@ -11,7 +11,7 @@ tools:
       description: UMI barcode extraction, correction and consensus assembly.
       homepage: https://github.com/antigenomics/migec
       documentation: https://antigenomics.github.io/migec/
-      licence: ['GPL-3.0-or-later']
+      licence: ['ISALGO LAB Academic and Non-Commercial Research License v1.0']
 input:
     - meta:
         type: map

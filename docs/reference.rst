@@ -28,7 +28,9 @@ Reference
 License
 -------
 
-MIGEC is licensed under GPL-3.0-or-later. The authoritative text is
+MIGEC is licensed under ISALGO LAB Academic and Non-Commercial Research License v1.0. The authoritative text is
 `LICENSE <https://github.com/antigenomics/migec/blob/master/LICENSE>`_.
-ARDA is a separate package with its own license; pipeline interoperability does
-not make their licenses interchangeable.
+Third-party components retain their respective licenses. The pinned seqtree native
+core remains GPL-3.0-or-later; MIGEC's ISALGO license does not relicense it.
+This source update does not establish an additional grant for distributing linked
+binaries under non-commercial restrictions.

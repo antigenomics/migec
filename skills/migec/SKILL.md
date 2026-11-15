@@ -1,7 +1,7 @@
 ---
 name: migec
 description: Use when working with UMI-tagged or barcoded sequencing data — extracting sample/cell/UMI barcodes from reads, demultiplexing with degenerate adapter patterns, trimming barcodes and transferring them to FASTQ headers, computing UMI coverage histograms and base-composition/entropy statistics, correcting barcode errors, or assembling molecular consensus sequences. Covers the migec CLI and Python API, the .mig format, and the barcode-pattern grammar.
-license: GPL-3.0-or-later
+license: ISALGO LAB Academic and Non-Commercial Research License v1.0
 ---
 
 # migec

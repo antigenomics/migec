@@ -1302,18 +1302,18 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
     // The verified development extension applies to bulk UMI cohorts. Preserve the
     // released cell-tagged model until its conditional background is implemented.
     const int substitutions = params.cell_length ? 1 : 2;
-    supplied->consume(substitutions, params.threads, [&](size_t, size_t, seqtree::CountBuffer&& block) {
-        // seqtree serializes consumer callbacks within its one native worker pool.
-        // Every query's complete candidate set is consumed; only O(queries) decisions survive.
-        for (size_t row = 0; row < block.data.size(); row += 6) {
-            const size_t query = block.data[row], reference = block.data[row + 1];
-            const auto substitutions = static_cast<uint16_t>(block.data[row + 3]);
-            if (observed_d1 && substitutions == 1 && reference > query) ++*observed_d1;
-            consider(query, seqtree::Hit{static_cast<uint32_t>(reference),
-                static_cast<int32_t>(block.data[row + 2]), substitutions,
-                static_cast<uint16_t>(block.data[row + 4]), static_cast<uint16_t>(block.data[row + 5])});
-        }
-    });
+    const int scoring_workers = worker_count(params.threads, n_entries);
+    std::vector<uint64_t> distance_one(static_cast<size_t>(scoring_workers), 0);
+    supplied->visit_queries(substitutions, params.threads,
+        [&](size_t query, const std::vector<seqtree::Hit>& hits, int worker) {
+            for (const auto& hit : hits) {
+                if (observed_d1 && hit.n_subs == 1 && hit.ref_id > query)
+                    ++distance_one[worker];
+                consider(query, hit);
+            }
+        });
+    if (observed_d1)
+        for (uint64_t count : distance_one) *observed_d1 += count;
 
     // ------------------------------------------------------------------ apply, serially
     //
