@@ -4,15 +4,16 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.7.4 — 2026-11-15
 
 - Account for matching first-read payload Phred qualities before the bulk compatibility
   veto. Preserve paired sequence/quality provenance through bounded spill and rotation,
   exclude zero-information emissions, and check complete observed pairs before vetoing
   a noisy prefix. Preserve the released positive likelihood, clonality, residual diagnostics
   and cell-tagged model.
-  Qualification against exact released baselines is pending; additional groups are not
-  certified independent molecules. See the payload evidence explanation for assumptions.
+  Full context is negative evidence only; additional groups are not certified independent
+  molecules. Retain known Phred error when the other quality is missing, and reject count-
+  ineligible candidates before complete-pair scoring. See the payload explanation for assumptions.
 
 ## 2.7.3 — 2026-11-15
 

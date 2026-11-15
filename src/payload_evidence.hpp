@@ -16,8 +16,11 @@ inline PayloadEmission payload_emission(int q1, int q2, const CorrectionParams& 
     const double e2 = q2 >= 0 ? std::min(0.75, phred_error(static_cast<uint8_t>(q2))) : -1.0;
     if (e1 == 0.75 || e2 == 0.75) {
         delta = 0.75;  // preserve exact zero information, including mixed/missing quality
-    } else if (e1 >= 0.0 && e2 >= 0.0) {
-        delta = std::max(delta, e1 + e2 - 4.0 * e1 * e2 / 3.0);
+    } else if (e1 >= 0.0 || e2 >= 0.0) {
+        // Missing quality supplies no measured error, but must not erase the
+        // known observation. The historical pair floor remains an assumption.
+        const double left = std::max(0.0, e1), right = std::max(0.0, e2);
+        delta = std::max(delta, left + right - 4.0 * left * right / 3.0);
     }
     delta = std::clamp(delta, 1e-12, 0.75);
     const double weight = 1.0 - 4.0 * delta / 3.0;

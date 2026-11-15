@@ -14,7 +14,9 @@ observations, capped at 0.75 for an uninformative four-base observation.
 The probability that two observations of the same template disagree is
 ``delta_i = e_1i + e_2i - 4 e_1i e_2i / 3``. The existing ``payload_error``
 parameter floors this **pair disagreement**, not each individual error.
-Unknown qualities use that historical floor, an assumption rather than evidence.
+Unknown qualities contribute no measured per-observation error; the historical
+pair floor remains an assumption. A known quality is retained when its partner
+is missing, so the fallback never discards a known error probability.
 
 For latent template mismatch fraction ``theta``, the observation mismatch
 probability is ``p_i(theta) = delta_i + theta (1 - 4 delta_i / 3)``.

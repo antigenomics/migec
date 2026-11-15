@@ -1121,3 +1121,13 @@ TEST_CASE("quality-disabled compatibility preserves the observed mismatch bounda
     const auto result = correct_umis(counts, {}, ev);
     CHECK(result.root[at] == at);
 }
+
+TEST_CASE("missing payload quality retains the other observation error") {
+    CorrectionParams params;
+    const auto forward = detail::payload_emission(10, -1, params);
+    const auto reverse = detail::payload_emission(-1, 10, params);
+    CHECK(forward.delta >= 0.1);
+    CHECK(forward.delta == reverse.delta);
+    const auto missing = detail::payload_emission(-1, -1, params);
+    CHECK(missing.delta == params.payload_error);
+}
