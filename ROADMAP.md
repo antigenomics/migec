@@ -1,5 +1,14 @@
 # Roadmap
 
+## Covered anchored-read extent
+
+Retain the union of covered positions for variable-length anchored reads, rather than clipping
+every consensus to the shortest read. Reuse the native column likelihood and its coverage-aware
+quality calculation. Preserve physical-pair counts, collision identities and separate mates when
+overlap is unsupported. Native regression tests cover tail retention and tail quality. Qualify
+default paired workflows before advancing downstream producer pins; record minor differences
+without requiring exact agreement with a separate repertoire producer.
+
 ## Counting, parameter and dependency invariants
 
 Retain the counting defaults: keep singletons, count physical support without

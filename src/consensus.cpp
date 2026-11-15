@@ -49,22 +49,14 @@ int read_length(const ConsensusRead& r) {
     return static_cast<int>(std::min(r.seq.size(), r.qual.size()));
 }
 
-// The group's frame runs from the leftmost read start to the rightmost read end. With every
-// offset at 0 -- the amplicon case -- that is the shortest read, which is the old behaviour: no
-// column is emitted that some read does not reach.
+// Include every observed column, including tails reached by only the longer anchored reads.
+// base_at/qual_at exclude non-covering reads from each column's likelihood.
 int group_width(const std::vector<ConsensusRead>& reads) {
     if (reads.empty()) return 0;
     int begin = reads[0].offset, end = 0;
     for (const ConsensusRead& r : reads) {
         begin = std::min(begin, r.offset);
         end = std::max(end, r.offset + read_length(r));
-    }
-    bool all_anchored = true;
-    for (const ConsensusRead& r : reads) all_anchored = all_anchored && r.offset == begin;
-    if (all_anchored) {
-        int w = read_length(reads[0]);
-        for (const ConsensusRead& r : reads) w = std::min(w, read_length(r));
-        return w;
     }
     return end - begin;
 }
@@ -368,7 +360,7 @@ bool seed_offset_indexed(const SeedIndex& seeds, int la, const ConsensusRead& b,
     }
     if (best_votes < params.min_seed_votes) return false;
     // The implied overlap has to be long enough to be evidence rather than a repeat.
-    const int overlap = std::min(shift + la, lb) - std::max(shift, 0);
+    const int overlap = std::min(la, shift + lb) - std::max(shift, 0);
     return overlap >= params.min_overlap;
 }
 
@@ -585,6 +577,16 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
     LogTables calibrated;
     if (!params.calibration.empty()) calibrated = build_tables(params.calibration);
     const LogTables& tables = params.calibration.empty() ? nominal_tables() : calibrated;
+
+    if (best_votes == 0 && mates1.size() > 1) {
+        // Independent read errors may hide every raw-pair seed while the UMI consensuses
+        // expose the overlap. Use the same seed/length gates only to place the original reads;
+        // final calls, linkage and physical-pair counts still use those original measurements.
+        const auto first = call_consensus(mates1, params, tables);
+        const auto second = call_consensus(mates2, params, tables);
+        if (seed_offset({first.seq, first.qual}, {second.seq, second.qual}, params, best))
+            best_votes = 1;
+    }
 
     if (best_votes == 0) {
         // Mate identity links the two observed ends even when their genomic distance is

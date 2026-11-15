@@ -46,6 +46,20 @@ TEST_CASE("one erroneous read is outvoted") {
     CHECK(out[0].seq == "ACGTACGT");
 }
 
+TEST_CASE("short anchored reads do not discard the longer reads covered tail") {
+    ConsensusParams p;
+    p.rt_floor = 1e-12;
+    const auto out = assemble_group(group({"ACGT", "ACGT", "ACGTACGT"},
+                                          char_from_phred(20)), p);
+    const auto tail = assemble_group(group({"ACGT"}, char_from_phred(20)), p);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].seq == "ACGTACGT");
+    CHECK(out[0].reads == 3);
+    REQUIRE(out[0].qual.size() == 8);
+    CHECK(out[0].qual.substr(4) == tail[0].qual);
+    CHECK(phred_from_char(out[0].qual[0]) > phred_from_char(out[0].qual[4]));
+}
+
 TEST_CASE("emitted quality never exceeds the RT floor") {
     ConsensusParams p;
     p.rt_floor = 1e-4;  // -> Q40 cap
@@ -310,4 +324,71 @@ TEST_CASE("gapped mates split once with shared physical molecule identities") {
         CHECK(c.reads == 20);
         CHECK(c.seq.size() == left.size());
     }
+}
+
+TEST_CASE("unmerged mate consensuses retain covered tails independently") {
+    ConsensusParams p;
+    const auto out = assemble_pairs(group({"ACGT", "ACGTACGT"}),
+                                    group({"TTAA", "TTAAGG"}), p);
+    REQUIRE(out.size() == 2);
+    CHECK(out[0].seq == "ACGTACGT");
+    CHECK(out[1].seq == "TTAAGG");
+    for (const auto& c : out) {
+        CHECK(c.components == 2);
+        CHECK(c.reads == 2);
+    }
+}
+
+TEST_CASE("collision branches retain their own variable-length tails") {
+    ConsensusParams p;
+    const std::string major = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTG";
+    std::string minor = major;
+    minor[10] = 'A';
+    minor[20] = 'C';
+    std::vector<std::string> seqs;
+    for (int i = 0; i < 20; ++i) {
+        seqs.push_back(major.substr(0, major.size() - (i % 2)));
+        seqs.push_back(minor.substr(0, minor.size() - (i % 2)));
+    }
+    const auto out = assemble_group(group(seqs), p);
+    REQUIRE(out.size() == 2);
+    CHECK((out[0].seq == major || out[1].seq == major));
+    CHECK((out[0].seq == minor || out[1].seq == minor));
+    CHECK(out[0].reads == 20);
+    CHECK(out[1].reads == 20);
+}
+
+TEST_CASE("mate overlap uses both actual lengths in either orientation") {
+    ConsensusParams p;
+    std::mt19937 rng(121);
+    std::string molecule;
+    for (int i = 0; i < 210; ++i) molecule += "ACGT"[rng() & 3];
+    const auto left = group({molecule.substr(0, 90), molecule.substr(0, 90)});
+    const auto right = group({molecule.substr(60, 150), molecule.substr(60, 150)});
+    p.min_overlap = 40;  // The actual overlap is 30, not 90.
+    CHECK(assemble_pairs(left, right, p).size() == 2);
+    CHECK(assemble_pairs(right, left, p).size() == 2);
+    p.min_overlap = 20;
+    const auto reversed = assemble_pairs(right, left, p);
+    REQUIRE(reversed.size() == 1);
+    CHECK(reversed[0].seq == molecule);
+}
+
+TEST_CASE("family correction can expose a supported mate overlap") {
+    ConsensusParams p;
+    std::mt19937 rng(122);
+    std::string molecule;
+    for (int i = 0; i < 200; ++i) molecule += "ACGT"[rng() & 3];
+    std::vector<std::string> first, second;
+    for (size_t i = 0; i < 5; ++i) {
+        auto read = molecule.substr(0, 110);
+        const size_t position = 96 + i;
+        read[position] = read[position] == 'A' ? 'C' : 'A';
+        first.push_back(read);
+        second.push_back(molecule.substr(90));
+    }
+    const auto out = assemble_pairs(group(first), group(second), p);
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].seq == molecule);
+    CHECK(out[0].reads == 5);
 }

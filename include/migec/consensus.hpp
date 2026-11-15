@@ -16,7 +16,8 @@
 //    p < 0.01 the Poisson derivation gives calls 19x too many.
 //
 // Substitutions only, everywhere. Reads are already oriented and trimmed by checkout, so a group
-// is ungapped and left-anchored; the group's width is the shortest read in it.
+// is ungapped and left-anchored; every covered column is retained, with its quality calculated
+// only from reads covering that position.
 
 #ifndef MIGEC_CONSENSUS_HPP
 #define MIGEC_CONSENSUS_HPP
