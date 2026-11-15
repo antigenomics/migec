@@ -4,6 +4,12 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.7.5 — 2026-11-16
+
+- Keep paired UMI consensuses as two observed contigs when the highest sampled
+  mate-offset votes tie. Preserve their shared molecule ID and read support.
+  Previously an arbitrary offset could combine bases from incompatible layouts.
+
 ## 2.7.4 — 2026-11-15
 
 - Account for matching first-read payload Phred qualities before the bulk compatibility
