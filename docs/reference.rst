@@ -30,4 +30,7 @@ License
 
 MIGEC is licensed under ISALGO LAB Academic and Non-Commercial Research License v1.0. The authoritative text is
 `LICENSE <https://github.com/antigenomics/migec/blob/master/LICENSE>`_.
-Third-party components retain their respective licenses.
+Third-party components retain their respective licenses. The pinned seqtree native
+core remains GPL-3.0-or-later; MIGEC's ISALGO license does not relicense it.
+This source update does not establish an additional grant for distributing linked
+binaries under non-commercial restrictions.
