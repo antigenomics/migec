@@ -21,6 +21,11 @@ namespace {
 using detail::barcode_neighbors;
 using detail::BarcodeSearch;
 
+// A missing first-mate slot does not make an observed second mate absent.
+bool empty_payload(const char* data, size_t bases) {
+    return data[0] == 0 && std::none_of(data, data + bases, [](char base) { return base != 0; });
+}
+
 int log2_bin(uint32_t count) {
     int b = 0;
     while (count > 1 && b < CoverageHistogram::kBins - 1) {
@@ -213,7 +218,7 @@ void UmiCounts::flush_evidence() const {
                 for (size_t j = 0; j < E; ++j) {
                     sorted_err[(sorted.size() - 1) * E + j] += buf_err_[k * E + j];
                 }
-                if (P && sorted_pay[(sorted.size() - 1) * P] == 0) {
+                if (P && empty_payload(sorted_pay.data() + (sorted.size() - 1) * P, payload_width())) {
                     std::copy_n(buf_pay_.begin() + static_cast<long>(k * P), P,
                                 sorted_pay.begin() + static_cast<long>((sorted.size() - 1) * P));
                 }
@@ -293,7 +298,7 @@ void UmiCounts::flush_evidence() const {
             if (E) {
                 for (size_t q = 0; q < E; ++q) err_[i * E + q] += buf_err_[j * E + q];
             }
-            if (P && pay_[i * P] == 0) {
+            if (P && empty_payload(pay_.data() + i * P, payload_width())) {
                 std::copy_n(buf_pay_.begin() + static_cast<long>(j * P), P,
                             pay_.begin() + static_cast<long>(i * P));
             }
@@ -669,7 +674,7 @@ void UmiCounts::for_each_bucket(
                 for (size_t j = 0; j < E; ++j) {
                     ev.position_error[(bucket.size() - 1) * E + j] += raw_err[k * E + j];
                 }
-                if (P && ev.payload[(bucket.size() - 1) * P] == 0) {
+                if (P && empty_payload(ev.payload.data() + (bucket.size() - 1) * P, payload_width())) {
                     std::copy_n(raw_pay.begin() + static_cast<long>(k * P), P,
                                 ev.payload.begin() + static_cast<long>((bucket.size() - 1) * P));
                 }

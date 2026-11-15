@@ -1027,6 +1027,7 @@ TEST_CASE("bulk payload compatibility respects evidence boundaries and preserves
 
 TEST_CASE("payload draft and its qualities remain atomic through spill and rotation") {
     const std::string tag = "ACGTACGTACGT";
+    for (const std::string draft : {std::string("ACGT"), std::string("\0\0GT", 4)})
     for (bool spill : {false, true}) {
         const auto dir = std::filesystem::temp_directory_path() /
             (spill ? "migec_payload_quality_spill" : "migec_payload_quality_resident");
@@ -1035,7 +1036,7 @@ TEST_CASE("payload draft and its qualities remain atomic through spill and rotat
             UmiCounts counts(12);
             counts.carry_evidence(4, false, true, 2);
             if (spill) counts.enable_spill(dir.string(), 1024, 8);
-            counts.add(umi(tag), 1, nullptr, "ACGT", "+5?I");
+            counts.add(umi(tag), 1, nullptr, draft, "+5?I");
             for (const auto& value : background(5000, 12, 283))
                 counts.add(umi(value), 1, nullptr, "TTTT", "IIII");
             counts.add(umi(tag), 1, nullptr, "CCCC", "!!!!");
@@ -1051,7 +1052,7 @@ TEST_CASE("payload draft and its qualities remain atomic through spill and rotat
                         ++found;
                         CHECK(entries[i].count == 2);
                         const char* pair = ev.payload.data() + i * ev.payload_stride();
-                        CHECK(std::string(pair, 4) == "ACGT");
+                        CHECK(std::string(pair, 4) == draft);
                         CHECK(std::string(pair + 4, 4) == "+5?I");
                     }
                 });
