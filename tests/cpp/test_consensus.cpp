@@ -392,3 +392,23 @@ TEST_CASE("family correction can expose a supported mate overlap") {
     CHECK(out[0].seq == molecule);
     CHECK(out[0].reads == 5);
 }
+
+TEST_CASE("tied paired layouts retain both contigs under one molecule") {
+    const std::string template_seq =
+        "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTGATCGTAGCTAGCATGCTAGC"
+        "TTAGGCGCCATGATACCTCTAGGTCATCGCGTATATCCAGTCTGACGTTAGCGATCGGCA";
+    const auto first_mate = template_seq.substr(0, 80);
+    const auto left_layout = template_seq.substr(34);
+    const auto right_layout = template_seq.substr(40);
+    for (const auto& mates : {group({left_layout, right_layout}),
+                              group({right_layout, left_layout})}) {
+        const auto out = assemble_pairs(group({first_mate, first_mate}), mates, {});
+        REQUIRE(out.size() == 2);
+        CHECK(out[0].seq == first_mate);
+        CHECK(out[0].molecule == out[1].molecule);
+        CHECK(out[0].reads == 2);
+        CHECK(out[1].reads == 2);
+        CHECK(out[0].components == 2);
+        CHECK(out[1].components == 2);
+    }
+}

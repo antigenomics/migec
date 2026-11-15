@@ -569,9 +569,15 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
         if (seed_offset(mates1[i], mates2[i], params, shift) && ++votes[shift] >= 2) break;
     }
     int best = 0, best_votes = 0;
+    bool tied_layout = false;
     for (const auto& [offset, n] : votes) {
-        // Ties go to the smaller offset so the answer is the group's, never the iteration order's.
-        if (n > best_votes || (n == best_votes && offset < best)) { best_votes = n; best = offset; }
+        if (n > best_votes) {
+            best_votes = n;
+            best = offset;
+            tied_layout = false;
+        } else if (n == best_votes) {
+            tied_layout = true;
+        }
     }
 
     LogTables calibrated;
@@ -588,7 +594,8 @@ std::vector<Consensus> assemble_pairs(const std::vector<ConsensusRead>& mates1,
             best_votes = 1;
     }
 
-    if (best_votes == 0) {
+    if (best_votes == 0 || tied_layout) {
+        // Equally supported offsets cannot establish a common frame.
         // Mate identity links the two observed ends even when their genomic distance is
         // unknown. Concatenation below is only a column matrix for linkage, NEVER sequence
         // output. One physical partition owns both independently called contigs.
