@@ -89,11 +89,13 @@ def test_the_table_is_what_scales_not_the_reads(deep, shallow):
     # Same read count, 4x the distinct barcodes -> ~4x the table. The reads contribute nothing.
     assert b["barcodes"] > 3 * a["barcodes"]
     assert b["table_bytes"] > 3 * a["table_bytes"]
-    # 16 B of (key, count) + a float per barcode position + 32 draft bases
-    # and the 32 matching Phred bytes. Keep an explicit allocation bound.
+    # Key/count + UMI errors + complete observed first-read bases and qualities.
+    # The positive-evidence prefix remains 32 bases; memory includes the guard.
     per_barcode = a["table_bytes"] / a["barcodes"]
     print(f"  {per_barcode:.0f} B per distinct barcode")
-    assert per_barcode <= 16 + 4 * UMI_LEN + 2 * 32
+    assert a["payload_primary_width"] == 32
+    assert a["payload_observed_width"] == PAYLOAD
+    assert per_barcode == 16 + 4 * UMI_LEN + 2 * PAYLOAD
 
 
 def _peak_in_a_fresh_process(path, out, payload_width):

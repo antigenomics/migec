@@ -1033,7 +1033,7 @@ TEST_CASE("payload draft and its qualities remain atomic through spill and rotat
         std::filesystem::remove_all(dir);
         {
             UmiCounts counts(12);
-            counts.carry_evidence(4, false, true);
+            counts.carry_evidence(4, false, true, 2);
             if (spill) counts.enable_spill(dir.string(), 1024, 8);
             counts.add(umi(tag), 1, nullptr, "ACGT", "+5?I");
             for (const auto& value : background(5000, 12, 283))
@@ -1043,6 +1043,7 @@ TEST_CASE("payload draft and its qualities remain atomic through spill and rotat
                 size_t found = 0;
                 table.for_each_bucket([&](const auto& entries, const BarcodeEvidence& ev) {
                     CHECK(ev.payload_width == 4);
+                    CHECK(ev.payload_primary_width == 2);
                     CHECK(ev.payload_stride() == 8);
                     CHECK(ev.payload_has_quality);
                     for (size_t i = 0; i < entries.size(); ++i) {

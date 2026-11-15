@@ -92,7 +92,11 @@ constitute measured confidence. Zero-information observations are excluded.
 Clonality and residual diagnostics use the same observation interpretation.
 The positive payload likelihood/count gates remain historical: this is a bounded
 compatibility safeguard, not a calibrated posterior over all related templates.
-First-read representativeness remains a limitation. Cell-tagged correction retains
+Full observed read-pair context refutes a proposed waiver when sequence outside
+the noisy prefix supplies contradictory evidence; positive scoring retains its
+original requested prefix. The full guard costs an additional bounded input scan
+and larger evidence blocks under the existing spill budget. First-read
+representativeness remains a limitation. Cell-tagged correction retains
 its preceding observation model. No extra barcode group is certified as an
 independent molecule merely because a merge was refused.
 

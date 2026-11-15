@@ -57,14 +57,15 @@ struct PayloadComparison {
 // existing payload_error, not two copies of that floor. Unknown Phred bytes use
 // the documented historical floor, rather than being interpreted as Q93.
 inline PayloadComparison compare_payload(const std::vector<char>& data, int width, bool quality,
-                                  size_t a, size_t b, const CorrectionParams& params) {
+                                  size_t a, size_t b, const CorrectionParams& params, int comparison_width = 0) {
     PayloadComparison result;
     const size_t stride = static_cast<size_t>(width) * (quality ? 2 : 1);
+    const int compared = comparison_width > 0 ? std::min(width, comparison_width) : width;
     if (!quality || params.cell_length > 0) {
         // Historical constant-emission path: aggregate counts before logarithms.
         const auto emission = payload_emission(-1, -1, params);
         if (emission.weight <= 0.0) return result;
-        for (int position = 0; position < width; ++position) {
+        for (int position = 0; position < compared; ++position) {
             const char left = data[a * stride + static_cast<size_t>(position)];
             const char right = data[b * stride + static_cast<size_t>(position)];
             if (!left || !right || left == 'N' || right == 'N') continue;
@@ -79,7 +80,7 @@ inline PayloadComparison compare_payload(const std::vector<char>& data, int widt
         result.log_random = result.mismatches * std::log(0.75) + matches * std::log(0.25);
         return result;
     }
-    for (int position = 0; position < width; ++position) {
+    for (int position = 0; position < compared; ++position) {
         const size_t x = a * stride + static_cast<size_t>(position);
         const size_t y = b * stride + static_cast<size_t>(position);
         const char left = data[x], right = data[y];

@@ -679,6 +679,9 @@ PYBIND11_MODULE(_core, m) {
             d["molecules_corrected"] = st.molecules_corrected;
             d["estimated_error"] = st.estimated_error;
             d["payload_clonality"] = st.payload_clonality;
+            d["payload_primary_width"] = st.payload_primary_width;
+            d["payload_observed_width"] = st.payload_observed_width;
+            d["payload_mate1_span"] = st.payload_mate1_span;
             d["saturated"] = st.saturated;
             d["umi_length"] = st.umi_length;
             d["cell_length"] = st.cell_length;

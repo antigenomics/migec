@@ -135,7 +135,7 @@ double UmiComposition::expected_collisions(double n_molecules) const {
     return 0.5 * n_molecules * n_molecules * prod;
 }
 
-void UmiCounts::carry_evidence(int payload_width, bool quality, bool payload_quality) {
+void UmiCounts::carry_evidence(int payload_width, bool quality, bool payload_quality, int primary_width) {
     if (!buf_.empty() || !entries_.empty()) {
         throw MigecError("UmiCounts::carry_evidence: the table already holds barcodes -- the "
                          "evidence has to be carried from the first add, or the barcodes added "
@@ -143,6 +143,7 @@ void UmiCounts::carry_evidence(int payload_width, bool quality, bool payload_qua
     }
     if (payload_quality && payload_width > std::numeric_limits<int>::max() / 2)
         throw MigecError("payload base/quality stride exceeds supported width");
+    ev_primary_pw_ = std::clamp(primary_width, 0, std::max(0, payload_width));
     ev_payload_quality_ = payload_quality && payload_width > 0;
     ev_pw_ = std::max(0, payload_width) * (ev_payload_quality_ ? 2 : 1);
     ev_err_ = quality ? length_ : 0;
@@ -614,6 +615,7 @@ void UmiCounts::for_each_bucket(
             ev.payload.assign(pay_.begin(), pay_.end());
             ev.payload_width = payload_width();
             ev.payload_has_quality = ev_payload_quality_;
+            ev.payload_primary_width = ev_primary_pw_;
         }
         // A resident table hands the evidence over by value because the caller may hold it past
         // the call; it is one allocation on a path that runs once.
@@ -657,6 +659,7 @@ void UmiCounts::for_each_bucket(
         BarcodeEvidence ev;
         ev.payload_width = payload_width();
             ev.payload_has_quality = ev_payload_quality_;
+            ev.payload_primary_width = ev_primary_pw_;
         bucket.reserve(raw.size());
         if (E) ev.position_error.reserve(raw.size() * E);
         if (P) ev.payload.reserve(raw.size() * P);
@@ -687,7 +690,7 @@ void UmiCounts::for_each_bucket(
 
 UmiCounts UmiCounts::rotated_copy(int r, const std::string& directory) const {
     UmiCounts out(length_, buffer_limit_);
-    if (carries_evidence()) out.carry_evidence(payload_width(), ev_err_ > 0, ev_payload_quality_);
+    if (carries_evidence()) out.carry_evidence(payload_width(), ev_err_ > 0, ev_payload_quality_, ev_primary_pw_);
     if (spill_budget_) out.enable_spill(directory, spill_budget_, spill_bits_);
     const size_t E = static_cast<size_t>(ev_err_);
     std::vector<float> sums(E);
@@ -1002,7 +1005,7 @@ namespace {
 // runs of the pipeline agree.
 
 double payload_agreement(const std::vector<char>& payload, int pw,
-                         const CorrectionParams& params, bool quality = false) {
+                         const CorrectionParams& params, bool quality = false, int primary_width = 0) {
     if (pw <= 0 || params.payload_null_samples <= 0) return 1.0;
     const size_t n_entries = payload.size() / (static_cast<size_t>(pw) * (quality ? 2 : 1));
     if (n_entries < 3) return 1.0;
@@ -1013,7 +1016,7 @@ double payload_agreement(const std::vector<char>& payload, int pw,
         const size_t a = (sample * 7919) % n_entries;
         const size_t b = (a + stride * (1 + sample % 97)) % n_entries;
         if (a == b) continue;
-        const auto comparison = detail::compare_payload(payload, pw, quality, a, b, params);
+        const auto comparison = detail::compare_payload(payload, pw, quality, a, b, params, primary_width);
         if (comparison.comparable < 8) continue;
         ++tried;
         same += params.cell_length > 0
@@ -1038,14 +1041,17 @@ double payload_agreement(const std::vector<char>& payload, int pw,
 // many times it doubled. Under kMax barcodes that is all of them.
 class PayloadReservoir {
 public:
-    explicit PayloadReservoir(int width, bool quality = false)
-        : pw_(width * (quality ? 2 : 1)), bases_(width), quality_(quality) {}
+    explicit PayloadReservoir(int width, bool quality = false, int primary_width = 0)
+        : pw_((primary_width > 0 ? std::min(primary_width, width) : width) * (quality ? 2 : 1)),
+          bases_(primary_width > 0 ? std::min(primary_width, width) : width),
+          input_bases_(width), quality_(quality) {}
 
     void add(const char* payload) {
         if (pw_ <= 0) return;
         const uint64_t idx = seen_++;
         if (idx % stride_) return;
-        kept_.insert(kept_.end(), payload, payload + pw_);
+        kept_.insert(kept_.end(), payload, payload + bases_);
+        if (quality_) kept_.insert(kept_.end(), payload + input_bases_, payload + input_bases_ + bases_);
         if (kept_.size() / static_cast<size_t>(pw_) < kMax) return;
         // Half of what is held is at an index divisible by twice the stride: keep those.
         const size_t w = static_cast<size_t>(pw_);
@@ -1066,6 +1072,7 @@ private:
     static constexpr size_t kMax = 8192;  // 256 kB at a 32 nt draft
     int pw_;
     int bases_;
+    int input_bases_;
     bool quality_;
     uint64_t seen_ = 0, stride_ = 1;
     std::vector<char> kept_;
@@ -1162,7 +1169,7 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         // measures it over the whole partition and passes it down.
         clonality = params.library_clonality;
     } else if (pw > 0 && n_entries > 2) {
-        clonality = payload_agreement(evidence.payload, pw, params, evidence.payload_has_quality);
+        clonality = payload_agreement(evidence.payload, pw, params, evidence.payload_has_quality, evidence.payload_primary_width);
     }
     res.payload_clonality = pw > 0 ? clonality : 0.0;
 
@@ -1224,7 +1231,7 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         bool payload_decisive = false, payload_refutes = false;
         if (pw > 0) {
             const auto comparison = detail::compare_payload(evidence.payload, pw,
-                evidence.payload_has_quality, child_idx, cand_idx, params);
+                evidence.payload_has_quality, child_idx, cand_idx, params, evidence.payload_primary_width);
             if (comparison.comparable >= 8) {
                 const double log_identical = std::log(clonality) + comparison.log_same;
                 const double log_random = std::log1p(-clonality) + comparison.log_random;
@@ -1239,6 +1246,17 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
                     comparison.latent_fraction() > params.payload_same_fraction &&
                     comparison.log_same - comparison.log_related < std::log(0.1);
                 payload_refutes = incompatible || lr_payload < 0.1;
+                if (!payload_refutes && params.cell_length == 0 && evidence.payload_has_quality &&
+                    evidence.payload_primary_width > 0 && pw > evidence.payload_primary_width &&
+                    comparison.latent_fraction() > params.payload_same_fraction) {
+                    // Waiving a noisy-prefix veto must not ignore contradictory observed
+                    // sequence outside that window, including the other physical mate.
+                    const auto full = detail::compare_payload(evidence.payload, pw, true,
+                        child_idx, cand_idx, params);
+                    payload_refutes = full.comparable >= 8 &&
+                        full.latent_fraction() > params.payload_same_fraction &&
+                        full.log_same - full.log_related < std::log(0.1);
+                }
                 payload_decisive = !payload_refutes && lr_payload > 10.0;
             }
         }
@@ -1418,7 +1436,7 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
     if (3 * pb > L) {
         const auto directory = (std::filesystem::path(counts.spill_dir()) / "three_prefixes").string();
         UmiCounts narrower(L);
-        if (counts.carries_evidence()) narrower.carry_evidence(counts.payload_width(), true, counts.payload_has_quality());
+        if (counts.carries_evidence()) narrower.carry_evidence(counts.payload_width(), true, counts.payload_has_quality(), counts.payload_primary_width());
         const int bits = std::min(counts.spill_bits(), 2 * (L / 3));
         if (bits > 0) narrower.enable_spill(directory, counts.spill_budget(), bits);
         // With L < 3 the complete alphabet has at most 16 keys and is bounded without spilling.
@@ -1455,12 +1473,12 @@ CorrectionResult correct_spilled(const UmiCounts& counts, const CorrectionParams
         (std::filesystem::path(counts.spill_dir()) / "rotated").string();
     UmiCounts rotated(L);
     if (counts.carries_evidence()) {
-        rotated.carry_evidence(counts.payload_width(), true, counts.payload_has_quality());
+        rotated.carry_evidence(counts.payload_width(), true, counts.payload_has_quality(), counts.payload_primary_width());
     }
     rotated.enable_spill(rot_dir, counts.spill_budget(), counts.spill_bits());
     const size_t E = static_cast<size_t>(L);
     const size_t P = counts.payload_stride();
-    PayloadReservoir reservoir(counts.payload_width(), counts.payload_has_quality());
+    PayloadReservoir reservoir(counts.payload_width(), counts.payload_has_quality(), counts.payload_primary_width());
     std::vector<float> sums(E);
 
     counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
@@ -1694,7 +1712,7 @@ CorrectionResult correct_umis(const UmiCounts& counts, const CorrectionParams& p
         counts.for_each_bucket([&](const std::vector<UmiCounts::Entry>& bucket,
                                    const BarcodeEvidence& ev) {
             if (ev.has_payload()) {
-                PayloadReservoir reservoir(ev.payload_width, ev.payload_has_quality);
+                PayloadReservoir reservoir(ev.payload_width, ev.payload_has_quality, ev.payload_primary_width);
                 for (size_t i = 0; i < bucket.size(); ++i) {
                     reservoir.add(ev.payload.data() +
                                   i * ev.payload_stride());

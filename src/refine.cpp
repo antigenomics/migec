@@ -58,7 +58,7 @@ void bin(std::vector<uint64_t>& histogram, uint64_t n) {
 struct SourceRead {
     std::string_view umi, cell;   // the barcodes
     std::string_view qx, cy;      // ...and their own quality, empty when the input has none
-    std::string_view seq, qual;
+    std::string_view seq, qual, seq2, qual2;
     std::string_view name, comment;  // FASTQ only; a `.mig` record carries no read name
     uint64_t src_index = 0;
     uint16_t flags = 0;
@@ -103,6 +103,8 @@ void for_each_read(const RefineRequest& request, const std::function<bool(const 
             sr.cy = rec.qual_cell;
             sr.seq = rec.seq1;
             sr.qual = rec.qual1;
+            sr.seq2 = rec.seq2;
+            sr.qual2 = rec.qual2;
             sr.name = {};
             sr.comment = {};
             sr.src_index = rec.src_index;
@@ -258,11 +260,33 @@ RefineStats refine(const RefineRequest& request) {
     // the input; carried with the counter it is keyed, so it is filled as the reads arrive and it
     // survives the range partition.
     UmiCounts counts(0);
-    const int pw = request.use_payload ? request.payload_width : 0;
+    const int primary_width = request.use_payload ? std::max(0, request.payload_width) : 0;
+    size_t guard_r1 = static_cast<size_t>(primary_width), guard_r2 = 0;
+    if (primary_width > 0 && request.use_quality) {
+        // Establish fixed coordinate slots from the actual admitted inputs, independent
+        // of first-record length. Re-read inputs; do not retain the raw read collection.
+        uint64_t seen = 0;
+        IntakeLimit limit = request.limit;
+        for_each_read(request, [&](const SourceRead& r) {
+            ++seen;
+            if (r.umi.empty()) return true;
+            if (limit.active() && !limit.admit(seen, pack_barcode(r.umi))) return false;
+            if (r.cell.empty()) {
+                guard_r1 = std::max(guard_r1, r.seq.size());
+                guard_r2 = std::max(guard_r2, r.seq2.size());
+            }
+            return true;
+        });
+    }
+    if (guard_r1 > static_cast<size_t>(std::numeric_limits<int>::max() / 2) ||
+        guard_r2 > static_cast<size_t>(std::numeric_limits<int>::max() / 2) - guard_r1)
+        throw MigecError("observed payload guard exceeds supported paired stride");
+    int pw = primary_width;
     {
         bool started = false;
         IntakeLimit limit = request.limit;
         std::vector<float> pos_err;  // scratch, one read's barcode quality
+        std::string payload_draft, payload_quality;
         for_each_read(request, [&](const SourceRead& r) {
             ++stats.reads;
             const std::string_view umi = r.umi;
@@ -288,7 +312,12 @@ RefineStats refine(const RefineRequest& request) {
                         std::to_string(kMaxBarcodeLen) + ")");
                 }
                 counts = UmiCounts(stats.umi_length + stats.cell_length);
-                counts.carry_evidence(pw, request.use_quality, pw > 0 && stats.cell_length == 0 && request.use_quality);
+                const bool guard = primary_width > 0 && stats.cell_length == 0 && request.use_quality;
+                if (guard) pw = static_cast<int>(guard_r1 + guard_r2);
+                counts.carry_evidence(pw, request.use_quality, guard, guard ? primary_width : 0);
+                stats.payload_primary_width = primary_width;
+                stats.payload_observed_width = pw;
+                stats.payload_mate1_span = guard ? static_cast<int>(guard_r1) : pw;
                 // Never: the partitioned prefix has to fit into the barcode TWICE, because the
                 // second correction pass rotates the key past it and the two prefixes must be
                 // disjoint. A 9 nt barcode has room for 7 bits, not 8, so the request is clamped
@@ -330,11 +359,21 @@ RefineStats refine(const RefineRequest& request) {
                                       : 0.0f;
                 }
             }
+            if (counts.payload_has_quality()) {
+                payload_draft.assign(static_cast<size_t>(pw), 0);
+                payload_quality.assign(static_cast<size_t>(pw), 0);
+                std::copy_n(r.seq.begin(), std::min(r.seq.size(), guard_r1), payload_draft.begin());
+                std::copy_n(r.qual.begin(), std::min(r.qual.size(), guard_r1), payload_quality.begin());
+                std::copy_n(r.seq2.begin(), std::min(r.seq2.size(), guard_r2),
+                            payload_draft.begin() + static_cast<long>(guard_r1));
+                std::copy_n(r.qual2.begin(), std::min(r.qual2.size(), guard_r2),
+                            payload_quality.begin() + static_cast<long>(guard_r1));
+            }
             counts.add(key, 1, request.use_quality ? pos_err.data() : nullptr,
-                       pw > 0 ? r.seq.substr(0, std::min<size_t>(r.seq.size(),
-                                                                 static_cast<size_t>(pw)))
-                              : std::string_view(),
-                       pw > 0 ? r.qual.substr(0, std::min<size_t>(r.qual.size(), static_cast<size_t>(pw))) : std::string_view());
+                       counts.payload_has_quality() ? std::string_view(payload_draft)
+                           : (pw > 0 ? r.seq.substr(0, std::min<size_t>(r.seq.size(), static_cast<size_t>(pw)))
+                                     : std::string_view()),
+                       counts.payload_has_quality() ? std::string_view(payload_quality) : std::string_view());
             return true;
         });
     }
@@ -696,8 +735,8 @@ RefineStats refine(const RefineRequest& request) {
                 bin_reads[b] += own;
                 if (root != key) ++bin_merged[b];
                 if (pw > 0 && ev.has_payload()) {
-                    if (bin_comp[b].empty()) bin_comp[b].assign(static_cast<size_t>(pw), {});
-                    for (int j = 0; j < pw; ++j) {
+                    if (bin_comp[b].empty()) bin_comp[b].assign(static_cast<size_t>(primary_width), {});
+                    for (int j = 0; j < primary_width; ++j) {
                         const uint8_t code = base_code(
                             ev.payload[i * ev.payload_stride() + static_cast<size_t>(j)]);
                         if (code != kInvalidBase) ++bin_comp[b][static_cast<size_t>(j)][code];
@@ -1089,7 +1128,7 @@ RefineStats refine(const RefineRequest& request) {
                             if (pw > 0 && ev.has_payload() &&
                                 correction.payload_clonality < 0.5 && theirs >= mine) {
                                 const auto comparison = detail::compare_payload(ev.payload, pw,
-                                    ev.payload_has_quality, i, at, correction_params);
+                                    ev.payload_has_quality, i, at, correction_params, ev.payload_primary_width);
                                 const bool agrees = stats.cell_length > 0
                                     ? comparison.mismatches * 20 <= comparison.comparable
                                     : comparison.latent_fraction() <= correction_params.payload_same_fraction;

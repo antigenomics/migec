@@ -170,6 +170,7 @@ struct BarcodeEvidence {
     // read, and it is the only thing that does when both barcodes are singletons.
     std::vector<char> payload;
     int payload_width = 0;  // number of bases, never the storage stride
+    int payload_primary_width = 0;  // zero means all bases; otherwise positive-evidence prefix
     bool payload_has_quality = false;
     size_t payload_stride() const {
         return static_cast<size_t>(payload_width) * (payload_has_quality ? 2 : 1);
@@ -223,11 +224,12 @@ public:
     // with the evidence that works at 1-3 reads/UMI, which is the whole regime the evidence exists
     // for. Carrying it here is what lets `refine` correct in buckets at all. It costs nothing when
     // it is not asked for: `checkout` leaves the stride at zero and every branch below is skipped.
-    void carry_evidence(int payload_width, bool quality, bool payload_quality = false);
+    void carry_evidence(int payload_width, bool quality, bool payload_quality = false, int primary_width = 0);
     bool carries_evidence() const { return ev_pw_ > 0 || ev_err_ > 0; }
     int payload_width() const { return ev_pw_ / (ev_payload_quality_ ? 2 : 1); }
     size_t payload_stride() const { return static_cast<size_t>(ev_pw_); }
     bool payload_has_quality() const { return ev_payload_quality_; }
+    int payload_primary_width() const { return ev_primary_pw_; }
 
     // One read's contribution. `pos_err` is `length()` floats (null means "no reported quality",
     // which accumulates zero and is read downstream as "fall back to the global rate"); `payload`
@@ -367,6 +369,7 @@ private:
     // Carried evidence, in lockstep with buf_/entries_: `ev_err_` floats then `ev_pw_` chars per
     // entry. Both empty and both strides zero on every counter that does not ask for them.
     bool ev_payload_quality_ = false;  // base+Phred blocks are selected/spilled atomically
+    int ev_primary_pw_ = 0;
     int ev_pw_ = 0;
     int ev_err_ = 0;
     mutable std::vector<float> buf_err_, err_;

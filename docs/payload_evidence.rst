@@ -54,3 +54,29 @@ qualification must separately report physical reads, correction assignments,
 molecule groups and consensus records. More groups are not proof of more
 independent molecules; supported earlier corrections and template separations
 must both be traced.
+
+Full observed context before waiving a prefix veto
+--------------------------------------------------
+
+The positive-evidence/clonality window remains the requested payload prefix
+(32 bases by default). For quality-enabled bulk input, an additional bounded
+input scan establishes fixed mate-1 and mate-2 coordinate slots from admitted
+read lengths. The first read pair for each original UMI supplies those slots;
+missing sequence is zero-padded and excluded, never reconstructed.
+
+If a noisy prefix has latent disagreement above the compatibility boundary but
+insufficient likelihood evidence to veto, the complete observed pair is checked
+before waiving that veto. Refutation requires the same informative-base minimum,
+latent-fraction boundary and same/related likelihood ratio. Extra context is
+negative evidence only: it does not lift the positive count gates or strengthen
+the original prefix likelihood. This retains confidently different sequence
+outside a poor-quality prefix without certifying every read error as a molecule.
+
+This safeguard uses the co-terminal coordinate model of the barcode payload;
+it does not infer alignment across missing sequence or realign indels. Two mates
+are observations of one physical pair, not two molecule counts. First-read
+representativeness and model calibration remain limitations. The native report
+records ``payload_primary_width``, ``payload_observed_width`` and
+``payload_mate1_span`` in bases. Memory accounting includes the full paired
+sequence/quality blocks, and the existing table budget still controls spilling.
+The clonality reservoir retains only the positive prefix and matching qualities.
