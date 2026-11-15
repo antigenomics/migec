@@ -56,7 +56,7 @@ independent molecules; supported earlier corrections and template separations
 must both be traced.
 
 Full observed context for the prefix compatibility test
---------------------------------------------------
+-------------------------------------------------------
 
 The positive-evidence/clonality window remains the requested payload prefix
 (32 bases by default). For quality-enabled bulk input, an additional bounded
