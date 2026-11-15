@@ -546,11 +546,17 @@ model has to use the evidence that survives at one read:
 - **An external merge sort** — range partitioning plus an in-RAM sort per bucket covers it, and
   `nbuckets == 1` is the in-memory case, so there is one code path rather than two.
 
-## Review follow-up: streamed candidate scoring
+## Completed: parallel streamed candidate scoring
 
-Copilot review of release PR #81 flagged candidate acceptance inside seqtree's serialized
-consumer callback (`src/umi_stats.cpp`, `consider()` invocation). This may limit parallel
-scaling even though candidate retrieval is threaded. This is a review hypothesis, not a
-measured regression. Profile the existing batch path before changing it; retain bounded
-candidate storage, deterministic decisions, cell isolation and thread-equivalent output.
-See https://github.com/antigenomics/migec/pull/81#discussion_r4577283101.
+The release PR #81 review identified acceptance scoring inside seqtree's serialized
+consumer callback. Native correction now uses seqtree's reusable Searcher API in one
+coarse-block worker pool: complete query candidates and their scoring share one CPU budget,
+worker-local scratch stays bounded, and only per-query decisions survive. Serial application
+and canonical ties are unchanged; distance-one diagnostics reduce worker-local counts.
+
+Fixed synthetic native fixtures (three-run medians, same host, eight threads): dense
+20,000 draws over 8-nt UMIs, 80-base payloads: 0.114067 s before, 0.0424082 s after
+(2.69x); serial 0.254751 s before, 0.252055 s after. Sparse 100,000 draws over 12-nt
+UMIs: 0.243562 s before, 0.247453 s after. Output hashes match at both thread counts;
+these timings are fixture-specific, not a universal throughput claim. Native tests and
+335 Python unit/synthetic tests pass (12 optional-tool skips).

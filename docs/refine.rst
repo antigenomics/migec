@@ -360,3 +360,11 @@ counts, means correction is merging real molecules.
 A merged read keeps its original barcode in ``OX:Z:``. A correction nobody can audit is a
 correction nobody can check — and merges chain, so a read can end up two substitutions from where
 it started while every individual step was one.
+
+Parallel candidate scoring
+--------------------------
+
+Native seqtree searches and candidate acceptance share one bounded worker pool.
+Each query owns its decision and each worker owns its search scratch; the final merge
+application remains serial to preserve deterministic chained corrections. Thread budgets
+do not change the correction model, quality gates or cell-tagged radius.
