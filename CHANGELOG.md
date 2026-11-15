@@ -4,6 +4,17 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## 2.7.2 — 2026-11-15
+
+- Adopt the ISALGO LAB Academic and Non-Commercial Research License for MIGEC;
+  third-party seqtree retains its GPL-3.0-or-later terms.
+- Run UMI candidate search and scoring in one bounded native worker pool, preserving
+  serial merge application, deterministic decisions and read support. Add an exhaustive
+  candidate-completeness oracle. Dense synthetic scoring improves; sparse timings remain
+  comparable, as detailed in the roadmap.
+- Refresh the illustrated README, Diátaxis quickstart, interactive terminal branding and
+  repository skills. Redirected pipeline output remains free of the splash.
+
 ## 2.7.1 — 2026-11-15
 
 - Retain covered tails when anchored reads within a UMI group have different lengths. Previously
