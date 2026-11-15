@@ -338,3 +338,22 @@ TEST_CASE("unmerged mate consensuses retain covered tails independently") {
         CHECK(c.reads == 2);
     }
 }
+
+TEST_CASE("collision branches retain their own variable-length tails") {
+    ConsensusParams p;
+    const std::string major = "ACGTTGCAAGTCGATCGTACGATGCTAGCTACGGTACCTG";
+    std::string minor = major;
+    minor[10] = 'A';
+    minor[20] = 'C';
+    std::vector<std::string> seqs;
+    for (int i = 0; i < 20; ++i) {
+        seqs.push_back(major.substr(0, major.size() - (i % 2)));
+        seqs.push_back(minor.substr(0, minor.size() - (i % 2)));
+    }
+    const auto out = assemble_group(group(seqs), p);
+    REQUIRE(out.size() == 2);
+    CHECK((out[0].seq == major || out[1].seq == major));
+    CHECK((out[0].seq == minor || out[1].seq == minor));
+    CHECK(out[0].reads == 20);
+    CHECK(out[1].reads == 20);
+}

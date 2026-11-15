@@ -4,7 +4,7 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
-## Unreleased
+## 2.7.1 — 2026-11-15
 
 - Retain covered tails when anchored reads within a UMI group have different lengths. Previously
   the shortest read trimmed every consensus in that group. Each base still uses only covering
