@@ -4,6 +4,15 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+- Account for matching first-read payload Phred qualities before the bulk compatibility
+  veto. Preserve paired sequence/quality provenance through bounded spill and rotation,
+  exclude zero-information emissions, and use the same latent-disagreement interpretation
+  for clonality and residual diagnostics. Cell-tagged comparisons retain their prior model.
+  Qualification against exact released baselines is pending; additional groups are not
+  certified independent molecules. See the payload evidence explanation for assumptions.
+
 ## 2.7.3 — 2026-11-15
 
 - Reject bulk UMI merge candidates whose comparable payload drafts exceed the existing

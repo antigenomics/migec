@@ -79,15 +79,24 @@ says so rather than the evidence being quietly over-trusted. Agreement also **li
 gates**, which is what makes a singleton merge possible at all; disagreement **refuses** a merge
 the count ratio would have made.
 
-For bulk UMI correction, with at least eight comparable payload bases, disagreement above the existing
-``payload_same_fraction`` (5% by default) vetoes a candidate merge. This uses the
-same definition of payload compatibility as the clonality estimate. A likelihood
-ratio against random DNA alone can favor a related but distinct template even
-when its disagreement is incompatible with that definition. Identical payloads
-can still lift the count gates. No-payload and shorter-payload cases retain their
-existing behavior, as does the cell-tagged correction model. This stricter acceptance rule can retain extra error-child
-barcodes when their draft payloads are noisy; molecule-count effects need matched
-validation before replacing an accepted analysis.
+Bulk payload compatibility uses the **first read's draft**, not a family consensus.
+Its matching base qualities travel with that draft through stable compaction,
+spill partitions and rotations. At least eight informative bases are required.
+A bulk veto requires both inferred template disagreement above the existing
+``payload_same_fraction`` (5%) boundary and a same-template/related-template
+likelihood ratio below the existing refutation bound (0.1). Read errors therefore
+do not automatically become template differences. Unknown payload qualities fall
+back to the historical ``payload_error`` pair-disagreement floor; they do not
+constitute measured confidence. Zero-information observations are excluded.
+
+Clonality and residual diagnostics use the same observation interpretation.
+The positive payload likelihood/count gates remain historical: this is a bounded
+compatibility safeguard, not a calibrated posterior over all related templates.
+First-read representativeness remains a limitation. Cell-tagged correction retains
+its preceding observation model. No extra barcode group is certified as an
+independent molecule merely because a merge was refused.
+
+See :doc:`payload_evidence` for the equations and storage invariants.
 
 .. note::
 

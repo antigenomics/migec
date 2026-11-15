@@ -1023,3 +1023,58 @@ TEST_CASE("bulk payload compatibility respects evidence boundaries and preserves
         }
     }
 }
+
+TEST_CASE("payload draft and its qualities remain atomic through spill and rotation") {
+    const std::string tag = "ACGTACGTACGT";
+    for (bool spill : {false, true}) {
+        const auto dir = std::filesystem::temp_directory_path() /
+            (spill ? "migec_payload_quality_spill" : "migec_payload_quality_resident");
+        std::filesystem::remove_all(dir);
+        {
+            UmiCounts counts(12);
+            counts.carry_evidence(4, false, true);
+            if (spill) counts.enable_spill(dir.string(), 1024, 8);
+            counts.add(umi(tag), 1, nullptr, "ACGT", "+5?I");
+            for (const auto& value : background(5000, 12, 283))
+                counts.add(umi(value), 1, nullptr, "TTTT", "IIII");
+            counts.add(umi(tag), 1, nullptr, "CCCC", "!!!!");
+            auto verify = [&](const UmiCounts& table, uint64_t wanted) {
+                size_t found = 0;
+                table.for_each_bucket([&](const auto& entries, const BarcodeEvidence& ev) {
+                    CHECK(ev.payload_width == 4);
+                    CHECK(ev.payload_stride() == 8);
+                    CHECK(ev.payload_has_quality);
+                    for (size_t i = 0; i < entries.size(); ++i) {
+                        if (entries[i].key != wanted) continue;
+                        ++found;
+                        CHECK(entries[i].count == 2);
+                        const char* pair = ev.payload.data() + i * ev.payload_stride();
+                        CHECK(std::string(pair, 4) == "ACGT");
+                        CHECK(std::string(pair + 4, 4) == "+5?I");
+                    }
+                });
+                CHECK(found == 1);
+            };
+            verify(counts, umi(tag));
+            auto rotated = counts.rotated_copy(3, (dir / "quality_rotation").string());
+            verify(rotated, rotate_barcode(umi(tag), 12, 3));
+        }
+        std::filesystem::remove_all(dir);
+    }
+}
+
+TEST_CASE("uninformative payload qualities do not inflate clonality") {
+    UmiCounts counts(12);
+    for (const auto& tag : {"AAAAAAAAAAAA", "CCCCCCCCCCCC", "GGGGGGGGGGGG"})
+        counts.add(umi(tag), 1);
+    BarcodeEvidence ev;
+    ev.payload_width = 32;
+    ev.payload_has_quality = true;
+    for (int entry = 0; entry < 3; ++entry) {
+        ev.payload.insert(ev.payload.end(), 32, entry == 0 ? 'A' : 'C');
+        ev.payload.insert(ev.payload.end(), 32, entry == 2 ? '!' : 'I');
+    }
+    const auto result = correct_umis(counts, {}, ev);
+    CHECK(result.payload_clonality < 0.5);
+    CHECK(result.merged == 0);
+}

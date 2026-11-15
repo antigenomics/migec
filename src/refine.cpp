@@ -15,6 +15,7 @@
 #include "migec/resource.hpp"
 #include "migec/types.hpp"
 #include "barcode_search.hpp"
+#include "payload_evidence.hpp"
 
 namespace migec {
 
@@ -287,7 +288,7 @@ RefineStats refine(const RefineRequest& request) {
                         std::to_string(kMaxBarcodeLen) + ")");
                 }
                 counts = UmiCounts(stats.umi_length + stats.cell_length);
-                counts.carry_evidence(pw, request.use_quality);
+                counts.carry_evidence(pw, request.use_quality, pw > 0 && stats.cell_length == 0 && request.use_quality);
                 // Never: the partitioned prefix has to fit into the barcode TWICE, because the
                 // second correction pass rotates the key past it and the two prefixes must be
                 // disjoint. A 9 nt barcode has room for 7 bits, not 8, so the request is clamped
@@ -332,7 +333,8 @@ RefineStats refine(const RefineRequest& request) {
             counts.add(key, 1, request.use_quality ? pos_err.data() : nullptr,
                        pw > 0 ? r.seq.substr(0, std::min<size_t>(r.seq.size(),
                                                                  static_cast<size_t>(pw)))
-                              : std::string_view());
+                              : std::string_view(),
+                       pw > 0 ? r.qual.substr(0, std::min<size_t>(r.qual.size(), static_cast<size_t>(pw))) : std::string_view());
             return true;
         });
     }
@@ -349,7 +351,7 @@ RefineStats refine(const RefineRequest& request) {
          (request.use_quality
               ? sizeof(float) * static_cast<size_t>(stats.umi_length + stats.cell_length)
               : 0) +
-         static_cast<size_t>(pw));
+         counts.payload_stride());
     // ...and what is actually held while it runs, which is the budget rather than the library once
     // the partition fires. The pair is the point: one is what it would cost, the other what it did.
     stats.table_resident_bytes = counts.memory_bytes();
@@ -697,7 +699,7 @@ RefineStats refine(const RefineRequest& request) {
                     if (bin_comp[b].empty()) bin_comp[b].assign(static_cast<size_t>(pw), {});
                     for (int j = 0; j < pw; ++j) {
                         const uint8_t code = base_code(
-                            ev.payload[i * static_cast<size_t>(pw) + static_cast<size_t>(j)]);
+                            ev.payload[i * ev.payload_stride() + static_cast<size_t>(j)]);
                         if (code != kInvalidBase) ++bin_comp[b][static_cast<size_t>(j)][code];
                     }
                 }
@@ -1086,17 +1088,12 @@ RefineStats refine(const RefineRequest& request) {
                             // estimate has to as well.
                             if (pw > 0 && ev.has_payload() &&
                                 correction.payload_clonality < 0.5 && theirs >= mine) {
-                                int mism = 0, cmp = 0;
-                                for (int k = 0; k < pw; ++k) {
-                                    const char x = ev.payload[i * static_cast<size_t>(pw) +
-                                                              static_cast<size_t>(k)];
-                                    const char y = ev.payload[at * static_cast<size_t>(pw) +
-                                                              static_cast<size_t>(k)];
-                                    if (!x || !y || x == 'N' || y == 'N') continue;
-                                    ++cmp;
-                                    mism += x != y;
-                                }
-                                if (cmp >= 8 && mism * 20 <= cmp) {
+                                const auto comparison = detail::compare_payload(ev.payload, pw,
+                                    ev.payload_has_quality, i, at, correction_params);
+                                const bool agrees = stats.cell_length > 0
+                                    ? comparison.mismatches * 20 <= comparison.comparable
+                                    : comparison.latent_fraction() <= correction_params.payload_same_fraction;
+                                if (comparison.comparable >= 8 && agrees) {
                                     looks_like_a_child = true;
                                     break;
                                 }
