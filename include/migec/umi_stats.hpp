@@ -399,9 +399,10 @@ struct CorrectionParams {
     // Per-base disagreement expected between two draft consensuses of the SAME molecule. Two
     // reads each carrying error e disagree at ~2e.
     double payload_error = 2e-3;
-    // A payload pair is "the same sequence" below this mismatch fraction. Used only to measure
-    // how often two *unrelated* barcodes carry the same sequence anyway -- clonality -- which is
-    // what decides how much payload agreement is worth.
+    // A payload pair is "the same sequence" at or below this mismatch fraction. This defines
+    // clonality and, in bulk with at least eight comparable bases, vetoes incompatible merges.
+    // Related distinct templates must not be mistaken for one molecule merely because the
+    // random-DNA alternative fits even worse than the same-molecule model.
     double payload_same_fraction = 0.05;
     // Random barcode pairs sampled to measure that. 0 disables payload evidence.
     int payload_null_samples = 20000;

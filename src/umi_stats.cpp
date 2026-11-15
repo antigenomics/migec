@@ -1232,8 +1232,13 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
                     std::log(clonality * std::exp(ll_same) +
                              (1.0 - clonality) * std::exp(ll_diff) + 1e-300);
                 lr_payload = std::exp(std::clamp(ll_same - ll_ind, -60.0, 60.0));
-                payload_decisive = lr_payload > 10.0;
-                payload_refutes = lr_payload < 0.1;
+                // The independent model mixes identical templates with random DNA. Related
+                // templates can therefore favor `same` even when their observed disagreement
+                // exceeds the criterion used to define same-payload pairs. Do not let that
+                // misspecified background license a merge or lift the count gates.
+                payload_refutes = (params.cell_length == 0 && static_cast<double>(mism) >
+                                      params.payload_same_fraction * cmp) || lr_payload < 0.1;
+                payload_decisive = !payload_refutes && lr_payload > 10.0;
             }
         }
         // A payload that disagrees is not this molecule, whatever the counts say.

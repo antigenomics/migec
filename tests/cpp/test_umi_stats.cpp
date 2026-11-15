@@ -968,3 +968,58 @@ TEST_CASE("candidate scoring visits complete queries with bounded worker scratch
     }
     CHECK_THROWS_AS(search.visit_queries(3, 1, [](size_t, const auto&, int) {}), MigecError);
 }
+
+TEST_CASE("related distinct payloads cannot license a near-balanced UMI merge") {
+    UmiCounts counts(12);
+    const std::string parent = "AAAACCCCGGGG", child = "AAAACCCCGGGT";
+    counts.add(umi(parent), 12);
+    counts.add(umi(child), 11);
+    for (const auto& barcode : background(3000, 12, 1911)) counts.add(umi(barcode), 1);
+    BarcodeEvidence evidence = make_evidence(counts, 12, 32, {parent, child});
+    const auto& entries = counts.entries();
+    const auto child_at = static_cast<size_t>(std::find_if(entries.begin(), entries.end(),
+        [&](const auto& e) { return e.key == umi(child); }) - entries.begin());
+    SUBCASE("a legitimate same-payload error child is still corrected") {
+        const auto result = correct_umis(counts, {}, evidence);
+        CHECK(entries[result.root[child_at]].key == umi(parent));
+    }
+    SUBCASE("five payload substitutions identify distinct known templates") {
+        for (size_t j = 0; j < 5; ++j) {
+            char& base = evidence.payload[child_at * 32 + j];
+            base = base == 'A' ? 'C' : 'A';
+        }
+        const auto result = correct_umis(counts, {}, evidence);
+        CHECK(result.root[child_at] == child_at);
+    }
+}
+
+TEST_CASE("bulk payload compatibility respects evidence boundaries and preserves cell correction") {
+    UmiCounts counts(12);
+    const std::string parent = "AAAACCCCGGGG", child = "AAAACCCCGGGT";
+    counts.add(umi(parent), 100);
+    counts.add(umi(child), 1);
+    for (const auto& barcode : background(3000, 12, 1911)) counts.add(umi(barcode), 1);
+    const auto& entries = counts.entries();
+    const auto child_at = static_cast<size_t>(std::find_if(entries.begin(), entries.end(),
+        [&](const auto& e) { return e.key == umi(child); }) - entries.begin());
+    struct Case { int comparable, mismatches, cell_length; bool merged; };
+    for (const auto test : {Case{32, 0, 0, true}, Case{20, 1, 0, true},
+                           Case{20, 2, 0, false}, Case{8, 1, 0, false},
+                           Case{7, 1, 0, true}, Case{32, 5, 1, true},
+                           Case{0, 0, 0, true}}) {
+        INFO(test.comparable, " comparable; ", test.mismatches, " mismatches; cell length ",
+             test.cell_length);
+        for (char masked : {'N', '\0'}) {
+            auto evidence = make_evidence(counts, 12, 32, {parent, child});
+            for (int j = 0; j < 32; ++j) {
+                char& base = evidence.payload[child_at * 32 + static_cast<size_t>(j)];
+                if (j >= test.comparable) base = masked;
+                else if (j < test.mismatches) base = base == 'A' ? 'C' : 'A';
+            }
+            CorrectionParams params;
+            params.cell_length = test.cell_length;
+            const auto result = correct_umis(counts, params, evidence);
+            CHECK((entries[result.root[child_at]].key == umi(parent)) == test.merged);
+        }
+    }
+}
