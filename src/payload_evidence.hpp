@@ -57,11 +57,11 @@ struct PayloadComparison {
 // existing payload_error, not two copies of that floor. Unknown Phred bytes use
 // the documented historical floor, rather than being interpreted as Q93.
 inline PayloadComparison compare_payload(const std::vector<char>& data, int width, bool quality,
-                                  size_t a, size_t b, const CorrectionParams& params, int comparison_width = 0) {
+                                  size_t a, size_t b, const CorrectionParams& params, int comparison_width = 0, bool quality_emissions = true) {
     PayloadComparison result;
     const size_t stride = static_cast<size_t>(width) * (quality ? 2 : 1);
     const int compared = comparison_width > 0 ? std::min(width, comparison_width) : width;
-    if (!quality || params.cell_length > 0) {
+    if (!quality || !quality_emissions || params.cell_length > 0) {
         // Historical constant-emission path: aggregate counts before logarithms.
         const auto emission = payload_emission(-1, -1, params);
         for (int position = 0; position < compared; ++position) {

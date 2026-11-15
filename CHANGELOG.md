@@ -8,8 +8,9 @@ prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their 
 
 - Account for matching first-read payload Phred qualities before the bulk compatibility
   veto. Preserve paired sequence/quality provenance through bounded spill and rotation,
-  exclude zero-information emissions, and use the same latent-disagreement interpretation
-  for clonality and residual diagnostics. Cell-tagged comparisons retain their prior model.
+  exclude zero-information emissions, and check complete observed pairs before vetoing
+  a noisy prefix. Preserve the released positive likelihood, clonality, residual diagnostics
+  and cell-tagged model.
   Qualification against exact released baselines is pending; additional groups are not
   certified independent molecules. See the payload evidence explanation for assumptions.
 

@@ -9,14 +9,14 @@ pytest.importorskip("migec._core", reason="the C++ extension is not built")
 from migec.refine import run
 
 
-@pytest.mark.parametrize("error_quality, corrected", [("+", True), ("I", False)])
+@pytest.mark.parametrize("error_quality, corrected, differences", [("+", True, 5), ("I", False, 5), ("!", True, 0)])
 def test_payload_compatibility_distinguishes_noise_from_template_evidence(
-    tmp_path, error_quality, corrected
+    tmp_path, error_quality, corrected, differences
 ):
     rng = random.Random(1911)
     parent, child = 'AAAACCCCGGGG', 'AAAACCCCGGGT'
     template = ''.join(rng.choice('ACGT') for _ in range(32))
-    damaged = ''.join(('C' if base == 'A' else 'A') if i < 5 else base
+    damaged = ''.join(('C' if base == 'A' else 'A') if i < differences else base
                       for i, base in enumerate(template))
     source = tmp_path / 'tagged.fq'
     with source.open('w') as out:

@@ -1065,7 +1065,7 @@ TEST_CASE("payload draft and its qualities remain atomic through spill and rotat
     }
 }
 
-TEST_CASE("uninformative payload qualities do not inflate clonality") {
+TEST_CASE("payload qualities preserve released positive clonality") {
     UmiCounts counts(12);
     for (const auto& tag : {"AAAAAAAAAAAA", "CCCCCCCCCCCC", "GGGGGGGGGGGG"})
         counts.add(umi(tag), 1);
@@ -1077,8 +1077,13 @@ TEST_CASE("uninformative payload qualities do not inflate clonality") {
         ev.payload.insert(ev.payload.end(), 32, entry == 2 ? '!' : 'I');
     }
     const auto result = correct_umis(counts, {}, ev);
-    CHECK(result.payload_clonality < 0.5);
+    CHECK(result.payload_clonality == 0.5);
     CHECK(result.merged == 0);
+    for (size_t i = 0; i < 3; ++i)
+        std::fill_n(ev.payload.begin() + i * 64 + 32, 32, 'I');
+    const auto confident = correct_umis(counts, {}, ev);
+    CHECK(confident.payload_clonality == result.payload_clonality);
+    CHECK(confident.root == result.root);
 }
 
 TEST_CASE("capped payload errors are uninformative with mixed or missing qualities") {

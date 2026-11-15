@@ -1016,7 +1016,7 @@ double payload_agreement(const std::vector<char>& payload, int pw,
         const size_t a = (sample * 7919) % n_entries;
         const size_t b = (a + stride * (1 + sample % 97)) % n_entries;
         if (a == b) continue;
-        const auto comparison = detail::compare_payload(payload, pw, quality, a, b, params, primary_width);
+        const auto comparison = detail::compare_payload(payload, pw, quality, a, b, params, primary_width, false);
         if (comparison.comparable < 8) continue;
         ++tried;
         same += params.cell_length > 0
@@ -1231,38 +1231,40 @@ CorrectionResult correct_entries(const std::vector<UmiCounts::Entry>& m, int L,
         bool payload_decisive = false, payload_refutes = false;
         if (pw > 0) {
             const auto comparison = detail::compare_payload(evidence.payload, pw,
-                evidence.payload_has_quality, child_idx, cand_idx, params, evidence.payload_primary_width);
+                evidence.payload_has_quality, child_idx, cand_idx, params,
+                evidence.payload_primary_width, false);
             if (comparison.comparable >= 8) {
-                const double log_identical = std::log(clonality) + comparison.log_same;
-                const double log_random = std::log1p(-clonality) + comparison.log_random;
-                const double largest = std::max(log_identical, log_random);
-                const double log_independent = largest + std::log(
-                    std::exp(log_identical - largest) + std::exp(log_random - largest));
-                lr_payload = std::exp(std::clamp(comparison.log_same - log_independent, -60.0, 60.0));
-                // A bounded compatibility safeguard, not a calibrated three-template
-                // posterior: retain the historical positive evidence path while requiring
-                // evidence beyond read error before vetoing a related bulk template.
-                const bool incompatible = params.cell_length == 0 &&
-                    (evidence.payload_has_quality
-                        ? (comparison.latent_fraction() > params.payload_same_fraction &&
-                           comparison.log_same - comparison.log_related < std::log(0.1))
-                        : (static_cast<double>(comparison.raw_mismatches) >
-                           params.payload_same_fraction * comparison.raw_comparable));
-                payload_refutes = incompatible || lr_payload < 0.1;
+                // Preserve the released positive likelihood and empirical clonality.
+                // Quality-aware emissions qualify the compatibility veto only.
+                const double log_same = log_binom_pmf(comparison.mismatches,
+                    comparison.comparable, params.payload_error);
+                const double log_diff = log_binom_pmf(comparison.mismatches,
+                    comparison.comparable, 0.75);
+                const double log_independent = std::log(clonality * std::exp(log_same) +
+                    (1.0 - clonality) * std::exp(log_diff) + 1e-300);
+                lr_payload = std::exp(std::clamp(log_same - log_independent, -60.0, 60.0));
+                payload_refutes = lr_payload < 0.1;
             }
-            if (params.cell_length == 0 && evidence.payload_has_quality &&
-                evidence.payload_primary_width > 0 && pw > evidence.payload_primary_width &&
-                comparison.raw_comparable >= 8 &&
+            if (!payload_refutes && params.cell_length == 0 && comparison.raw_comparable >= 8 &&
                 static_cast<double>(comparison.raw_mismatches) >
                     params.payload_same_fraction * comparison.raw_comparable) {
-                // Judge the original observed-prefix veto using all available context,
-                // even when the prefix alone refutes. A noisy local window must not
-                // override a compatible complete pair. Positive evidence stays local.
-                const auto full = detail::compare_payload(evidence.payload, pw, true,
-                    child_idx, cand_idx, params);
-                if (full.comparable >= 8)
-                    payload_refutes = full.latent_fraction() > params.payload_same_fraction &&
-                        full.log_same - full.log_related < std::log(0.1);
+                if (!evidence.payload_has_quality) {
+                    payload_refutes = true;  // retain the quality-disabled observed veto
+                } else {
+                    // Full context cannot increase positive evidence. Reject candidates
+                    // that cannot pass count gates before scanning their complete pair.
+                    if (c_par < c_child ||
+                        (lr_payload <= 10.0 &&
+                         (c_par <= c_child || static_cast<double>(c_child) >
+                             params.max_child_fraction * static_cast<double>(c_par))) ||
+                        (lr_payload > 10.0 && c_par == c_child && canonical(cand) > canonical(child)))
+                        return;
+                    const auto negative = detail::compare_payload(evidence.payload, pw, true,
+                        child_idx, cand_idx, params);
+                    payload_refutes = negative.comparable >= 8 &&
+                        negative.latent_fraction() > params.payload_same_fraction &&
+                        negative.log_same - negative.log_related < std::log(0.1);
+                }
             }
             payload_decisive = !payload_refutes && lr_payload > 10.0;
         }

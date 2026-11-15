@@ -32,9 +32,10 @@ contrast weights; a zero denominator supplies no template evidence.
 
 The historical positive-evidence identical/random-template mixture and count
 gates remain. This two-part rule is not a calibrated three-template posterior
-or an independent estimate of false-merge rate. Reservoir clonality and residual
-agreement use the same latent-fraction interpretation; cell-tagged comparisons
-retain their preceding fixed-emission and observed-fraction behavior.
+or an independent estimate of false-merge rate. The positive likelihood, reservoir
+clonality and residual agreement retain the released fixed-emission and observed-
+fraction behavior. Quality-aware emissions qualify the new bulk veto only;
+cell-tagged comparisons retain their preceding model.
 
 Storage and verification
 ------------------------

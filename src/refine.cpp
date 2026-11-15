@@ -1133,7 +1133,7 @@ RefineStats refine(const RefineRequest& request) {
                             if (pw > 0 && ev.has_payload() &&
                                 correction.payload_clonality < 0.5 && theirs >= mine) {
                                 const auto comparison = detail::compare_payload(ev.payload, pw,
-                                    ev.payload_has_quality, i, at, correction_params, ev.payload_primary_width);
+                                    ev.payload_has_quality, i, at, correction_params, ev.payload_primary_width, false);
                                 const bool agrees = stats.cell_length > 0
                                     ? comparison.mismatches * 20 <= comparison.comparable
                                     : comparison.latent_fraction() <= correction_params.payload_same_fraction;
