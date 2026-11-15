@@ -79,6 +79,16 @@ says so rather than the evidence being quietly over-trusted. Agreement also **li
 gates**, which is what makes a singleton merge possible at all; disagreement **refuses** a merge
 the count ratio would have made.
 
+For bulk UMI correction, with at least eight comparable payload bases, disagreement above the existing
+``payload_same_fraction`` (5% by default) vetoes a candidate merge. This uses the
+same definition of payload compatibility as the clonality estimate. A likelihood
+ratio against random DNA alone can favor a related but distinct template even
+when its disagreement is incompatible with that definition. Identical payloads
+can still lift the count gates. No-payload and shorter-payload cases retain their
+existing behavior, as does the cell-tagged correction model. This stricter acceptance rule can retain extra error-child
+barcodes when their draft payloads are noisy; molecule-count effects need matched
+validation before replacing an accepted analysis.
+
 .. note::
 
    The error likelihood is a *rate*, not a conditional. It used to be a zero-truncated Poisson

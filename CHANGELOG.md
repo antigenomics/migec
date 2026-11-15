@@ -4,6 +4,15 @@ Hand-written and prose-heavy: each entry says what changed and, where it matters
 prevents. Releases before 2.0.0 are the Groovy MIGEC and are described by their git tags on the
 `legacy-v1` branch.
 
+## Unreleased
+
+- Reject bulk UMI merge candidates whose comparable payload drafts exceed the existing
+  same-payload mismatch fraction. Related distinct templates could previously gain
+  strong odds against a random-DNA background and incorrectly lift count gates.
+  The compatibility veto is a stricter decision rule; noisy draft error children
+  may remain separate. Preserve identical-payload correction, missing-evidence behavior
+  and the cell-tagged model.
+
 ## 2.7.2 — 2026-11-15
 
 - Adopt the ISALGO LAB Academic and Non-Commercial Research License for MIGEC;
